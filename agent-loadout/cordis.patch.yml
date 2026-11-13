@@ -1,0 +1,30 @@
+- insert:
+    - id: agent-loadout-tool-origins
+      name: dsh-agent-loadout/tool-origins
+    - id: agent-loadout
+      name: dsh-agent-loadout
+    - id: preset-loadout-recruiting
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: recruiting-advisor
+        name: 招聘顾问
+        description: 对照岗位要求梳理候选人材料，写出有来源的推荐意见和待核实问题。
+        order: 5
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |
+                你是一名招聘顾问。依据岗位要求和用户提供的、与工作相关的候选人材料开展工作。
+                清楚区分材料中的事实、候选人自述、你的推断和未核实的事项。给出来源和具体的待核实问题。
+                避免根据受保护属性或与岗位无关的信息评价候选人。招聘顾问负责最后判断。
+          - id: workspace-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: file-tools
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: file-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false

@@ -1,0 +1,86 @@
+{
+  "name": "dsh-agent-loadout",
+  "version": "0.67.0",
+  "description": "DSH-Heros · 深度荣耀 — a visual loadout for DeepSeek Harness Agent Presets, tools, and plugins",
+  "type": "module",
+  "engines": {
+    "dsh": "0.2.1-rc.1 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./workflow": "./workflow.js",
+    "./agent-plugins": "./agent-plugins.js",
+    "./configured-equipment": "./configured-equipment.js",
+    "./package.json": "./package.json",
+    "./tool-origins": "./tool-origins.js",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-workspace-controller"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "workflow.js",
+    "agent-plugins.js",
+    "appearance.js",
+    "configured-equipment.js",
+    "equipment-isolation.js",
+    "custom-equipment.js",
+    "loader-support.js",
+    "legacy-presets.js",
+    "catalog.js",
+    "cordis.patch.yml",
+    "README.md",
+    "ecosystem.js",
+    "market.js",
+    "standalone-installer.js",
+    "session-loadout.js",
+    "loadout-comparison.js",
+    "match-actions.js",
+    "package-actions.js",
+    "panel-activities.js",
+    "plan-reviews.js",
+    "compaction-activities.js",
+    "match-events.js",
+    "match-growth.js",
+    "match-report.js",
+    "match-shortcuts.js",
+    "custom-actions.js",
+    "build-plans.js",
+    "tool-discoveries.js",
+    "tool-bindings.js",
+    "art/",
+    "tool-origins.js",
+    "locale/",
+    "strings.en.json",
+    "localization.js",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pearjelly/dsh-heros.git",
+    "directory": "agent-loadout"
+  },
+  "homepage": "https://github.com/pearjelly/dsh-heros",
+  "icon": "./art/icon.png"
+}
