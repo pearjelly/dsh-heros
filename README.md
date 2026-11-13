@@ -4,9 +4,11 @@
 
 Choose a hero, equip real tools and plugins, and take that loadout into a DeepSeek Harness session.
 
-[![Play the 32-second DSH-Heros launch film](docs/media/dsh-heros-preview.gif)](https://github.com/pearjelly/dsh-heros/releases/latest/download/dsh-heros-promo.mp4)
+| [Introduction · 32 sec](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-zh.mp4) | [Installation and walkthrough · 3 min 13 sec](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-install-guide.mp4) |
+| --- | --- |
+| <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-zh.mp4"><img src="docs/media/dsh-heros-preview.gif" width="420" alt="Watch the DSH-Heros introduction"></a> | <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-install-guide.mp4"><img src="docs/media/dsh-heros-install-guide.jpg" width="420" alt="Watch the DSH-Heros installation and walkthrough"></a> |
 
-[Watch the full video (MP4)](https://github.com/pearjelly/dsh-heros/releases/latest/download/dsh-heros-promo.mp4)
+Both videos have Mandarin narration and Simplified Chinese captions. The walkthrough shows a release install, a live **Recruiting Advisor + Evidence Check** session, and the trial reward. To follow along, copy the example into **First-turn task (optional)** in the opening quest. [Fictional recruiting case (Chinese)](docs/demo/recruiting-evidence.zh.txt)
 
 ## Install
 

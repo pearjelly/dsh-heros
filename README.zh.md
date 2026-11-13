@@ -4,9 +4,11 @@
 
 在 DeepSeek Harness 里选英雄、配装备，再用这套阵容开始实际工作。
 
-[![播放 32 秒的深度荣耀推介视频](docs/media/dsh-heros-preview.gif)](https://github.com/pearjelly/dsh-heros/releases/latest/download/dsh-heros-promo.mp4)
+| [推介片 · 32 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-zh.mp4) | [安装与实战教程 · 3 分 13 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-install-guide.mp4) |
+| --- | --- |
+| <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-zh.mp4"><img src="docs/media/dsh-heros-preview.gif" width="420" alt="观看深度荣耀推介片"></a> | <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-install-guide.mp4"><img src="docs/media/dsh-heros-install-guide.jpg" width="420" alt="观看深度荣耀安装与实战教程"></a> |
 
-[观看完整视频（MP4）](https://github.com/pearjelly/dsh-heros/releases/latest/download/dsh-heros-promo.mp4)
+两支视频均配有普通话解说和简体中文字幕。教程从安装发布包开始，实录 **招聘顾问 + 证据核验** 开局、在提问卡上选择「暂缓提交」及试炼结算。跟着操作时，把示例复制到开局委托的 **首回合任务（选填）**。[虚构招聘案例材料](docs/demo/recruiting-evidence.zh.txt)
 
 ## 安装
 
