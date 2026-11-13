@@ -13,7 +13,7 @@ Choose a hero, equip real tools and plugins, and take that loadout into a DeepSe
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.2. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-npm_config_ignore_workspace_root_check=true dsh plugin --profile web add https://github.com/pearjelly/dsh-heros/releases/latest/download/dsh-heros-bundle.tgz
+npm_config_ignore_workspace_root_check=true dsh plugin --profile web add https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-bundle.tgz
 dsh web
 ```
 
