@@ -4,11 +4,11 @@
 
 在 DeepSeek Harness 里选英雄、配装备，再用这套阵容开始实际工作。
 
-| [推介片 · 32 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-zh.mp4) | [安装与实战教程 · 3 分 13 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-install-guide.mp4) |
+| [推介片 · 18 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-standard-zh.mp4) | [安装与标准模式实战 · 1 分 22 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-standard-guide-zh.mp4) |
 | --- | --- |
-| <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-zh.mp4"><img src="docs/media/dsh-heros-preview.gif" width="420" alt="观看深度荣耀推介片"></a> | <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-install-guide.mp4"><img src="docs/media/dsh-heros-install-guide.jpg" width="420" alt="观看深度荣耀安装与实战教程"></a> |
+| <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-standard-zh.mp4"><img src="docs/media/dsh-heros-preview.gif" width="420" alt="观看深度荣耀推介片"></a> | <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-standard-guide-zh.mp4"><img src="docs/media/dsh-heros-install-guide.jpg" width="420" alt="观看深度荣耀安装与标准模式实战"></a> |
 
-两支视频均配有普通话解说和简体中文字幕。教程从安装发布包开始，实录 **招聘顾问 + 证据核验** 开局、在提问卡上选择「暂缓提交」及试炼结算。跟着操作时，把示例复制到开局委托的 **首回合任务（选填）**。[虚构招聘案例材料](docs/demo/recruiting-evidence.zh.txt)
+两支视频均配有普通话解说和简体中文字幕。教程实录标准模式试装、交付灯塔补给卡、解锁战旗，以及带着原对话回城换装续战。[补给卡和首回合任务](docs/demo/lighthouse)
 
 ## 安装
 
@@ -25,9 +25,9 @@ dsh web
 
 ## 试一套出装
 
-1. 在英雄图鉴里选择 **招聘顾问**。
-2. 装备 **证据核验**，在 **阵容对照** 查看新增能力，再点 **锁定阵容并开局**。
-3. 在 **对局装备** 里打开 **核对关键证据**。关键事实缺少来源时，可在 DSH 提问卡上选择继续补证、降级推荐或暂缓提交。
-4. 核对结果并验收装备试炼。成功回合和实际工具调用会结算经验，解锁边框、招牌装备和分阶段连携。
+1. 保留 **标准模式**。在装备库搜索 `glob`，点 **给英雄试装**。
+2. 选 **交付物预览** 作第二件装备。看过试装前后的能力变化后，点 **试装并筹备连携**，选 **同回合基础连携**。
+3. 在开局委托中填写任务目标和 **首回合任务（选填）**。锁定阵容后，点 **打开首回合任务** 并发送。演示中 `glob` 找到文件，`present` 把文件交付到对话。
+4. 打开交付的文件确认结果，验收后领取战旗和经验。点 **回城换装**，调整装备后用 **锁定阵容并续战** 接着做。
 
 DSH 已注册的预设、工具和插件会进入英雄图鉴或装备库。同一工具有多个来源时，可以指定具体来源。[完整使用说明](agent-loadout/README.md)

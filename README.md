@@ -4,11 +4,11 @@
 
 Choose a hero, equip real tools and plugins, and take that loadout into a DeepSeek Harness session.
 
-| [Introduction · 32 sec](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-zh.mp4) | [Installation and walkthrough · 3 min 13 sec](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-install-guide.mp4) |
+| [Introduction · 18 sec](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-standard-zh.mp4) | [Installation and Standard Mode walkthrough · 1 min 22 sec](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-standard-guide-zh.mp4) |
 | --- | --- |
-| <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-zh.mp4"><img src="docs/media/dsh-heros-preview.gif" width="420" alt="Watch the DSH-Heros introduction"></a> | <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-install-guide.mp4"><img src="docs/media/dsh-heros-install-guide.jpg" width="420" alt="Watch the DSH-Heros installation and walkthrough"></a> |
+| <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-standard-zh.mp4"><img src="docs/media/dsh-heros-preview.gif" width="420" alt="Watch the DSH-Heros introduction"></a> | <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-standard-guide-zh.mp4"><img src="docs/media/dsh-heros-install-guide.jpg" width="420" alt="Watch the DSH-Heros installation and Standard Mode walkthrough"></a> |
 
-Both videos have Mandarin narration and Simplified Chinese captions. The walkthrough shows a release install, a live **Recruiting Advisor + Evidence Check** session, and the trial reward. To follow along, copy the example into **First-turn task (optional)** in the opening quest. [Fictional recruiting case (Chinese)](docs/demo/recruiting-evidence.zh.txt)
+Both videos have Mandarin narration and Simplified Chinese captions. In the walkthrough, Standard Mode finds and delivers a supply card, unlocks a banner, and resumes the same conversation with new gear. [Sample files and first-turn task](docs/demo/lighthouse)
 
 ## Install
 
@@ -25,10 +25,10 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 
 ## Try a loadout
 
-1. Choose **Recruiting Advisor** in the hero gallery.
-2. Equip **Evidence Check**. Open **Compare loadouts** to see what it adds, then **Lock in & start**.
-3. Use **Check key evidence** from **Session gear**. If a material claim lacks a source, DSH can ask whether to gather more evidence, qualify the recommendation, or pause submission.
-4. Review the outcome and claim a gear trial. Successful turns and actual tool calls earn XP. Higher levels unlock frames, signature gear, and staged combo challenges.
+1. Keep **Standard** selected. Search the armory for `glob` and choose **Try on a hero**.
+2. Add **Deliverable Preview** as the second item. Review the capability changes and prepare a basic same-round combo.
+3. In the opening quest, name the challenge and add the first-turn task. Lock in, open the task, and send it. In the example, `glob` finds the file and `present` delivers it to the conversation.
+4. Open the delivered file and claim the combo reward. Inspect your banner or choose **Return to lobby**, change gear, and use **Lock in & continue** to resume the conversation.
 
 Installed presets and tools appear as DSH discovers them. Tools with multiple sources retain the chosen provider. The armory can import compatible bundles and configure standalone modules. Levels affect appearance and challenge options.
 
