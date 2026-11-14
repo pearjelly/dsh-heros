@@ -4,11 +4,11 @@
 
 在 DeepSeek Harness 里选英雄、配装备，再用这套阵容开始实际工作。
 
-| [推介片 · 18 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-standard-zh.mp4) | [安装与标准模式实战 · 1 分 22 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-standard-guide-zh.mp4) |
+| [推介片 · 21 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-standard-narrated-zh.mp4) | [安装与标准模式实战 · 1 分 42 秒](https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-standard-guide-intro-zh.mp4) |
 | --- | --- |
-| <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-standard-zh.mp4"><img src="docs/media/dsh-heros-preview.gif" width="420" alt="观看深度荣耀推介片"></a> | <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-standard-guide-zh.mp4"><img src="docs/media/dsh-heros-install-guide.jpg" width="420" alt="观看深度荣耀安装与标准模式实战"></a> |
+| <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-promo-standard-narrated-zh.mp4"><img src="docs/media/dsh-heros-preview.gif" width="420" alt="观看深度荣耀推介片"></a> | <a href="https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-standard-guide-intro-zh.mp4"><img src="docs/media/dsh-heros-install-guide.jpg" width="420" alt="观看深度荣耀安装与标准模式实战"></a> |
 
-两支视频均配有普通话解说和简体中文字幕。教程实录标准模式试装、交付灯塔补给卡、解锁战旗，以及带着原对话回城换装续战。[补给卡和首回合任务](docs/demo/lighthouse)
+两支视频均配有普通话解说和简体中文字幕。教程先看战旗结算，再跟着实录从安装走到标准模式试装、交付灯塔补给卡和换装续战。[补给卡和首回合任务](docs/demo/lighthouse)
 
 ## 安装
 
