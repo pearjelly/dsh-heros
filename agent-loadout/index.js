@@ -777,7 +777,9 @@ export async function apply(ctx) {
   }
 
   function planCard(plan, art, unavailable) {
-    return { ...publicBuildPlan(plan), heroArt: art('hero', plan.heroId), broken: unavailable(plan.presetId) }
+    const build = plan.evidenceOrigin && records.get(plan.presetId)
+    return { ...publicBuildPlan(plan), heroArt: art('hero', plan.heroId), broken: unavailable(plan.presetId),
+      ...(build && { evidenceEquipped: build.equipmentIds.includes('evidence') }) }
   }
 
   async function list() {
@@ -1146,7 +1148,8 @@ export async function apply(ctx) {
     const { id, revision, workspaceId, material, task, hash } = input
     const saved = buildPlans.read(id, revision)
     const { workspace, digest } = await readWorkspaceMaterial(workspaceId, material, signal)
-    const view = { id, revision, workspaceId, workspaceTitle: workspace.title, material, planName: saved.name, task }
+    const view = { id, revision, workspaceId, workspaceTitle: workspace.title, material,
+      planName: saved.name, planNote: saved.note, task }
     const cwd = workspace.path
     try {
       const ecosystem = await discover()

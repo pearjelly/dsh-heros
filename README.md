@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.98.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.99.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -117,8 +117,9 @@ For either side that still matches its saved plan, choose **Record when to use i
 ## Use saved gear for a new task
 
 1. In **Loadout plans**, select a plan and choose **Start a task with this loadout**. Choose an existing workspace and use **Browse files** to select material. You can search by file name or relative path, including names with spaces or Chinese characters. Picking another file keeps the task description you entered.
-2. Choose **Review file and loadout** to check the preset and the equipment sources available now. Choose **Confirm and open session** to open a fresh DSH session. Review the prepared task in the conversation and send it yourself.
-3. With a review-first loadout, check the draft and answer the DSH question card when it asks whether to confirm delivery or request changes. Open the actual attachment from that session after it is delivered.
+2. If you have an eligible saved plan from the other side of the same evidence comparison, **Choose a tested loadout** shows the available plans and your notes. After choosing material and entering the task, you can switch plans and keep those inputs.
+3. Choose **Review file and loadout** to check the preset and the equipment sources available now. Choose **Confirm and open session** to open a fresh DSH session. Review the prepared task in the conversation and send it yourself.
+4. With a review-first loadout, check the draft and answer the DSH question card when it asks whether to confirm delivery or request changes. Open the actual attachment from that session after it is delivered.
 
 ## Find a run worth keeping
 

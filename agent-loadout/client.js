@@ -4221,10 +4221,13 @@ window.__ModuleLoader__.load({
       return h(LessonLoadoutTask, { ...props, workspaces: items })
     }
 
-    function LoadoutTaskForm({ plan, lessonSource, workspaces, initialWorkspaceId, initialMaterial = '', initialBrief = '',
-      backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange }) {
+    function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, lessonSource, workspaces, initialWorkspaceId,
+      initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange }) {
       const language = useLanguage()
-      const [version, setVersion] = useState(plan)
+      const [choices, setChoices] = useState(() => plan ? [plan, ...testedAlternatives] : empty)
+      const [selectedPlanId, setSelectedPlanId] = useState(plan?.id)
+      const planGroup = useId()
+      const version = choices.find(item => item.id === selectedPlanId)
       const [chosenWorkspaceId, setWorkspace] = useState(initialWorkspaceId ?? '')
       const [material, setMaterial] = useState(initialMaterial)
       const [brief, setBrief] = useState(initialBrief)
@@ -4247,6 +4250,19 @@ window.__ModuleLoader__.load({
 
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => {
+        if (!planCatalog) return
+        const abort = new AbortController()
+        const action = 'evidence-retest-options'
+        request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
+          .then(options => {
+            if (abort.signal.aborted) return
+            const alternatives = matchingTaskPlans(planCatalog, options)
+            if (alternatives.length) setChoices(current => current[0] === plan ? [plan, ...alternatives] : current)
+          })
+          .catch(() => {})
+        return () => abort.abort()
+      }, [planCatalog, plan, request, language])
+      useEffect(() => {
         if (preview) reviewHeading.current?.focus()
         else (workspaceField.current?.disabled ? materialField.current : workspaceField.current)?.focus()
       }, [preview])
@@ -4258,7 +4274,7 @@ window.__ModuleLoader__.load({
       }
 
       async function review(refresh = false) {
-        if (!workspace || !brief.trim() || pending.current) return
+        if (!workspace || !brief.trim() || (!lessonSource && !version) || pending.current) return
         const abort = pending.current = new AbortController()
         setWorking('review')
         setError('')
@@ -4267,9 +4283,24 @@ window.__ModuleLoader__.load({
           if (refresh && !lessonSource) {
             const latest = await request('list', null, abort.signal, language)
             if (abort.signal.aborted) return
-            selected = latest.plans.find(item => item.id === plan.id)
-            if (!selected) throw new Error(t('这份出装方案已不可用。'))
-            setVersion(selected)
+            const primary = latest.plans.find(item => item.id === plan.id && !item.broken)
+            let alternatives = empty
+            if (primary?.hasEvidenceOrigin) {
+              const action = 'evidence-retest-options'
+              const options = await request(action, { action, id: primary.id, revision: primary.revision }, abort.signal, language)
+              if (abort.signal.aborted) return
+              alternatives = matchingTaskPlans(latest.plans, options)
+            }
+            const current = primary ? [primary, ...alternatives] : empty
+            setChoices(current)
+            selected = current.find(item => item.id === selectedPlanId)
+            if (!selected) {
+              setReviewed(null)
+              setNeedsRefresh(false)
+              setSelectedPlanId(undefined)
+              setError(t(current.length ? '刚选的实战出装已变化，请再选一套。' : '这份出装方案已不可用。'))
+              return
+            }
           }
           const selector = lessonSource ? { kind: lessonSource.kind, comparisonId: lessonSource.comparisonId, arm: lessonSource.arm }
             : { id: selected.id, revision: selected.revision }
@@ -4337,7 +4368,20 @@ window.__ModuleLoader__.load({
       return !preview ? h('form', { className: 'moba-plan-form moba-plan-task', onSubmit: submit },
         h('div', { className: 'moba-plan-fields' },
           origin ? h(Fragment, null, h(InstallFacts, { facts: [[t('练习出装'), sourceLabel]] }),
-            h(RematchChangeFacts, { change: origin.change })) : h('p', { className: 'moba-plan-note' }, version.name),
+            h(RematchChangeFacts, { change: origin.change }))
+            : choices.length > 0 && (choices.length > 1 || !version) ? h('fieldset', {
+              className: 'moba-plan-list moba-task-plan-choices', disabled: Boolean(working),
+            }, h('legend', null, t('临场换装')),
+              choices.map(item => h('label', { key: item.id, className: 'moba-plan-option', 'data-picked': item.id === selectedPlanId },
+                h('input', { type: 'radio', name: planGroup, value: item.id, checked: item.id === selectedPlanId,
+                  onChange: () => { setSelectedPlanId(item.id); setError('') } }),
+                h(HeroArt, { id: item.heroId, art: item.heroArt, className: 'moba-avatar' }),
+                h('span', null, h('strong', null, item.name),
+                  typeof item.evidenceEquipped === 'boolean' &&
+                    h('small', null, t(item.evidenceEquipped ? '已装备证据核验' : '未装备证据核验')),
+                  item.note && h('small', { className: 'moba-plan-note' }, item.note)))))
+              : version && h('div', { className: 'moba-plan-save-preview' }, h('strong', null, version.name),
+                version.note && h('p', { className: 'moba-plan-note' }, version.note)),
           lessonSource && !workspaces.length &&
             h('p', { className: 'moba-plan-note', role: 'status' }, t('请先在 DeepSeek Harness 中添加自己的工作区。')),
           h(WorkspaceFileFields, { workspaces, workspaceId: workspace?.workspaceId ?? '', setWorkspaceId: setWorkspace,
@@ -4348,7 +4392,7 @@ window.__ModuleLoader__.load({
               onChange: event => { event.target.setCustomValidity(''); setBrief(event.target.value) } })), messages),
         h('footer', { className: 'moba-gallery-footer' },
           h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t(backLabel)),
-          h('button', { className: 'moba-start', type: 'submit', disabled: Boolean(working) || !workspace },
+          h('button', { className: 'moba-start', type: 'submit', disabled: Boolean(working) || !workspace || (!lessonSource && !version) },
             t('核对材料和出装'), h(Glyph, { kind: 'arrow', size: 16 }))))
         : h('section', { className: 'moba-plan-form moba-plan-task', onKeyDown: event => closeDialogOnEscape(event, editTask) },
           h('div', { className: 'moba-plan-fields' },
@@ -4359,8 +4403,9 @@ window.__ModuleLoader__.load({
               [t('材料文件相对路径'), preview.material],
             ] }),
             origin && h(RematchChangeFacts, { change: origin.change }),
+            preview.planNote && h('p', { className: 'moba-plan-note' }, preview.planNote),
             (preview.gear?.length || preview.token) && h(PlanEquipment, {
-              items: preview.gear ?? plan?.items ?? empty, removed: preview.removed ?? plan?.removed }),
+              items: preview.gear ?? version?.items ?? empty, removed: preview.removed ?? version?.removed }),
             h(SharedPlanCapabilities, { comparison: preview.comparison }),
             preview.task && h('label', null, t('即将填入会话的任务'), h('textarea', { readOnly: true, rows: 5, value: preview.task })),
             h('p', { className: 'moba-plan-note' }, t('确认后打开新会话。检查输入栏的任务，再手动发送。')),
@@ -4378,6 +4423,11 @@ window.__ModuleLoader__.load({
 
     function planMatchesRevision(plan, reference) {
       return plan.id === reference.id && plan.revision === reference.revision
+    }
+
+    function matchingTaskPlans(catalog, options) {
+      return catalog.filter(item => !item.broken &&
+        options.alternatives.some(reference => planMatchesRevision(item, reference)))
     }
 
     function SavedPlanComparison({ plan, plans, workspaces, initialWorkspaceId, request, onBack, onOpened, onOpeningChange,
@@ -4746,8 +4796,8 @@ window.__ModuleLoader__.load({
         pairPlan ? h(SavedPlanComparison, { plan: pairPlan.plan, plans: comparisonPlans, workspaces: comparisonWorkspaces,
           initialWorkspaceId: workspaceId, request, evidenceRetest,
           onBack: closePair, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
-          : taskPlan ? h(LoadoutTaskForm, { plan: taskPlan, workspaces, initialWorkspaceId: workspaceId, request,
-            onBack: closeTask, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
+          : taskPlan ? h(LoadoutTaskForm, { plan: taskPlan.plan, testedAlternatives: taskPlan.alternatives, planCatalog: taskPlan.catalog,
+            workspaces, initialWorkspaceId: workspaceId, request, onBack: closeTask, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
           : sharing?.mode === 'export' ? h(ExportPlanShare, { plan: sharing.plan, request, onBack: closeSharing })
           : sharing?.mode === 'import' ? h(ImportPlanShare, { request, hasOpening, onBack: closeSharing,
             onImport: value => { close(); onImport(value) } })
@@ -4796,7 +4846,9 @@ window.__ModuleLoader__.load({
                     h(PlanEquipment, { items: plan.items, removed: plan.removed }),
                   h('div', { className: 'moba-plan-launches' },
                     h('button', { className: 'moba-start moba-plan-task-start', type: 'button', ref: taskButton, disabled: Boolean(plan.broken),
-                      onClick: () => setTaskPlan(plan) }, t('用这套出装开新任务'), h(Glyph, { kind: 'arrow', size: 16 })),
+                      onClick: () => setTaskPlan(options ? { plan, alternatives: matchingTaskPlans(plans, options) }
+                        : { plan, catalog: retestId ? plans : undefined }),
+                    }, t('用这套出装开新任务'), h(Glyph, { kind: 'arrow', size: 16 })),
                     h('button', { className: 'moba-roster-open', type: 'button', ref: pairButton, disabled: Boolean(plan.broken) || !hasAlternative,
                       onClick: () => setPairPlan({ plan }) }, t('与另一份方案同题对照')),
                     canRetest && h('button', { className: 'moba-roster-open', type: 'button', ref: retestButton,
@@ -9359,6 +9411,12 @@ window.__ModuleLoader__.load({
       .moba-plan-fields label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
       .moba-plan-fields input, .moba-plan-fields textarea, .moba-plan-task select { width: 100%; min-width: 0; min-height: 40px; padding: 8px; border: 1px solid #515666; background: var(--deep); color: var(--ink); font: inherit; font-size: 14px; }
       .moba-plan-fields textarea { resize: vertical; }
+      .moba-task-plan-choices legend { padding: 0 0 5px; color: var(--gold); font-size: 13px; }
+      .moba-task-plan-choices .moba-plan-option { grid-template-columns: 38px minmax(0, 1fr); gap: 8px; }
+      .moba-task-plan-choices input[type="radio"] { inset: 0; width: 1px; min-height: 0; height: 1px; padding: 0; }
+      .moba-task-plan-choices .moba-avatar { align-self: start; }
+      .moba-task-plan-choices .moba-plan-note { font-size: 12px; }
+      .moba-task-plan-choices:disabled .moba-plan-option { cursor: default; }
       .moba-plan-task-start { justify-self: start; max-width: 100%; white-space: normal; }
       .moba-plan-launches { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; }
       .moba-plan-task h3 { margin: 0; color: var(--gold); font-size: 15px; }
