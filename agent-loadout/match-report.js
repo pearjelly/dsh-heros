@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { link, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { sourceConflictCode } from './tool-bindings.js'
 import { validShortcut } from './match-shortcuts.js'
 import { materialProofRecord } from './match-comparisons.js'
@@ -381,7 +381,7 @@ function answeredComparisonTurns(events, after, asks, live, presetId) {
   return { turns, continuationReason, running: live && start !== undefined && linked && !unrelated }
 }
 
-export async function comparisonEvidence(source, { cwd, presetId, task, material }, receipts) {
+export async function comparisonEvidence(source, { cwd, presetId, task, material, verifyMaterialDelivery }, receipts) {
   const unavailable = reason => ({ status: 'unavailable', reason })
   if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
     return unavailable('session-unavailable')
@@ -446,7 +446,9 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
       entries.push({ type, name, state, sourceNames, choices: selected?.length ? selected : choices, nested })
     }
   }
+  const materialDelivered = verifyMaterialDelivery && [...files.keys()].some(file => resolve(cwd, file) === resolve(cwd, material))
   return { status, turn, entries, deliverables: [...files.values()], ...(models.size && { models: [...models] }),
+    ...(verifyMaterialDelivery && { materialDelivered }),
     ...(materialState && { materialState }), ...(pendingQuestions.length && { pendingQuestions }),
     ...(followUps.continuationReason && { continuationReason: followUps.continuationReason }) }
 }

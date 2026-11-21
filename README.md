@@ -15,13 +15,21 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.80.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.81.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 For the desktop app, use its bundled CLI with `--profile desktop`, then quit and reopen the app. If an earlier copy is installed, remove `dsh-agent-loadout` from the same profile before installing the release. The package keeps that identifier for compatibility.
 
 Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
+
+## Play your first rematch
+
+1. Open **Lighthouse Supply Run** in the lobby and choose **Lighthouse rematch lesson**, then **Start rematch lesson**. The lesson prepares the sample files and a Standard Mode loadout for direct delivery. You can start without setting up a workspace or saving a plan.
+2. In the new DSH session, review and manually send the prepared task. Open the delivered lighthouse card, then choose **View lesson results** from the session to check the verified result.
+3. Choose **Try one gear change** and preview **Delivery Review**, shown as the **Lesson suggestion**. Open the rematch in its own DSH session and send the same task yourself. When the DSH question card appears, confirm delivery or request changes. Reopen the comparison to check the recorded choice and any delivered file.
+
+**Lighthouse Supply Run** also offers the original **Recon** and **Delivery** routes.
 
 ## Try one gear change
 

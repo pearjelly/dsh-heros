@@ -18,7 +18,7 @@ function comparisonHash(namespace, ...parts) {
   return createHash('sha256').update(JSON.stringify([namespace, ...parts])).digest('hex').slice(0, 32)
 }
 
-export async function openMatchComparisons(directory, name, arms, saveEntry, warn, validate = () => true) {
+export async function openMatchComparisons(directory, name, arms, saveEntry, warn, validate = () => true, armsFor = () => arms) {
   const recordDirectory = join(directory, name + 's')
   const records = new Map()
   const members = new Map()
@@ -44,7 +44,7 @@ export async function openMatchComparisons(directory, name, arms, saveEntry, war
     if (record.id !== id || !Number.isSafeInteger(record.createdAt) || typeof record.task !== 'string' ||
       !record.task || record.task.length > 4000 || !validate(record)) throw new Error('Invalid comparison')
     records.set(id, record)
-    for (const arm of arms) members.set(identity(id, arm).sessionId, { id, arm, task: record.task })
+    for (const arm of armsFor(record)) members.set(identity(id, arm).sessionId, { id, arm, task: record.task })
     if (!latest || latest.createdAt < record.createdAt || latest.createdAt === record.createdAt && latest.id < id) latest = record
     return record
   }
@@ -89,7 +89,7 @@ export async function openMatchComparisons(directory, name, arms, saveEntry, war
     return chosen
   }
 
-  return { arms, identity, create, armDirectory, read: id => records.get(id), readLaunch: id => records.get(launchRecordId(id)),
+  return { arms, armsFor, identity, create, armDirectory, read: id => records.get(id),
     member: id => members.get(id), latest: latestMatching,
     list: () => records.values(),
     readArm: (id, arm) => readJson(join(armDirectory(id), arm + '.json')),

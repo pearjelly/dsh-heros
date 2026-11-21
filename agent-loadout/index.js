@@ -451,7 +451,9 @@ export async function apply(ctx) {
   const lighthouseComparisons = await openMatchComparisons(directory, 'lighthouse-comparison', lighthouseArms, saveEntry,
     () => warnings.push('lighthouse-comparisons'))
   const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', workspaceComparisonArms, saveEntry,
-    () => warnings.push('workspace-comparisons'), validWorkspaceComparison)
+    () => warnings.push('workspace-comparisons'),
+    record => validWorkspaceComparison(record) && (record.lesson === undefined || record.lesson === lighthouseLesson),
+    record => record.lesson === lighthouseLesson ? ['direct'] : workspaceComparisonArms)
   const planComparisons = await openMatchComparisons(directory, 'plan-comparison', planComparisonArms, saveEntry,
     () => warnings.push('plan-comparisons'), validPlanComparison)
   const rematchComparisons = await openMatchComparisons(directory, 'rematch-comparison', ['rematch'], saveEntry,
@@ -3558,7 +3560,7 @@ export async function apply(ctx) {
   function rematchReference({ kind, comparisonId, arm }) {
     const comparisons = validRematchReference({ kind, comparisonId, arm }) ? comparisonStores[kind] : undefined
     const record = comparisons?.read(comparisonId)
-    if (!record) throw new Error('请选择一局已核验的实战作为原局。')
+    if (!record || !comparisons.armsFor(record).includes(arm)) throw new Error('请选择一局已核验的实战作为原局。')
     return { comparisons, record, arm }
   }
 
@@ -3588,7 +3590,7 @@ export async function apply(ctx) {
       baseline: { sessionId: baseline.sessionId, heroName, planName: baseline.planName, ...(record.change && { change: record.change }) } }
     const brief = record.brief ?? task.split('\n').slice(2, -1).join('\n').trim()
     return { ecosystem, preset, draft, candidate, baseline, view, lesson: record.lesson,
-      fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
+      fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief, ...(record.lesson && { lesson: record.lesson }) } }
   }
 
   function rematchGear({ ecosystem, preset, draft, candidate }) {
@@ -3624,7 +3626,8 @@ export async function apply(ctx) {
     }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id))
     signal?.throwIfAborted()
     return { ...view, equipped, available,
-      ...(checked.lesson === lighthouseLesson && available.some(item => item.id === 'review') && { suggestedGearId: 'review' }) }
+      ...(checked.lesson === lighthouseLesson && checked.baseline.kind === 'workspace' && available.some(item => item.id === 'review') &&
+        { suggestedGearId: 'review' }) }
   }
 
   function requestedRematch(selection) {
@@ -3729,8 +3732,13 @@ export async function apply(ctx) {
         return { id: arm, ...labels, status: 'unopened' }
       }
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
-      const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material }, receipts)
-      const canReuse = reusableComparisonArm(arm, result)
+      const lessonBaseline = comparisons === workspaceComparisons && comparison.lesson === lighthouseLesson
+      const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material,
+        verifyMaterialDelivery: lessonBaseline }, receipts)
+      if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
+        result.reason = '未交付本次练习的灯塔补给卡。请查看原会话或开始新的练习。'
+      }
+      const canReuse = (!lessonBaseline || result.materialDelivered === true) && reusableComparisonArm(arm, result)
       const canRematch = canReuse && materialComparisonStores.includes(comparisons) &&
         (!comparison.baseline || Boolean(previousComparison(comparison)))
       return { id: arm, ...labels, sessionId, ...result, canReuse, ...(canRematch && { canRematch }) }
@@ -3747,12 +3755,13 @@ export async function apply(ctx) {
     const { kind, comparisonId, arm, sessionId, presetId, identity } = comparison.baseline
     const comparisons = comparisonStores[kind]
     const original = comparisons.read(comparisonId)
-    if (!original || original === comparison || comparisons.identity(comparisonId, arm).sessionId !== sessionId ||
-      original.cwd !== comparison.cwd || original.digest !== comparison.digest || original.task !== comparison.task ||
+    if (!original || original === comparison || !comparisons.armsFor(original).includes(arm) ||
+      comparisons.identity(comparisonId, arm).sessionId !== sessionId || original.cwd !== comparison.cwd || original.digest !== comparison.digest || original.task !== comparison.task ||
       original.workspaceId !== comparison.workspaceId || original.material !== comparison.material) return
     const pinned = original.loadout ?? original.plans?.[arm]
     if (pinned && (pinned.presetId !== presetId || pinned.identity !== identity)) return
-    return { original, comparisons, view: { kind, comparisonId, arm, sessionId, ...(original.change && { change: original.change }) } }
+    return { original, comparisons, view: { kind, comparisonId, arm, sessionId,
+      ...(original.change && { change: original.change }), ...(original.lesson && { lesson: original.lesson }) } }
   }
 
   async function readRematchBaseline(comparison, previous, signal) {
@@ -3768,8 +3777,7 @@ export async function apply(ctx) {
 
   async function readComparisonArms(comparisons, record, signal) {
     const previous = previousComparison(record)
-    const sides = record.lesson === lighthouseLesson ? ['direct'] : comparisons.arms
-    const arms = sides.map(arm => readComparisonArm(comparisons, record, arm, signal))
+    const arms = comparisons.armsFor(record).map(arm => readComparisonArm(comparisons, record, arm, signal))
     if (record.baseline) arms.unshift(readRematchBaseline(record, previous, signal))
     return { arms: await Promise.all(arms), ...(previous && { previous: previous.view }) }
   }
@@ -3857,7 +3865,7 @@ export async function apply(ctx) {
       if (!observed.canReuse) throw new Error('这局还没有可复用出装的实战记录。')
       return comparisonLoadout(record.baseline, signal)
     }
-    if (!record || !store.arms.includes(arm)) throw new Error('找不到这局实战对照。')
+    if (!record || !store.armsFor(record).includes(arm)) throw new Error('找不到这局实战对照。')
     const observed = await readComparisonArm(store, record, arm, signal)
     if (!observed.canReuse) throw new Error('这局还没有可复用出装的实战记录。')
     const saved = await store.readArm(comparisonId, arm)
@@ -3955,7 +3963,7 @@ export async function apply(ctx) {
     if (openingLighthouseLessons.has(launchId)) return openingLighthouseLessons.get(launchId)
     const key = lighthouseLesson + ':' + launchId
     const start = async () => {
-      const record = workspaceComparisons.readLaunch(key) ?? await workspaceComparisons.create(key, async () => {
+      const record = await workspaceComparisons.create(key, async () => {
         const { workspace, material, task } = await lighthouseRematchLesson(directory, registry, launchId, english)
         const fields = workspaceComparisonTask({ material, task }, english)
         const digest = await digestWorkspaceMaterial(workspace.path, material, signal)
@@ -3986,7 +3994,7 @@ export async function apply(ctx) {
     else if (comparisons === workspaceComparisons) comparison = await createWorkspaceComparison(comparisons, registry, selection, english, signal)
     else comparison = await comparisons.create(launchId, () => ({ task: lighthouseComparisonTask(english) }))
     if (!comparison) throw new Error('找不到这组同题对照。')
-    if (comparison.lesson === lighthouseLesson && arm !== 'direct') throw new Error('灯塔换装练习从直接交付开局。')
+    if (!comparisons.armsFor(comparison).includes(arm)) throw new Error('灯塔换装练习从直接交付开局。')
     const { id, task } = comparison
     const { sessionId, requestId } = comparisons.identity(id, arm)
     const response = { id, task, sessionId, requestId }
@@ -4931,13 +4939,19 @@ export async function apply(ctx) {
       const comparison = lighthouseComparisons.member(sessionId)
       if (comparison) value.lighthouseComparison = comparison
       const workspaceComparison = workspaceComparisons.member(sessionId)
-      if (workspaceComparison) value.workspaceComparison = workspaceComparison
+      if (workspaceComparison) {
+        const { lesson } = workspaceComparisons.read(workspaceComparison.id)
+        value.workspaceComparison = lesson ? { ...workspaceComparison, lesson } : workspaceComparison
+      }
       const planComparison = planComparisons.member(sessionId)
       if (planComparison) {
         value.planComparison = { ...planComparison, ...planComparisonLabels(planComparisons.read(planComparison.id), planComparison.arm) }
       }
       const rematch = rematchComparisons.member(sessionId)
-      if (rematch) value.rematchComparison = { ...rematch, heroName: rematchComparisons.read(rematch.id).loadout.heroName }
+      if (rematch) {
+        const { lesson, loadout } = rematchComparisons.read(rematch.id)
+        value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }) }
+      }
       if (savedTask?.launch && !savedTask.started) {
         const { planName, material, task } = savedTask.launch
         value.planTask = { planName, material, task }
