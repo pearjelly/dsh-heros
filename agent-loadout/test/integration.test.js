@@ -1410,6 +1410,165 @@ test('field playbooks preview read-only and add a real handoff decision to the s
   }
 })
 
+test('workspace comparison uses the same material and records real review choices', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-workspace-compare-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const workspacePath = join(directory, 'existing-workspace')
+  const material = 'materials/workspace-fixture.md'
+  const brief = 'Verify the selected report and bring it to the conversation.'
+  const content = '# Fixture workspace handoff\n\nA selected material before either route runs.\n'
+  let host
+  try {
+    await mkdir(join(workspacePath, 'materials'), { recursive: true })
+    await writeFile(join(workspacePath, material), content)
+    const outside = join(directory, 'outside.md')
+    await writeFile(outside, '# Outside the selected workspace\n')
+    await symlink(outside, join(workspacePath, 'outside-link.md'))
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, payload, status) => (await host.request(endpoint, { action, ...payload }, status)).value
+    const history = id => host.request('/api/loadout-fixture-history?sessionId=' + id)
+    const read = filter => invoke('workspace-comparison', filter)
+    const open = (payload, status) => invoke('workspace-comparison-open', payload, status)
+    const armOf = (view, id) => view.arms.find(item => item.id === id)
+    const { workspaceId, sessionId: existing } = await host.request('/api/loadout-fixture-session', { presetId: 'standard', workspacePath })
+    const prototype = await read({ prototype: true })
+    assert.deepEqual(prototype.arms.map(item => [item.id, item.status]), [['direct', 'unopened'], ['review', 'unopened']])
+    assert.equal(await read({ sessionId: existing }), null)
+    const request = { arm: 'direct', launchId: 'a'.repeat(32), workspaceId, material, task: brief }
+    for (const forbidden of ['../outside.md', outside, 'outside-link.md', 'materials', 'missing.md']) {
+      await open({ ...request, material: forbidden }, 422)
+    }
+    const rank = async () => (await host.request(endpoint)).value.presets.find(hero => hero.id === 'standard').rank?.xp ?? 0
+    const before = await rank()
+    const [direct, retried] = await Promise.all([open(request), open(request)])
+    assert.deepEqual(direct, retried)
+    assert.match(direct.task, /^【工作区同题对照】/)
+    assert.ok(direct.task.includes(material))
+    assert.ok(direct.task.includes(brief))
+    assert.ok(!direct.task.includes(workspacePath))
+    const compare = () => read({ comparisonId: direct.id })
+    const started = await compare()
+    assert.equal(started.workspaceId, workspaceId)
+    assert.equal(started.materialState, 'verified')
+    assert.equal(armOf(started, 'direct').status, 'waiting')
+    assert.equal(armOf(started, 'review').status, 'unopened')
+    assert.equal(await rank(), before)
+    const originalPath = await realpath(workspacePath)
+    const nativeHistory = async sessionId => {
+      const replay = await history(sessionId)
+      assert.equal(replay.workspaceId, workspaceId)
+      assert.equal(replay.workspacePath, originalPath)
+      assert.equal(replay.inherited, 0)
+      return replay
+    }
+    assert.ok(!(await nativeHistory(direct.sessionId)).events.some(item => item.type === 'turn/start' || item.type === 'user/message'))
+    assert.equal(await readFile(join(workspacePath, material), 'utf8'), content)
+    const send = attempt => host.request(turnEndpoint, { sessionId: attempt.sessionId, requestId: attempt.requestId, text: attempt.task })
+    await send(direct)
+    const noReview = armOf(await compare(), 'direct')
+    assert.equal(noReview.status, 'complete')
+    assert.equal(noReview.turn, 1)
+    assert.deepEqual(noReview.entries.map(entry => [entry.name, entry.state]), [['present', 'completed']])
+    assert.deepEqual(noReview.deliverables, [{ name: 'workspace-fixture.md', turn: 1 }])
+
+    await appendFile(join(workspacePath, material), '\nA material change between attempts.\n')
+    await open({ comparisonId: direct.id, arm: 'review' }, 422)
+    const materialChanged = await compare()
+    assert.equal(materialChanged.materialState, 'changed')
+    assert.equal(armOf(materialChanged, 'review').status, 'unopened')
+    assert.deepEqual(armOf(materialChanged, 'direct'), noReview)
+    await writeFile(join(workspacePath, material), content)
+    const review = await open({ comparisonId: direct.id, arm: 'review' })
+    assert.equal(review.task, direct.task)
+    assert.notEqual(review.sessionId, direct.sessionId)
+    assert.notEqual(review.sessionId, existing)
+    assert.notEqual(review.requestId, direct.requestId)
+    assert.ok(!(await nativeHistory(review.sessionId)).events.some(item => item.type === 'turn/start' || item.type === 'user/message'))
+
+    const questionPath = '/api/loadout-fixture-handoff-question'
+    async function answerReview(attempt, choice) {
+      const turn = send(attempt)
+      turn.catch(() => {})
+      let question
+      try {
+        for (let i = 0; i < 100; i++) {
+          question = (await host.request(questionPath, { sessionId: attempt.sessionId })).question
+          if (question) break
+          await delay(40)
+        }
+        const labels = ['Confirm handoff', 'Revise draft']
+        assert.deepEqual(question?.options.map(item => item.label), labels)
+        const waiting = armOf(await read({ sessionId: attempt.sessionId }), 'review')
+        assert.equal(waiting.status, 'waiting-choice')
+        assert.ok(!waiting.deliverables?.length)
+        assert.ok(waiting.pendingQuestions.some(item => item.state === 'open' &&
+          item.options.join('|') === labels.join('|')))
+      } finally {
+        if (question) await host.request(questionPath, { sessionId: attempt.sessionId, choice })
+        await turn
+      }
+      return armOf(await read({ sessionId: attempt.sessionId }), 'review')
+    }
+    const approved = await answerReview(review, 'Confirm handoff')
+    assert.equal(approved.status, 'complete')
+    assert.deepEqual(approved.entries.map(entry => [entry.name, entry.state]),
+      [['ask_user_question', 'completed'], ['present', 'completed']])
+    assert.deepEqual(approved.entries[0].choices, ['Confirm handoff'])
+    assert.deepEqual(approved.deliverables, noReview.deliverables)
+    const approvedPair = await compare()
+    assert.equal(armOf(approvedPair, 'direct').sessionId, direct.sessionId)
+    assert.equal(armOf(approvedPair, 'review').sessionId, review.sessionId)
+    for (const attempt of [direct, review]) {
+      const { events } = await nativeHistory(attempt.sessionId)
+      const sent = events.find(event => event.type === 'user/message' && event.data.source.kind === 'user')
+      assert.equal(sent.data.content[0].text, direct.task)
+      const delivered = events.find(event => event.type === 'deliverables/presented')
+      assert.equal(delivered.data.files[0].path, join(originalPath, material))
+    }
+
+    const revise = await open({ ...request, arm: 'review', launchId: 'b'.repeat(32) })
+    assert.notEqual(revise.id, direct.id)
+    const revised = await answerReview(revise, 'Revise draft')
+    assert.equal(revised.status, 'complete')
+    assert.deepEqual(revised.entries.map(entry => entry.name), ['ask_user_question'])
+    assert.deepEqual(revised.entries[0].choices, ['Revise draft'])
+    assert.deepEqual(revised.deliverables, [])
+    assert.ok(!(await nativeHistory(revise.sessionId)).events.some(item => item.type === 'deliverables/presented'))
+
+    const changed = await open({ ...request, launchId: 'c'.repeat(32) })
+    await send({ ...changed, task: changed.task + '\nMake this a different task.' })
+    assert.ok((await nativeHistory(changed.sessionId)).events.some(item => item.type === 'deliverables/presented'))
+    const notCompared = armOf(await read({ sessionId: changed.sessionId }), 'direct')
+    assert.equal(notCompared.status, 'unavailable')
+    assert.equal(notCompared.reason, 'changed-task')
+    assert.ok(!notCompared.deliverables?.length)
+
+    const tampered = await open({ ...request, launchId: 'd'.repeat(32) })
+    await appendFile(join(workspacePath, material), '\nChanged after opening, before sending.\n')
+    await send(tampered)
+    assert.ok((await nativeHistory(tampered.sessionId)).events.some(item => item.type === 'deliverables/presented'))
+    const tainted = await read({ sessionId: tampered.sessionId })
+    assert.equal(tainted.materialState, 'changed')
+    assert.equal(armOf(tainted, 'direct').status, 'unavailable')
+    assert.equal(armOf(tainted, 'direct').reason, 'changed-material')
+    assert.ok(!armOf(tainted, 'direct').deliverables?.length)
+    await writeFile(join(workspacePath, material), content)
+    assert.deepEqual(armOf(await read({ sessionId: tampered.sessionId }), 'direct'), armOf(tainted, 'direct'))
+
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual((await read({ sessionId: direct.sessionId })).arms, approvedPair.arms)
+    assert.deepEqual(await open({ comparisonId: direct.id, arm: 'review' }), review)
+    assert.equal(await readFile(join(workspacePath, material), 'utf8'), content)
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('shared plans resolve in a fresh profile without saving or copying private equipment', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-share-'))
   const root = await realpath(directory)

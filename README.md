@@ -15,13 +15,21 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.73.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.74.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 For the desktop app, use its bundled CLI with `--profile desktop`, then quit and reopen the app. If an earlier copy is installed, remove `dsh-agent-loadout` from the same profile before installing the release. The package keeps that identifier for compatibility.
 
 Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
+
+## Compare delivery playbooks on your own material
+
+1. Open **Compare in workspace** in the lobby. Choose an existing workspace and enter a file path relative to its root, such as `docs/brief.md`. Start **Deliver directly** and **Review before delivery** in separate Standard Mode sessions in that workspace.
+2. Review and manually send the same prepared task in each session. The review route can show a draft and ask for confirmation or revisions. Answer the question card in its source session.
+3. Return to the comparison to check any pending question, your recorded answer, actual tool calls, and delivered file names. Open either source session to inspect the result. Use **Review proven loadout** to reuse the gear from a completed round.
+
+If the selected file changes, start a new comparison with the current version. Earlier verified results stay available from their source sessions.
 
 ## Compare two Lighthouse loadouts
 

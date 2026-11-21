@@ -1177,11 +1177,30 @@ window.__ModuleLoader__.load({
               h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
-    const lighthouseArmNames = { recon: '侦察阵容', delivery: '交付阵容' }
-    const lighthouseArmStates = { unopened: '待开局', waiting: '等待发送任务', running: '任务进行中', complete: '已完成', unavailable: '暂不可对照' }
-    const lighthouseArmReasons = {
+    const fieldPlaybooks = [
+      { id: 'direct', icon: 'report', name: '直接交付', gear: '交付物预览', note: '把生成的文件放进对话，打开即可查看。' },
+      { id: 'review', icon: 'lock', name: '复核后交付', gear: '交付物预览 + 交付前复核', note: '有明确的交接事项时，提示助手先用 DSH 确认卡请你确认交付或退回修改。' },
+    ]
+    const comparisonKinds = {
+      lighthouse: {
+        action: 'lighthouse-comparison', title: '灯塔同题对照', entry: '同题对照',
+        arms: starterRoutes.map(route => ({ ...route, name: route.id === 'recon' ? '侦察阵容' : '交付阵容',
+          open: route.id === 'recon' ? '打开侦察会话' : '打开交付会话' })),
+      },
+      workspace: {
+        action: 'workspace-comparison', title: '实战同题对照', entry: '实战同题对照',
+        arms: fieldPlaybooks.map(playbook => playbook.id === 'direct'
+          ? { ...playbook, note: '把交付文件放进对话，打开即可查看。', open: '打开直接交付会话' }
+          : { ...playbook, open: '打开复核会话' }),
+      },
+    }
+    const comparisonArmStates = { unopened: '待开局', waiting: '等待发送任务', running: '任务进行中',
+      'waiting-choice': '等待你的选择', complete: '已完成', unavailable: '暂不可对照' }
+    const comparisonArmReasons = {
       'changed-task': '任务文字已改动。用同一段文字重新试一组。',
       'changed-loadout': '实际出装已变更。请用对照指定的阵容重新尝试。',
+      'changed-material': '发送任务时，材料与这组对照记录的版本不同。',
+      'unverified-material': '这次尝试无法核对材料版本。',
       interrupted: '这次尝试已中断。',
       'session-unavailable': '暂时无法读取这次尝试的会话。',
     }
@@ -1191,41 +1210,74 @@ window.__ModuleLoader__.load({
       blocked: '可复制同题任务，粘贴到会话输入栏。',
     }
 
-    function LighthouseArm({ arm, task, sessionId, busy, onStart, onVisit, putTask, onNotice }) {
-      const config = starterRoutes.find(route => route.id === arm.id)
+    function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart }) {
       const files = arm.deliverables ?? empty
       const tools = arm.entries?.filter(entry => entry.type === 'tool') ?? empty
+      const pendingQuestions = arm.pendingQuestions ?? empty
       return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status },
         h('header', null, h(Glyph, { kind: config.icon, size: 20 }),
-          h('div', null, h('h3', null, t(lighthouseArmNames[arm.id])),
-            h('code', null, config.tools)),
-          h('strong', { className: 'moba-lighthouse-arm-state', role: 'status' }, t(lighthouseArmStates[arm.status]))),
-        arm.reason && h('p', { className: 'moba-lighthouse-note' }, t(lighthouseArmReasons[arm.reason] ?? arm.reason)),
+          h('div', null, h('h3', null, t(config.name)),
+            h('code', null, config.tools ?? t(config.gear))),
+          h('strong', { className: 'moba-lighthouse-arm-state', role: 'status' }, t(comparisonArmStates[arm.status]))),
+        config.note && h('p', { className: 'moba-lighthouse-note' }, t(config.note)),
+        arm.reason && h('p', { className: 'moba-lighthouse-note' }, t(comparisonArmReasons[arm.reason] ?? arm.reason)),
+        arm.continuationReason && h('p', { className: 'moba-lighthouse-note' }, t('续答后的材料或阵容无法核对。请到原会话查看后续结果。')),
         arm.models?.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('实际使用的模型') + ' · ' + arm.models.join(' / ')),
+        pendingQuestions.length > 0 && h('div', { className: 'moba-comparison-pending', role: 'status' },
+          h('strong', null, t(arm.id === 'review' ? '等待你的复核选择' : '等待你的选择')),
+          pendingQuestions.map((question, index) => h('div', { key: index }, h('p', null, question.question),
+            question.options?.length > 0 && h('p', null, question.options.join(' / ')))),
+          h('p', null, t('请在原会话的 DSH 确认卡上选择。'))),
         tools.length > 0 && h('ul', { className: 'moba-lighthouse-results', 'aria-label': t('实测工具调用') },
           tools.map((entry, index) => h('li', { key: index },
             h('div', null, h('strong', null, entry.name),
               entry.sourceNames?.length > 0 && h('small', null, t('调用来源 ') + entry.sourceNames.join(' / ')),
               entry.choices?.length > 0 && h('small', null, t('你实际选择了 ') + entry.choices.join(' / '))),
             h('span', { 'data-state': entry.state }, t(reportToolStates[entry.state] ?? entry.state))))),
-        arm.status === 'complete' && h('div', { className: 'moba-lighthouse-artifacts' },
+        (arm.status === 'complete' || files.length > 0) && h('div', { className: 'moba-lighthouse-artifacts' },
           h('h4', null, t('交付文件') + ' · ' + files.length),
           files.length > 0 && h('ul', null, files.map((file, index) => h('li', { key: index }, file.name)))),
         h('footer', null,
           arm.sessionId ? h(Fragment, null,
-            typeof putTask === 'function' && arm.sessionId === sessionId && arm.status === 'waiting' && h('button', {
+            task && typeof putTask === 'function' && arm.sessionId === sessionId && arm.status === 'waiting' && h('button', {
               type: 'button', className: 'moba-roster-open', disabled: busy, onClick: () => onNotice(putTask(task)),
             }, t('填入任务')),
             h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
               onClick: () => onVisit(arm.sessionId, arm.status === 'waiting' ? task : undefined) },
             t('查看原会话')))
-            : arm.status === 'unopened' && h('button', { type: 'button', className: 'moba-start', disabled: busy,
-              onClick: () => onStart(arm.id) }, arm.id === 'recon' ? t('打开侦察会话') : t('打开交付会话'),
+            : arm.status === 'unopened' && h('button', { type: 'button', className: 'moba-start', disabled: busy || !canStart,
+              onClick: () => onStart(arm.id) }, t(config.open),
               h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function LighthouseComparison({ request, comparisonId, sessionId, onClose, onVisit, putTask }) {
+    function WorkspaceComparisonForm({ form, workspaces, workspaceId, setWorkspaceId, material, setMaterial,
+      brief, defaultBrief, setBrief, busy }) {
+      const helpId = useId()
+      return h('form', { ref: form, className: 'moba-lighthouse-task moba-workspace-comparison-form',
+        onSubmit: event => event.preventDefault() },
+        h('label', null, t('工作区'), h('select', { value: workspaceId, disabled: busy || !workspaces.length, required: true,
+          onChange: event => setWorkspaceId(event.target.value) },
+        h('option', { value: '' }, t(workspaces.length ? '选择材料所在的工作区' : '请先添加工作区')),
+        workspaces.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceTitle(item))))),
+        h('label', null, t('材料文件相对路径'),
+          h('input', { required: true, disabled: busy, 'aria-describedby': helpId, value: material, maxLength: 1024,
+            placeholder: 'docs/brief.md', autoComplete: 'off', spellCheck: false,
+            onChange: event => { event.target.setCustomValidity(''); setMaterial(event.target.value) } })),
+        h('p', { id: helpId, className: 'moba-lighthouse-note' }, t('填入一个相对于工作区根目录的文件路径，例如 docs/brief.md。')),
+        h('label', null, t('两边共用的任务'),
+          h('textarea', { disabled: busy, rows: 3, value: brief, placeholder: defaultBrief, maxLength: 1200,
+            onChange: event => setBrief(event.target.value) })))
+    }
+
+    function workspaceTitle(item) {
+      return item.title === 'default-workspace' ? t('默认工作区') : item.title
+    }
+
+    function RunComparison({ kind = 'lighthouse', request, comparisonId, sessionId, onClose, onVisit, putTask,
+      workspaces = empty, initialWorkspaceId }) {
       const language = useLanguage()
+      const config = comparisonKinds[kind]
+      const personal = kind === 'workspace'
       const [prototype, setPrototype] = useState(false)
       const [view, setView] = useState(null)
       const [error, setError] = useState('')
@@ -1235,19 +1287,23 @@ window.__ModuleLoader__.load({
       const starting = useRef(false)
       const launchIds = useRef(new Map())
       const taskField = useRef(null)
+      const workspaceForm = useRef(null)
+      const [selectedWorkspaceId, setWorkspaceId] = useState(initialWorkspaceId ?? '')
+      const [material, setMaterial] = useState('')
+      const [customBrief, setBrief] = useState()
       const scope = useMemo(() => prototype ? { prototype: true } : comparisonId ? { comparisonId }
         : sessionId ? { sessionId } : {}, [prototype, comparisonId, sessionId])
 
       useEffect(() => {
         const abort = new AbortController()
-        const action = 'lighthouse-comparison'
+        const action = config.action
         let timer
         async function update() {
           try {
             const result = await request(action, { action, ...scope }, abort.signal, language)
             if (abort.signal.aborted) return
             setView({ scope, result })
-            if (result?.arms.some(arm => arm.status === 'running' || arm.status === 'waiting')) {
+            if (result?.arms.some(arm => ['running', 'waiting', 'waiting-choice'].includes(arm.status))) {
               timer = setTimeout(update, 1600)
             }
           } catch (reason) {
@@ -1256,25 +1312,42 @@ window.__ModuleLoader__.load({
         }
         update()
         return () => { abort.abort(); clearTimeout(timer) }
-      }, [request, scope, language, attempt])
+      }, [request, scope, language, attempt, config.action])
 
       const value = view?.scope === scope ? view.result : undefined
       const task = value?.task
       const finished = value?.arms.every(arm => arm.status === 'complete')
+      const setup = personal && value && !value.id
+      const workspaceId = workspaces.some(item => item.workspaceId === selectedWorkspaceId) ? selectedWorkspaceId : ''
+      const defaultBrief = value?.defaultTask ?? t('根据这份材料准备一份可交接的成果，简要说明重点，并按当前交付流程处理。')
+      const brief = customBrief ?? defaultBrief
+      const materialPath = material.trim()
+      const linkedWorkspace = workspaces.find(item => item.workspaceId === value?.workspaceId)
+      const materialWarning = personal && ({ changed: '材料已修改。可以回看历史结果，也可以用当前材料另开一组。',
+        unavailable: '暂时无法读取材料。可以回看历史结果。' })[value?.materialState]
 
       async function start(arm) {
         if (starting.current || !value) return
+        if (setup && workspaceForm.current) {
+          const pathInput = workspaceForm.current.querySelector('input')
+          const relative = !/[\p{Cc}:]/u.test(materialPath) && materialPath.split(/[\\/]/)
+            .every(part => part && part !== '.' && part !== '..')
+          pathInput.setCustomValidity(relative ? '' : t('请输入工作区内的相对文件路径。'))
+          if (!workspaceForm.current.reportValidity()) return
+        }
         starting.current = true
         setLaunch(arm)
         setError('')
-        const key = (value.id ?? '') + ':' + arm
-        const action = 'lighthouse-comparison-open'
+        const first = setup ? { workspaceId, material: materialPath, task: brief.trim() || undefined } : undefined
+        const key = JSON.stringify([value.id, arm, first])
+        const action = config.action + '-open'
         try {
           if (!launchIds.current.has(key)) {
             const bytes = crypto.getRandomValues(new Uint8Array(16))
             launchIds.current.set(key, Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''))
           }
-          const opened = await request(action, { action, comparisonId: value.id, arm, launchId: launchIds.current.get(key) })
+          const opened = await request(action, { action, comparisonId: value.id, arm,
+            launchId: launchIds.current.get(key), ...first }, undefined, language)
           launchIds.current.delete(key)
           onVisit(opened.sessionId, opened.task)
         } catch (reason) {
@@ -1299,31 +1372,50 @@ window.__ModuleLoader__.load({
       function switchPreview(next) {
         setError('')
         setNotice('')
+        if (next && personal) {
+          setWorkspaceId(value?.workspaceId ?? initialWorkspaceId ?? '')
+          setMaterial('')
+          setBrief(undefined)
+        }
         setPrototype(next)
       }
 
-      return h(InstallDialog, { title: t('灯塔同题对照'), className: 'moba-lighthouse-comparison', busy: Boolean(launch),
+      function refresh() {
+        setError('')
+        retry(value => value + 1)
+      }
+
+      return h(InstallDialog, { title: t(config.title), className: 'moba-lighthouse-comparison', busy: Boolean(launch),
         onCancel: onClose, initialFocus: '.moba-lighthouse-close', onKeyDown: event => {
           if (event.key !== 'Escape') return
           event.preventDefault()
           event.stopPropagation()
           if (!starting.current) onClose()
         } },
-        h('p', { className: 'moba-lighthouse-note' }, t('两边用同一段任务。进入各自会话后，用输入栏手动发送。')),
+        h('p', { className: 'moba-lighthouse-note' }, t(personal
+          ? '用同一份材料试两种交付方式。进入各自会话后，用输入栏手动发送任务。'
+          : '两边用同一段任务。进入各自会话后，用输入栏手动发送。')),
         error && h('p', { className: 'moba-alert', role: 'alert' }, error, ' ',
-          h('button', { type: 'button', className: 'moba-text', disabled: Boolean(launch), onClick: () => {
-            setError(''); retry(value => value + 1)
-          } }, t('刷新对照'))),
+          h('button', { type: 'button', className: 'moba-text', disabled: Boolean(launch), onClick: refresh }, t('刷新对照'))),
         !error && value === undefined && h('p', { className: 'moba-empty', role: 'status' }, t('正在读取对照…')),
         value === null && h('p', { className: 'moba-empty', role: 'status' }, t('找不到此会话的对照。')),
         value && h(Fragment, null,
-          h('div', { className: 'moba-lighthouse-task' },
+          setup && h(WorkspaceComparisonForm, { form: workspaceForm, workspaces, workspaceId, setWorkspaceId,
+            material, setMaterial, brief, defaultBrief, setBrief, busy: Boolean(launch) }),
+          personal && value.id && h(InstallFacts, { facts: [
+            ['工作区', linkedWorkspace ? workspaceTitle(linkedWorkspace) : value.workspaceTitle], ['材料文件相对路径', value.material],
+          ].map(([label, text]) => [t(label), text]) }),
+          personal && value.materialState === 'verified' && h('p', { className: 'moba-lighthouse-note' }, t('材料与本组记录的版本一致。')),
+          materialWarning && h('p', { className: 'moba-alert', role: 'status' }, t(materialWarning), ' ',
+            !error && h('button', { type: 'button', className: 'moba-text', onClick: refresh }, t('刷新对照'))),
+          !setup && h('div', { className: 'moba-lighthouse-task' },
             h('label', null, t('两边共用的任务'),
               h('textarea', { ref: taskField, readOnly: true, value: task, rows: 4 })),
             h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制任务')),
             notice && h('p', { className: 'moba-lighthouse-note', role: 'status' }, notice)),
           h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm =>
-            h(LighthouseArm, { key: arm.id, arm, task, sessionId, busy: Boolean(launch), onStart: start, onVisit, putTask,
+            h(ComparisonArm, { key: arm.id, arm, config: config.arms.find(item => item.id === arm.id), task: materialWarning ? undefined : task, sessionId,
+              busy: Boolean(launch), canStart: !materialWarning && (!setup || Boolean(workspaces.length)), onStart: start, onVisit, putTask,
               onNotice: outcome => setNotice(t(comparisonDraftNotices[outcome] ?? comparisonDraftNotices.blocked)) }))),
           finished && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t('两次尝试已完成，可以回看实际调用和交付。'))),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
@@ -1335,7 +1427,8 @@ window.__ModuleLoader__.load({
             onClick: onClose }, t('关闭同题对照'))))
     }
 
-    function LighthouseComparisonAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn }) {
+    function RunComparisonAnchor({ kind, member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn, workspaces }) {
+      const config = comparisonKinds[kind]
       const [open, setOpen] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
       const trigger = useRef(null)
@@ -1353,11 +1446,11 @@ window.__ModuleLoader__.load({
       }
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor' },
-          h('div', null, h('strong', null, t('灯塔同题对照')), h('span', null, t(lighthouseArmNames[member.arm]))),
+          h('div', null, h('strong', null, t(config.title)), h('span', null, t(config.arms.find(arm => arm.id === member.arm)?.name))),
           h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
-            onClick: () => setOpen(true) }, t('同题对照')),
+            onClick: () => setOpen(true) }, t(config.entry)),
           draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
-        open && h(LighthouseComparison, { request, comparisonId: member.id, sessionId, onClose: close,
+        open && h(RunComparison, { kind, request, comparisonId: member.id, sessionId, onClose: close, workspaces,
           putTask: task => putTask(sessionId, task),
           onVisit: (next, task) => {
             if (next === sessionId) {
@@ -1368,6 +1461,11 @@ window.__ModuleLoader__.load({
               onVisit(next, task)
             }
           } }))
+    }
+
+    function WorkspaceComparisonAnchor({ workspaces, ...props }) {
+      const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
+      return h(RunComparisonAnchor, { ...props, kind: 'workspace', workspaces: items })
     }
 
     function ActionEditor({ target, request, onClose, onSaved }) {
@@ -2187,11 +2285,6 @@ window.__ModuleLoader__.load({
         h('div', { className: 'moba-deltas' },
           groups.map(group => h(CapabilityList, { key: group.tone, ...group, onTrial, onDelivery, active: group.tone === visible }))))
     }
-
-    const fieldPlaybooks = [
-      { id: 'direct', icon: 'report', name: '直接交付', gear: '交付物预览', note: '把生成的文件放进对话，打开即可查看。' },
-      { id: 'review', icon: 'lock', name: '复核后交付', gear: '交付物预览 + 交付前复核', note: '有明确的交接事项时，提示助手先用 DSH 确认卡请你确认交付或退回修改。' },
-    ]
 
     function FieldPlaybookComparison({ result, draft, baseline }) {
       const deliveryGear = result.gained.find(item => item.id === 'present')
@@ -3284,7 +3377,7 @@ window.__ModuleLoader__.load({
               onChange: event => onWorkspace(event.target.value) },
             !workspaces.length && h('option', { value: '' }, t('请先添加工作区')),
             workspaces.map(item => h('option', { key: item.workspaceId, value: item.workspaceId },
-              item.title === 'default-workspace' ? t('默认工作区') : item.title)))),
+              workspaceTitle(item))))),
           h('button', { className: 'moba-start', type: 'button', disabled: !canStart, onClick: onStart },
             h(Glyph, { kind: 'lock' }),
             pending ? t('正在处理…') : matchMode === 'after-turn' ? t('锁定阵容并排队')
@@ -3750,6 +3843,8 @@ window.__ModuleLoader__.load({
       const lighthouseCompareButton = useRef(null)
       const [playbooksOpen, setPlaybooksOpen] = useState(false)
       const playbooksButton = useRef(null)
+      const [workspaceCompareOpen, setWorkspaceCompareOpen] = useState(false)
+      const workspaceCompareButton = useRef(null)
       const [notice, setNotice] = useState(proven ? t('已载入实战出装草稿。') : '')
       const [appearance, setAppearance] = useState(null)
       const [actionTarget, setActionTarget] = useState(null)
@@ -3918,6 +4013,7 @@ window.__ModuleLoader__.load({
       const draftConflicts = saved ? empty : selections.filter(item => conflictsFor(item.id, draftStatus(item.id)).length)
       const workspace = workspaceList.items.find(item => item.workspaceId === workspaceChoice)
         ?? workspaceList.items.find(item => item.workspaceId !== data?.lighthouseWorkspaceId) ?? workspaceList.items[0]
+      const comparableWorkspaces = workspaceList.items.filter(item => item.workspaceId !== data?.lighthouseWorkspaceId)
       const historicalHeroMissing = !saved && historicalHero && presetChoice === historicalHero && preset?.id !== historicalHero
       const canCompare = saved ? !saved.broken : Boolean(preset) && !historicalHeroMissing && !unavailable.length && !draftConflicts.length
       const galleryBase = !canCompare && presets.some(item => item.id === stagePreset?.id && !item.broken)
@@ -4354,6 +4450,9 @@ window.__ModuleLoader__.load({
                 ref: playbooksButton, 'aria-haspopup': 'dialog', onClick: () => setPlaybooksOpen(true) },
               h(Glyph, { kind: 'action', size: 15 }), t('实战打法')),
               data && h('button', { className: 'moba-roster-open', type: 'button', disabled: pending,
+                ref: workspaceCompareButton, 'aria-haspopup': 'dialog', onClick: () => setWorkspaceCompareOpen(true) },
+              h(Glyph, { kind: 'swap', size: 15 }), t('实战同题对照')),
+              data && h('button', { className: 'moba-roster-open', type: 'button', disabled: pending,
                 'aria-haspopup': 'dialog', onClick: () => {
                   setLoadAttempt(attempt => attempt + 1)
                   setPlanMode('library')
@@ -4389,7 +4488,7 @@ window.__ModuleLoader__.load({
             }, onEquip: () => cue('equip'),
             onCompare: () => { setStarterOpen(false); setLighthouseCompareOpen(true) },
             onOpen: sessionId => { cue('lock'); setStarterOpen(false); openSource(sessionId) } }),
-          lighthouseCompareOpen && h(LighthouseComparison, { request, onClose: () => {
+          lighthouseCompareOpen && h(RunComparison, { request, onClose: () => {
             setLighthouseCompareOpen(false)
             requestAnimationFrame(() => lighthouseCompareButton.current?.focus())
           }, onVisit: (sessionId, task) => {
@@ -4399,6 +4498,14 @@ window.__ModuleLoader__.load({
           playbooksOpen && h(FieldPlaybooks, { request, draftKey: canCompare ? draftKey : '', sourceSessionId: returning?.sessionId,
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
             onClose: closePlaybooks, onAdopt: adoptPlaybook }),
+          workspaceCompareOpen && h(RunComparison, { kind: 'workspace', request, workspaces: comparableWorkspaces,
+            initialWorkspaceId: workspace?.workspaceId, onClose: () => {
+              setWorkspaceCompareOpen(false)
+              requestAnimationFrame(() => workspaceCompareButton.current?.focus())
+            }, onVisit: (sessionId, task) => {
+              setWorkspaceCompareOpen(false)
+              openComparisonSession(sessionId, task)
+            } }),
           error && h('div', { className: 'moba-alert', role: 'alert' }, error,
             !data && h('button', { type: 'button', onClick: () => {
               setError('')
@@ -6070,7 +6177,7 @@ window.__ModuleLoader__.load({
     }
 
     function MatchEquipment({ sessionId, request, openLobby, openContinuation, openComparisonSession,
-      consumeComparisonDraft, putComparisonTask, send }) {
+      consumeComparisonDraft, putComparisonTask, send, workspaces }) {
       const language = useLanguage()
       const id = useId()
       const anchor = '--moba-match-' + id.replace(/[^a-zA-Z0-9-]/g, '')
@@ -6372,9 +6479,13 @@ window.__ModuleLoader__.load({
         h('span', null, snapshot.heroName))
       return h(Fragment, null,
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
-        snapshot?.lighthouseComparison && h(LighthouseComparisonAnchor, {
-          member: snapshot.lighthouseComparison, sessionId, request, onVisit: openComparisonSession,
+        snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
+          kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openComparisonSession,
           consumeDraft: consumeComparisonDraft, putTask: putComparisonTask, hasTurn: Boolean(snapshot.running || receipt),
+        }),
+        snapshot?.workspaceComparison && h(WorkspaceComparisonAnchor, {
+          member: snapshot.workspaceComparison, sessionId, request, onVisit: openComparisonSession,
+          consumeDraft: consumeComparisonDraft, putTask: putComparisonTask, hasTurn: Boolean(snapshot.running || receipt), workspaces,
         }),
         showReceipt && h(SettlementRibbon, { key: receipt.id, receipt, quest: questReady, snapshot, controls: id,
           onDetails: event => show(event, settlementAction), onQuest: event => show(event, growthAction),
@@ -7522,6 +7633,9 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-task textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; color: var(--ink);
         background: #111b24; border: 1px solid #4b655f; padding: 6px; font: inherit; line-height: 1.4; }
       .moba-lighthouse-task button { justify-self: start; }
+      .moba-workspace-comparison-form select, .moba-workspace-comparison-form input { box-sizing: border-box; width: 100%; min-width: 0;
+        color: var(--ink); background: #111b24; border: 1px solid #4b655f; padding: 6px; font: inherit; }
+      .moba-workspace-comparison-form p { margin: 0 0 3px; }
       .moba-lighthouse-arms { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(245px, 100%), 1fr));
         align-items: start; gap: 7px; }
       .moba-lighthouse-arm { display: grid; gap: 8px; min-width: 0; padding: 8px; border: 1px solid var(--line);
@@ -7542,6 +7656,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-artifacts { padding: 6px; background: #14252b; }
       .moba-lighthouse-artifacts h4 { margin: 0 0 4px; color: #b8ded4; font-size: 12px; }
       .moba-lighthouse-artifacts li { font-size: 12px; }
+      .moba-comparison-pending { padding: 6px; border: 1px solid #8c7053; background: #342821; color: #f6dcaf; font-size: 12px; }
+      .moba-comparison-pending p { margin: 3px 0 0; }
       .moba-lighthouse-arm footer { display: flex; flex-wrap: wrap; gap: 5px; justify-content: end; }
       .moba-lighthouse-comparison > .moba-market-actions { position: sticky; inset-block-end: 0; background: #171c27; padding-block: 4px; }
       .moba-lighthouse-anchor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
@@ -7991,7 +8107,7 @@ window.__ModuleLoader__.load({
           ({ sessionId, session }) => {
             const id = sessionId ?? session?.sessionId
             return id ? h(MatchEquipment, { key: id, sessionId: id, request, openLobby, send, openComparisonSession,
-              consumeComparisonDraft, putComparisonTask,
+              consumeComparisonDraft, putComparisonTask, workspaces: ctx.workspaces.list,
               openContinuation: next => ctx.uiWorkspace.openSession(next) }) : null
           }))
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(

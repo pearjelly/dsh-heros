@@ -15,13 +15,21 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.73.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.74.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 桌面版用应用随附的 CLI，把 `--profile web` 改为 `--profile desktop`，安装后退出并重新打开应用。如果已安装早期版本，先从同一 Profile 移除 `dsh-agent-loadout` 再安装。发布包沿用这个内部名称，便于兼容原有阵容。
 
 从 DSH 侧栏打开 **深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
+
+## 拿自己的材料对照两套打法
+
+1. 在大厅打开 **实战同题对照**，选择已有工作区，填写相对于工作区根目录的文件路径，如 `docs/brief.md`。在同一工作区分别用 **直接交付** 和 **复核后交付** 开启两局标准模式。
+2. 在两局各自核对并手动发送同一段任务。复核路线可以先给你看草稿，请你确认交付或退回修改。到对应原会话回答 DSH 提问卡。
+3. 回到对照，核对待回复的提问、已作出的选择、实际工具调用和交付的文件名。到原会话查看实际结果。可对已完成回合使用 **核对已验证出装**，保留需要的装备。
+
+材料修改后，可以用当前版本另开一组对照。已核验的结果仍可从原会话回看。
 
 ## 同一道题试两套出装
 

@@ -3,6 +3,7 @@ import { link, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/pro
 import { basename, join } from 'node:path'
 import { sourceConflictCode } from './tool-bindings.js'
 import { validShortcut } from './match-shortcuts.js'
+import { materialProofRecord } from './match-comparisons.js'
 
 const requestPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 const pageSize = 8
@@ -313,7 +314,74 @@ export function noteDeliveredFiles(files, { files: delivered, turn }) {
   }
 }
 
-export async function lighthouseComparisonEvidence(source, { cwd, presetId, task }, receipts) {
+function comparisonQuestions(value, state) {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 8).flatMap(question => {
+    if (typeof question?.question !== 'string' || !question.question.trim()) return []
+    const options = Array.isArray(question.options) ? question.options.slice(0, 12)
+      .flatMap(option => typeof option?.label === 'string' && option.label ? [option.label.slice(0, 200)] : []) : []
+    return [{ question: question.question.slice(0, 1000), options, state }]
+  })
+}
+
+function activeComparisonQuestions(asks, body, live, projection) {
+  const active = new Map((projection?.active ?? []).filter(call => asks.has(call.callId)).map(call => [call.callId, call]))
+  const results = new Set(body.filter(event => event.type === 'tool/result').map(event => event.data.message.toolCallId))
+  return [...asks].flatMap(([callId, call]) => {
+    const item = active.get(callId)
+    if (item) return comparisonQuestions(item.questions, item.state)
+    if (!live || results.has(callId) || typeof call.data.arguments !== 'string' || call.data.arguments.length > 32_000) return []
+    try {
+      return comparisonQuestions(JSON.parse(call.data.arguments)?.questions, 'open')
+    } catch {
+      return []
+    }
+  })
+}
+
+function answeredComparisonTurns(events, after, asks, live, presetId) {
+  const turns = []
+  let start
+  let linked = false
+  let unrelated = false
+  let proof
+  let reason
+  let continuationReason
+  let selectedPreset = presetId
+  for (let index = after; index < events.length; index++) {
+    const event = events[index]
+    if (event.type === 'turn/start') {
+      start = index
+      linked = false
+      unrelated = false
+      proof = undefined
+      reason = selectedPreset !== presetId ? 'changed-loadout' : undefined
+    } else if (event.type === 'agent-preset/selected') {
+      selectedPreset = event.data.agentPreset
+      if (start !== undefined && selectedPreset !== presetId) reason = 'changed-loadout'
+    } else if (start !== undefined && event.type === materialProofRecord && event.ignorable === true &&
+      event.data.turn === events[start].data.turn && Array.isArray(event.data.replies)) {
+      proof = event.data
+    } else if (start !== undefined && event.type === 'user/message' && event.surfaceOp === 'append') {
+      const { source } = event.data
+      if (source.kind === 'user-question-reply' && asks.has(source.callId)) {
+        linked = true
+        if (!proof?.replies.includes(source.callId) || proof.state !== 'verified') {
+          reason ??= proof?.state === 'changed' ? 'changed-material' : 'unverified-material'
+        }
+      } else if (source.kind === 'user' || source.kind === 'user-question-reply' || source.kind === 'agent-message') unrelated = true
+    } else if (start !== undefined && event.type === 'turn/end') {
+      if (linked && !unrelated && event.data.turn === events[start].data.turn && event.data.reason.kind === 'completed') {
+        if (reason) continuationReason ??= reason
+        else turns.push([start, index])
+      }
+      start = undefined
+    }
+  }
+  return { turns, continuationReason, running: live && start !== undefined && linked && !unrelated }
+}
+
+export async function comparisonEvidence(source, { cwd, presetId, task, material }, receipts) {
   const unavailable = reason => ({ status: 'unavailable', reason })
   if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
     return unavailable('session-unavailable')
@@ -334,23 +402,53 @@ export async function lighthouseComparisonEvidence(source, { cwd, presetId, task
   if (messages.length && (messages.length !== 1 || content?.length !== 1 || content[0].type !== 'text' || content[0].text !== task)) {
     return unavailable('changed-task')
   }
-  if (end < 0 && source.source === 'live') return { status: 'running', turn }
+  const live = source.source === 'live'
+  if (!messages.length && end < 0 && live) return { status: 'running', turn }
   const finish = events[end]
-  if (!finish || finish.data.turn !== turn || finish.data.reason.kind !== 'completed') return unavailable('interrupted')
+  if (end >= 0 && (finish.data.turn !== turn || finish.data.reason.kind !== 'completed') || end < 0 && !live) return unavailable('interrupted')
   if (!messages.length) return unavailable('changed-task')
+  let materialState
+  if (material) {
+    const message = messages[0]
+    const proof = body.findLast(event => event.type === materialProofRecord && event.ignorable === true &&
+      event.seq < message.seq && event.data.turn === turn && event.data.requestId === (message.data.source.rpcId ?? null))
+    materialState = proof?.data.state
+    if (materialState !== 'verified') {
+      return { ...unavailable(materialState === 'changed' ? 'changed-material' : 'unverified-material'), materialState }
+    }
+  }
+  if (!material && end < 0) return { status: 'running', turn }
+
+  const asks = new Map(material ? body.filter(event => event.type === 'tool/call' && event.data.name === 'ask_user_question')
+    .map(event => [event.data.callId, event]) : [])
+  const projection = source.projections?.values.userQuestions
+  const pendingQuestions = activeComparisonQuestions(asks, body, live && end < 0, projection)
+  const followUps = end >= 0 && asks.size ? answeredComparisonTurns(events, end + 1, asks, live, presetId) : { turns: [] }
+  const settled = new Map((projection?.settled ?? []).filter(entry => asks.has(entry.callId)).map(entry => [entry.callId, entry.answers]))
+  const status = pendingQuestions.length ? 'waiting-choice' : end < 0 || followUps.running ? 'running' : 'complete'
 
   const files = new Map()
   const models = new Set()
-  for (const event of body) {
-    if (event.type === 'deliverables/presented' && event.data.turn === turn) noteDeliveredFiles(files, event.data)
-    if (event.type !== 'request/header') continue
-    const { provider, model } = event.data.header?.config ?? {}
-    if (typeof model === 'string' && model) models.add(typeof provider === 'string' && provider ? provider + '/' + model : model)
+  const entries = []
+  for (const [from, finish] of [[start, end], ...followUps.turns]) {
+    const number = events[from].data.turn
+    for (const event of events.slice(from + 1, finish < 0 ? undefined : finish)) {
+      if (finish >= 0 && event.type === 'deliverables/presented' && event.data.turn === number) noteDeliveredFiles(files, event.data)
+      if (event.type !== 'request/header') continue
+      const { provider, model } = event.data.header?.config ?? {}
+      if (typeof model === 'string' && model) models.add(typeof provider === 'string' && provider ? provider + '/' + model : model)
+    }
+    const evidence = await reportTurn(source, from, finish < 0 ? events.length : finish + 1, receipts)
+    for (const { type, name, state, sourceNames, choices, nested, seq } of evidence?.entries ?? []) {
+      if (type !== 'tool') continue
+      const answer = name === 'ask_user_question' && settled.get(events[seq]?.data.callId)
+      const selected = answer && answer.flatMap(item => item.selected ?? []).filter(label => typeof label === 'string' && label.length <= 200)
+      entries.push({ type, name, state, sourceNames, choices: selected?.length ? selected : choices, nested })
+    }
   }
-  const evidence = await reportTurn(source, start, end + 1, receipts)
-  const entries = (evidence?.entries ?? []).filter(item => item.type === 'tool')
-    .map(({ type, name, state, sourceNames, choices, nested }) => ({ type, name, state, sourceNames, choices, nested }))
-  return { status: 'complete', turn, entries, deliverables: [...files.values()], ...(models.size && { models: [...models] }) }
+  return { status, turn, entries, deliverables: [...files.values()], ...(models.size && { models: [...models] }),
+    ...(materialState && { materialState }), ...(pendingQuestions.length && { pendingQuestions }),
+    ...(followUps.continuationReason && { continuationReason: followUps.continuationReason }) }
 }
 
 export async function matchReport(source, before, receipts) {

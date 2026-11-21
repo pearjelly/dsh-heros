@@ -18,13 +18,14 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseArmIdentity, lighthouseArms, lighthouseComparisonId, lighthouseDirectory, lighthouseTask, lighthouseWorkspace, openLighthouseComparisons } from './lighthouse.js'
+import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
 import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } from './match-growth.js'
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
-import { lighthouseComparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, panelActivityRecord, toolSourceRecord } from './match-report.js'
+import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
+import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
 import { planReviewActivities } from './plan-reviews.js'
@@ -441,7 +442,10 @@ export async function apply(ctx) {
   })
   const actions = await customActionStore(join(directory, 'actions'), saveEntry, warnings)
   const buildPlans = await openBuildPlans(join(directory, 'plans'), saveEntry, warnings)
-  const lighthouseComparisons = await openLighthouseComparisons(directory, saveEntry, () => warnings.push('lighthouse-comparisons'))
+  const lighthouseComparisons = await openMatchComparisons(directory, 'lighthouse-comparison', lighthouseArms, saveEntry,
+    () => warnings.push('lighthouse-comparisons'))
+  const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', workspaceComparisonArms, saveEntry,
+    () => warnings.push('workspace-comparisons'), validWorkspaceComparison)
   // Native session history is shared by profiles under the same DSH home.
   const receipts = matchReceipts(join(ctx.profileContext.home, 'agent-loadout', 'match-actions'))
   const pins = matchShortcutStore(join(directory, 'shortcuts'), saveEntry, key => {
@@ -3247,10 +3251,14 @@ export async function apply(ctx) {
     return { presetId, equipmentIds, equipmentSources: {}, removedEquipmentIds }
   }
 
+  function deliveryPlaybookDraft(ecosystem, id) {
+    return standardDeliveryDraft(ecosystem, id === 'review' ? ['present', 'review'] : ['present'])
+  }
+
   async function previewFieldPlaybook({ id, againstDraft, sourceSessionId }) {
     if (id !== 'direct' && id !== 'review') throw new Error('请选择大厅里的实战打法。')
     const ecosystem = await discover()
-    const draft = standardDeliveryDraft(ecosystem, id === 'review' ? ['present', 'review'] : ['present'])
+    const draft = deliveryPlaybookDraft(ecosystem, id)
     return { draft, comparison: await compare({ ...draft, againstDraft, sourceSessionId }, ecosystem) }
   }
 
@@ -3278,16 +3286,16 @@ export async function apply(ctx) {
     return startWithQuest({ draft, quest, workspaceId: workspace.id, launchId }, signal, { allowBasicReplay: delivery })
   }
 
-  async function readLighthouseArm(comparison, arm, signal) {
-    const { sessionId } = lighthouseArmIdentity(comparison.id, arm)
+  async function readComparisonArm(comparisons, comparison, arm, signal) {
+    const { sessionId } = comparisons.identity(comparison.id, arm)
     let saved
     let source
     try {
-      saved = await lighthouseComparisons.readArm(comparison.id, arm)
+      saved = await comparisons.readArm(comparison.id, arm)
       const workspace = saved && ctx.get('workspaceRegistry')?.get(saved.workspaceId)
       if (!saved?.opened && !workspace?.sessionIds.includes(sessionId)) return { id: arm, status: 'unopened' }
-      source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: 'none', signal })
-      const result = await lighthouseComparisonEvidence(source, { ...saved, task: comparison.task }, receipts)
+      source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
+      const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material }, receipts)
       return { id: arm, sessionId, ...result }
     } catch {
       signal?.throwIfAborted()
@@ -3297,60 +3305,97 @@ export async function apply(ctx) {
     }
   }
 
-  async function readLighthouseComparison({ comparisonId, sessionId, prototype }, english, signal) {
+  async function readComparison(comparisons, { comparisonId, sessionId, prototype }, english, signal) {
     let record
     if (sessionId !== undefined) {
-      const member = lighthouseComparisons.member(sessionId)
+      const member = comparisons.member(sessionId)
       if (!member) return null
-      record = lighthouseComparisons.read(member.id)
+      record = comparisons.read(member.id)
     } else if (comparisonId !== undefined) {
-      record = lighthouseComparisons.read(comparisonId)
+      record = comparisons.read(comparisonId)
       if (!record) throw new Error('找不到这组同题对照。')
     } else if (prototype !== true) {
-      record = lighthouseComparisons.latest()
+      record = comparisons.latest()
     }
-    const { id, task } = record ?? lighthouseComparisons.prototype(english)
-    const arms = record ? await Promise.all(lighthouseArms.map(arm => readLighthouseArm(record, arm, signal)))
-      : lighthouseArms.map(id => ({ id, status: 'unopened' }))
-    return { id, task, arms }
+    if (!record) return { ...(comparisons === workspaceComparisons ? { defaultTask: workspaceComparisonDraft(english) }
+      : { task: lighthouseComparisonTask(english) }), arms: comparisons.arms.map(id => ({ id, status: 'unopened' })) }
+    const { id, task, workspaceId, material } = record
+    const workspace = material && ctx.get('workspaceRegistry')?.get(workspaceId)
+    const [arms, materialState] = await Promise.all([
+      Promise.all(comparisons.arms.map(arm => readComparisonArm(comparisons, record, arm, signal))),
+      material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
+    ])
+    return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, arms }
   }
 
-  async function openLighthouseArm({ comparisonId, arm, launchId }, english, signal) {
+  async function createWorkspaceComparison(comparisons, registry, selection, english, signal) {
+    const { launchId, workspaceId } = selection
+    const workspace = typeof workspaceId === 'string' && registry.get(workspaceId)
+    if (!workspace) throw new Error('请选择一个现有的工作区。')
+    const fields = workspaceComparisonTask(selection, english)
+    const record = await comparisons.create(launchId, async () => {
+      let digest
+      try {
+        digest = await digestWorkspaceMaterial(workspace.path, fields.material, signal)
+      } catch {
+        signal?.throwIfAborted()
+        throw new Error('无法读取所选材料，请核对工作区内的文件路径。')
+      }
+      return { ...fields, workspaceId, workspaceTitle: workspace.title, cwd: workspace.path, digest }
+    })
+    if (record?.workspaceId !== workspaceId || record.material !== fields.material || record.task !== fields.task) {
+      throw new Error('本次对照请求与原任务不同，请重新开始。')
+    }
+    return record
+  }
+
+  async function openComparisonArm(comparisons, selection, english, signal) {
+    const { comparisonId, arm, launchId } = selection
     if (closed) throw new Error('配装服务正在关闭，请重试。')
-    if (!lighthouseArms.includes(arm) || (comparisonId === undefined ? !validOpeningId(launchId) : !lighthouseComparisonId(comparisonId))) {
+    if (!comparisons.arms.includes(arm) || (comparisonId === undefined ? !validOpeningId(launchId) : !comparisonIdValid(comparisonId))) {
       throw new Error('开局请求无效，请重试。')
     }
     const registry = ctx.get('workspaceRegistry')
     const controller = ctx.get('sessionController')
     const query = ctx.get('sessionQuery')
-    if (!registry?.create || !controller?.create || !query) throw new Error('灯塔练习工作区不可用。')
-    const comparison = comparisonId === undefined ? await lighthouseComparisons.create(launchId, english)
-      : lighthouseComparisons.read(comparisonId)
+    if (!registry?.create || !controller?.create || !query) throw new Error('当前 DSH 无法打开同题对照。')
+    const comparison = comparisonId !== undefined ? comparisons.read(comparisonId)
+      : comparisons === workspaceComparisons ? await createWorkspaceComparison(comparisons, registry, selection, english, signal)
+        : await comparisons.create(launchId, () => ({ task: lighthouseComparisonTask(english) }))
     if (!comparison) throw new Error('找不到这组同题对照。')
     const { id, task } = comparison
-    const { sessionId, requestId } = lighthouseArmIdentity(id, arm)
+    const { sessionId, requestId } = comparisons.identity(id, arm)
     const response = { id, task, sessionId, requestId }
     if (openingMatches.has(sessionId)) return openingMatches.get(sessionId)
 
     const open = async () => {
-      let saved = await lighthouseComparisons.readArm(id, arm)
+      let saved = await comparisons.readArm(id, arm)
       if (saved?.opened) return response
-      let workspace
+      let workspace = comparison.workspaceId && registry.get(comparison.workspaceId)
+      if (comparison.material) {
+        if (workspace?.path !== comparison.cwd) throw new Error('请选择一个现有的工作区。')
+        const state = await workspaceMaterialState(comparison, signal)
+        if (state !== 'verified') throw new Error(state === 'changed' ? '材料已变化，请用现在的文件开始新的对照。'
+          : '无法读取所选材料，请核对工作区内的文件路径。')
+      }
       if (saved) {
         workspace = registry.get(saved.workspaceId)
-        if (!workspace || workspace.path !== saved.cwd) throw new Error('灯塔练习工作区不可用。')
+        if (!workspace || workspace.path !== saved.cwd) throw new Error('这场对照的工作区已不可用。')
       } else {
         const delivery = arm === 'delivery'
         const ecosystem = await discover()
-        const draft = standardDeliveryDraft(ecosystem, delivery ? ['present'] : [])
+        const draft = comparison.material ? deliveryPlaybookDraft(ecosystem, arm)
+          : standardDeliveryDraft(ecosystem, delivery ? ['present'] : [])
         const { candidate, choices } = await plannedGrowth(draft, { ecosystem })
         const hasTool = name => choices.some(item => item.kind === 'tool' && item.name === name && !item.timing)
-        if (!hasTool('glob') || hasTool('present') !== delivery) throw new Error('标准模式的对照阵容无法装配。')
+        const ready = comparison.material ? hasTool('present') && (arm !== 'review' || hasTool('ask_user_question'))
+          : hasTool('glob') && hasTool('present') === delivery
+        if (!ready) throw new Error('标准模式的对照阵容无法装配。')
         const { presetId } = await prepare(draft, candidate)
         signal?.throwIfAborted()
-        workspace = await lighthouseComparisons.workspace(id, arm, registry)
+        workspace ??= await lighthouseComparisonWorkspace(comparisons.armDirectory(id), arm, registry)
         saved = { workspaceId: workspace.id, cwd: workspace.path, presetId }
-        await lighthouseComparisons.writeArm(id, arm, saved)
+        await comparisons.writeArm(id, arm, saved)
       }
       signal?.throwIfAborted()
       if (closed) throw new Error('配装服务正在关闭，请重试。')
@@ -3371,7 +3416,7 @@ export async function apply(ctx) {
         const created = await controller.create({ sessionId, workspaceId: workspace.id, agentPreset: saved.presetId })
         if (created.sessionId !== sessionId) throw new Error('新对局的会话标识已变化，请重新开局。')
       }
-      await lighthouseComparisons.writeArm(id, arm, { ...saved, opened: true })
+      await comparisons.writeArm(id, arm, { ...saved, opened: true })
       updates.notify(sessionId)
       return response
     }
@@ -4238,6 +4283,8 @@ export async function apply(ctx) {
       const value = await sessionEquipment(sessionId)
       const comparison = lighthouseComparisons.member(sessionId)
       if (comparison) value.lighthouseComparison = comparison
+      const workspaceComparison = workspaceComparisons.member(sessionId)
+      if (workspaceComparison) value.workspaceComparison = workspaceComparison
       return Response.json({ ok: true, value: englishRequest(request) ? localizeDisplay(value) : value },
         { headers: { 'Cache-Control': 'no-store' } })
     },
@@ -4269,6 +4316,26 @@ export async function apply(ctx) {
     const admission = teamLaunchAdmissions.get(agent.id)
     if (!admission || agent.session.header.origin !== 'subagent' || agent.session.header.parentSession !== admission.parentId) return next()
     return await admission.ready && !signal.aborted ? next() : { kind: 'reject' }
+  }, { global: true })
+  ctx.on('agent/pre-step', async ({ agent, turn, messages, signal }, next) => {
+    const member = workspaceComparisons.member(agent.id)
+    if (!member) return next()
+    const submissions = messages.filter(message => message.source?.kind === 'user')
+    const item = turn === 1 && submissions.length === 1 ? submissions[0] : undefined
+    const task = item?.content.length === 1 && item.content[0]?.type === 'text' && item.content[0].text === member.task
+    const replies = messages.filter(message => message.source?.kind === 'user-question-reply').map(message => message.source.callId)
+    if (task || replies.length) {
+      const comparison = workspaceComparisons.read(member.id)
+      try {
+        const state = await workspaceMaterialState(comparison, signal)
+        if (!signal.aborted) appendPluginRecord(agent.session, materialProofRecord, {
+          turn, state, ...(task && { requestId: item.source.rpcId ?? null }), ...(replies.length && { replies }),
+        })
+      } catch {
+        // Failure to record comparison evidence does not change the native turn.
+      }
+    }
+    return next()
   }, { global: true })
   const reportEvents = new Set(['turn/start', 'turn/end', 'user/message', 'tool/call', 'tool/result',
     'tool/ptc-dispatch-start', 'tool/ptc-dispatch', 'command/run', 'command/done', 'compaction/end', toolSourceRecord, panelActivityRecord])
@@ -4361,8 +4428,10 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-combo-preview') value = await previewQuestCombo(selection)
         else if (selection?.action === 'growth-open') value = await startWithQuest(selection, request.signal)
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
-        else if (selection?.action === 'lighthouse-comparison') value = await readLighthouseComparison(selection, english, request.signal)
-        else if (selection?.action === 'lighthouse-comparison-open') value = await openLighthouseArm(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-comparison') value = await readComparison(lighthouseComparisons, selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-comparison-open') value = await openComparisonArm(lighthouseComparisons, selection, english, request.signal)
+        else if (selection?.action === 'workspace-comparison') value = await readComparison(workspaceComparisons, selection, english, request.signal)
+        else if (selection?.action === 'workspace-comparison-open') value = await openComparisonArm(workspaceComparisons, selection, english, request.signal)
         else if (selection?.action === 'field-playbook-preview') value = await previewFieldPlaybook(selection)
         else if (selection?.action === 'match-settlements' || selection?.action === 'match-settlements-page') value = await matchSettlements(selection)
         else if (selection?.action === 'match-follow-up' || selection?.action === 'match-follow-up-preview') value = await matchFollowUp(selection)

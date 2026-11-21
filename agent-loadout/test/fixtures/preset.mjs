@@ -170,7 +170,10 @@ export async function apply(ctx) {
         name = sequence[results.length]
         args = name === 'glob' ? { pattern: '[0-9][0-9]-*.md' }
           : { files: [{ path: '02-lighthouse.md', description: 'Lighthouse supply card' }] }
-      } else if (latestText === 'Hand off the workspace file handoff.md in this conversation.') {
+      } else if (latestText === 'Hand off the workspace file handoff.md in this conversation.' ||
+        ((latestText?.startsWith('【工作区同题对照】') || latestText?.startsWith('[Workspace comparison]')) &&
+          latestText.includes('materials/workspace-fixture.md'))) {
+        const file = latestText.startsWith('Hand off') ? 'handoff.md' : 'materials/workspace-fixture.md'
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')
         const review = systemText.includes('whether to proceed with the handoff or revise the draft')
@@ -180,9 +183,9 @@ export async function apply(ctx) {
         name = sequence[results.length]
         args = name === 'ask_user_question' ? { questions: [{
           id: 'fixture-delivery-review',
-          question: 'The handoff.md draft contains the lighthouse handoff summary. Deliver it or request changes?',
+          question: 'The ' + file + ' draft contains the handoff summary. Deliver it or request changes?',
           options: [{ label: 'Confirm handoff' }, { label: 'Revise draft' }],
-        }] } : { files: [{ path: 'handoff.md', description: 'Handoff summary' }] }
+        }] } : { files: [{ path: file, description: 'Handoff summary' }] }
       } else if (latestText === '读取预设工作目录') {
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')
