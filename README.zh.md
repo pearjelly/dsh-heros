@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.95.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.96.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -103,6 +103,8 @@ dsh web
 修改或清除搜索词会保留已选装备及来源。选好后点 **核对换装**，查看这次单件改动带来的能力变化。
 
 ## 用自己保存的两套出装做同一道题
+
+如果已保存同一组 **证据换装对照** 的两侧，在 **出装方案** 选任一侧的方案，点 **用新材料再试这两套**。另一侧只有一份方案时会预先选中，有多份时由你选择。为两局选择同一个工作区和一份新材料，填写新的任务说明，核对方案后在两次 DSH 会话中分别手动发送，再核对实际选择和附件。想选其他搭配，也可以用 **与另一份方案同题对照**。
 
 1. 在 **出装方案** 选中一套，点 **与另一份方案同题对照**。选择另一份方案和同一个工作区，点 **浏览文件** 选择共同的材料，再填写两局要做的任务。
 2. 点 **核对两套方案**，查看能力差异、工具来源和开局就绪情况。分别开两个 DSH 会话，在每局手动发送同一段任务。

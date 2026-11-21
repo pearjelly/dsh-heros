@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.95.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.96.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -103,6 +103,8 @@ In **Try one gear change**, choose **Add one piece of gear** or **Swap one piece
 Changing or clearing the search keeps your selected gear and source. Choose **Review gear change** to check the effect of the one change you selected.
 
 ## Compare your saved loadouts
+
+If you saved plans from both sides of the same **Evidence gear comparison**, select either plan and choose **Retest these loadouts with new material**. A single plan from the other side is preselected. If there are several, choose which one to use. Pick a workspace, one new file for both runs, and a new task brief. Review both plans and manually send the task in each new DSH session to compare their actual choices and files. **Compare with another saved plan** is also available for pairing other loadouts.
 
 1. In **Loadout plans**, select a plan and choose **Compare with another saved plan**. Select a different plan, choose one workspace, and use **Browse files** to pick the shared material. Enter the task for both plans.
 2. Choose **Review both plans** to check capability changes, tool sources, and whether both loadouts are ready to run. Open each loadout in its own DSH session and manually send the same prepared task in both.

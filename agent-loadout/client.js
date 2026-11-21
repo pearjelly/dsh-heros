@@ -4256,10 +4256,18 @@ window.__ModuleLoader__.load({
               onClick: open }, t('确认并打开会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function SavedPlanComparison({ plan, plans, workspaces, initialWorkspaceId, request, onBack, onOpened, onOpeningChange }) {
+    const evidenceRetestLabel = '用新材料再试这两套'
+    const evidenceRetestStale = '实战出装或工作区已变化。请关闭并重新打开出装方案，再选择。'
+
+    function planMatchesRevision(plan, reference) {
+      return plan.id === reference.id && plan.revision === reference.revision
+    }
+
+    function SavedPlanComparison({ plan, plans, workspaces, initialWorkspaceId, request, onBack, onOpened, onOpeningChange,
+      evidenceRetest }) {
       const language = useLanguage()
       const [updatedPlans, setUpdatedPlans] = useState(null)
-      const [otherId, setOtherId] = useState('')
+      const [otherId, setOtherId] = useState(() => evidenceRetest?.alternatives.length === 1 ? evidenceRetest.alternatives[0].id : '')
       const [chosenWorkspaceId, setWorkspaceId] = useState(initialWorkspaceId ?? '')
       const [material, setMaterial] = useState('')
       const [brief, setBrief] = useState('')
@@ -4274,7 +4282,7 @@ window.__ModuleLoader__.load({
       const briefField = useRef(null)
       const reviewHeading = useRef(null)
       const catalog = updatedPlans ?? plans
-      const left = catalog.find(item => item.id === plan.id)
+      const left = catalog.find(item => evidenceRetest ? planMatchesRevision(item, plan) : item.id === plan.id)
       const alternatives = catalog.filter(item => item.id !== plan.id)
       const right = alternatives.find(item => item.id === otherId)
       const workspace = workspaces.find(item => item.workspaceId === chosenWorkspaceId)
@@ -4300,7 +4308,13 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           let current = catalog
-          if (refresh) {
+          if (refresh && evidenceRetest) {
+            const action = 'evidence-retest-options'
+            const options = await request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
+            if (abort.signal.aborted) return
+            if (!left || !right || !options.workspaceIds.includes(workspace.workspaceId) ||
+              !options.alternatives.some(item => planMatchesRevision(right, item))) throw new Error(t(evidenceRetestStale))
+          } else if (refresh) {
             const latest = await request('list', null, abort.signal, language)
             if (abort.signal.aborted) return
             current = latest.plans
@@ -4312,7 +4326,7 @@ window.__ModuleLoader__.load({
             return { id, revision: selected.revision }
           }
           const input = { plans: { left: choose(plan.id), right: choose(otherId) }, workspaceId: workspace.workspaceId,
-            material: material.trim(), task: brief.trim() }
+            material: material.trim(), task: brief.trim(), ...(evidenceRetest && { evidenceRetest: true }) }
           const action = 'plan-comparison-preview'
           const value = await request(action, { action, ...input }, abort.signal, language)
           if (!abort.signal.aborted) {
@@ -4378,9 +4392,12 @@ window.__ModuleLoader__.load({
           (!left || left.broken) && h('p', { className: 'moba-alert', role: 'status' }, left?.broken ?? t('这份出装方案已不可用。')),
           h('label', null, t('方案 B'), h('select', { ref: otherField, value: right?.id ?? '', required: true, disabled: Boolean(working),
             onChange: event => setOtherId(event.target.value) },
-          h('option', { value: '' }, t('选择另一份已保存方案')),
+          h('option', { value: '' }, t(evidenceRetest ? '选择同一组实战的另一套方案' : '选择另一份已保存方案')),
           alternatives.map(item => h('option', { key: item.id, value: item.id, disabled: Boolean(item.broken) },
             [item.name, item.heroName].filter(Boolean).join(' · '))))),
+          evidenceRetest && !alternatives.length && h('p', { className: 'moba-alert', role: 'status' }, t(evidenceRetestStale)),
+          evidenceRetest && !workspaces.length &&
+            h('p', { className: 'moba-plan-note', role: 'status' }, t('请先在 DeepSeek Harness 中添加自己的工作区。')),
           h(WorkspaceFileFields, { workspaces, workspaceId: workspace?.workspaceId ?? '', setWorkspaceId,
             material, setMaterial, materialField, request, busy: Boolean(working) }),
           h('label', null, t('新任务说明'), h('textarea', { ref: briefField, required: true, disabled: Boolean(working), value: brief, rows: 4,
@@ -4465,6 +4482,7 @@ window.__ModuleLoader__.load({
       const [sharing, setSharing] = useState(null)
       const [taskPlan, setTaskPlan] = useState(null)
       const [pairPlan, setPairPlan] = useState(null)
+      const [retest, setRetest] = useState(null)
       const [taskOpening, setTaskOpening] = useState(false)
       const [name, setName] = useState('')
       const [note, setNote] = useState('')
@@ -4480,6 +4498,7 @@ window.__ModuleLoader__.load({
       const importButton = useRef(null)
       const taskButton = useRef(null)
       const pairButton = useRef(null)
+      const retestButton = useRef(null)
       const title = useId()
       const group = useId()
       const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
@@ -4488,6 +4507,15 @@ window.__ModuleLoader__.load({
       const plan = visible.find(item => item.id === picked)
         ?? visible.find(item => item.heroId === current.hero?.id) ?? visible[0]
       const hasAlternative = plans.some(item => item.id !== plan?.id && !item.broken)
+      const retestId = plan?.hasEvidenceOrigin && !plan.broken ? plan.id : undefined
+      const retestRevision = retestId ? plan.revision : undefined
+      const options = retest && retest.id === retestId && retest.revision === retestRevision ? retest.options : undefined
+      const canRetest = options?.alternatives.some(reference =>
+        plans.some(item => item.id !== plan.id && !item.broken && planMatchesRevision(item, reference)))
+      const evidenceRetest = pairPlan?.evidenceRetest
+      const comparisonPlans = evidenceRetest ? plans.filter(item => planMatchesRevision(item, pairPlan.plan) ||
+        evidenceRetest.alternatives.some(reference => planMatchesRevision(item, reference))) : plans
+      const comparisonWorkspaces = evidenceRetest ? workspaces.filter(item => evidenceRetest.workspaceIds.includes(item.workspaceId)) : workspaces
 
       useEffect(() => {
         const element = dialog.current
@@ -4495,6 +4523,17 @@ window.__ModuleLoader__.load({
         return () => element.close()
       }, [])
       useEffect(() => focus.current?.focus(), [editor?.mode])
+      useEffect(() => {
+        if (!retestId) return
+        const abort = new AbortController()
+        const action = 'evidence-retest-options'
+        request(action, { action, id: retestId, revision: retestRevision }, abort.signal)
+          .then(options => {
+            if (!abort.signal.aborted) setRetest({ id: retestId, revision: retestRevision, options })
+          })
+          .catch(() => { if (!abort.signal.aborted) setRetest(null) })
+        return () => abort.abort()
+      }, [request, retestId, retestRevision])
 
       function edit(mode, target) {
         setEditor({ mode, target })
@@ -4528,8 +4567,9 @@ window.__ModuleLoader__.load({
 
       function closePair() {
         if (openingTask.current) return
+        const trigger = pairPlan.evidenceRetest ? retestButton : pairButton
         setPairPlan(null)
-        requestAnimationFrame(() => pairButton.current?.focus())
+        requestAnimationFrame(() => (trigger.current ?? focus.current)?.focus())
       }
 
       function taskOpened(result) {
@@ -4579,14 +4619,15 @@ window.__ModuleLoader__.load({
           else close()
         } },
         h('header', { className: 'moba-gallery-heading' },
-          h('h2', { id: title }, pairPlan ? t('方案同题对照') : taskPlan ? t('用这套出装开新任务')
+          h('h2', { id: title }, pairPlan ? t(evidenceRetest ? evidenceRetestLabel : '方案同题对照') : taskPlan ? t('用这套出装开新任务')
             : sharing?.mode === 'export' ? t('分享出装方案') : sharing?.mode === 'import' ? t('导入分享码')
             : mode === 'create' ? t('保存出装方案') : mode === 'edit' ? t('编辑方案')
             : mode === 'replace' ? t('更新方案出装')
             : mode === 'remove' ? t('移除方案') : t('出装方案')),
           h('button', { className: 'moba-icon-action', type: 'button', 'aria-label': t('关闭出装方案'), disabled: busy || taskOpening, onClick: close },
             h(Glyph, { kind: 'close' }))),
-        pairPlan ? h(SavedPlanComparison, { plan: pairPlan, plans, workspaces, initialWorkspaceId: workspaceId, request,
+        pairPlan ? h(SavedPlanComparison, { plan: pairPlan.plan, plans: comparisonPlans, workspaces: comparisonWorkspaces,
+          initialWorkspaceId: workspaceId, request, evidenceRetest,
           onBack: closePair, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
           : taskPlan ? h(LoadoutTaskForm, { plan: taskPlan, workspaces, initialWorkspaceId: workspaceId, request,
             onBack: closeTask, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
@@ -4640,7 +4681,9 @@ window.__ModuleLoader__.load({
                     h('button', { className: 'moba-start moba-plan-task-start', type: 'button', ref: taskButton, disabled: Boolean(plan.broken),
                       onClick: () => setTaskPlan(plan) }, t('用这套出装开新任务'), h(Glyph, { kind: 'arrow', size: 16 })),
                     h('button', { className: 'moba-roster-open', type: 'button', ref: pairButton, disabled: Boolean(plan.broken) || !hasAlternative,
-                      onClick: () => setPairPlan(plan) }, t('与另一份方案同题对照'))),
+                      onClick: () => setPairPlan({ plan }) }, t('与另一份方案同题对照')),
+                    canRetest && h('button', { className: 'moba-roster-open', type: 'button', ref: retestButton,
+                      onClick: () => setPairPlan({ plan, evidenceRetest: options }) }, t(evidenceRetestLabel))),
                   plan.hasEvidenceOrigin && onOpenSource && h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
                     onVisit: sessionId => { close(); onOpenSource(sessionId) } }),
                   !plan.broken && !hasAlternative && h('p', { className: 'moba-lighthouse-note' }, t('再保存一套可用出装方案，就能做同题对照。')),

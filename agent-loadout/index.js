@@ -3491,7 +3491,8 @@ export async function apply(ctx) {
   }
 
   function requestedPlanComparison(selection, english) {
-    const { workspaceId } = selection
+    const { workspaceId, evidenceRetest } = selection
+    if (evidenceRetest !== undefined && typeof evidenceRetest !== 'boolean') throw new Error('请选择同一次证据换装两侧保存的方案。')
     const validRef = value => typeof value === 'string' && value.length > 0 && value.length <= 512
     const plans = Object.fromEntries(planComparisonArms.map(arm => {
       const { id, revision } = selection.plans?.[arm] ?? {}
@@ -3502,7 +3503,8 @@ export async function apply(ctx) {
     if (!validRef(workspaceId)) throw new Error('请选择一个现有的工作区。')
     const { material, task } = planTaskPrompt(selection, english)
     const input = { plans, workspaceId, material, brief: selection.task.trim(),
-      task: task + (english ? '\nKeep the original material unchanged.' : '\n保留原始材料，不要修改。') }
+      task: task + (english ? '\nKeep the original material unchanged.' : '\n保留原始材料，不要修改。'),
+      ...(evidenceRetest && { evidenceRetest }) }
     const inputHash = createHash('sha256').update(JSON.stringify(input)).digest('hex')
     return { ...input, inputHash }
   }
@@ -3546,8 +3548,9 @@ export async function apply(ctx) {
   }
 
   async function checkPlanComparison(input, signal) {
-    const { workspaceId, material, task, brief, inputHash } = input
-    const { workspace, digest } = await readWorkspaceMaterial(workspaceId, material, signal)
+    const { workspaceId, material, task, brief, inputHash, evidenceRetest } = input
+    const source = evidenceRetest && requireEvidenceRetest(input.plans)
+    const { workspace, digest } = await (evidenceRetest ? readPersonalTaskMaterial : readWorkspaceMaterial)(workspaceId, material, signal)
     const ecosystem = await discover()
     const checked = await Promise.all(planComparisonArms.map(async id => {
       const view = { id, status: 'unopened' }
@@ -3558,6 +3561,12 @@ export async function apply(ctx) {
         view.heroName = saved.heroName
         const { identity, draft, candidate } = await verifiedPlanComparisonArm(saved, ecosystem)
         if (!identity) throw new Error('无法核对当前出装的配置。')
+        if (source) {
+          const historical = saved.evidenceOrigin.arm === 'baseline' ? source.baseline : source.loadout
+          if (!matchesLessonIdentity(historical.identity, identity, draft, candidate, ecosystem)) {
+            throw new Error('本机配置已变化，无法核对这局的原出装。')
+          }
+        }
         buildPlans.read(ref.id, ref.revision)
         const removed = historicalRemovals(candidate, presetEquipment(ecosystem, saved.heroId), ecosystem)
         return { view: { ...view, removed }, draft, candidate, pinned: { ...ref, identity, presetId: saved.presetId, heroId: saved.heroId,
@@ -3572,7 +3581,8 @@ export async function apply(ctx) {
     const [left, right] = checked
     const plans = { left: left.pinned, right: right.pinned }
     const token = createHash('sha256').update(JSON.stringify([inputHash, workspace.path, digest, plans])).digest('hex')
-    return { view, record: { workspaceId, workspaceTitle: workspace.title, cwd: workspace.path, material, task, brief, digest, inputHash, plans, token },
+    return { view, record: { workspaceId, workspaceTitle: workspace.title, cwd: workspace.path, material, task, brief, digest, inputHash, plans, token,
+      ...(evidenceRetest && { evidenceRetest }) },
       ecosystem, left, right }
   }
 
@@ -3600,11 +3610,13 @@ export async function apply(ctx) {
 
   async function preparePlanComparison(comparison, arm) {
     const pinned = comparison.plans[arm]
+    if (comparison.evidenceRetest) requireEvidenceRetest(comparison.plans)
     const current = buildPlans.read(pinned.id, pinned.revision)
     const { draft, candidate, identity } = await verifiedPlanComparisonArm(current, await discover())
     if (current.presetId !== pinned.presetId || identity !== pinned.identity) {
       throw new Error('材料、任务或出装已变化，请重新核对。')
     }
+    if (comparison.evidenceRetest) requireEvidenceRetest(comparison.plans)
     return prepare(draft, candidate)
   }
 
@@ -3649,8 +3661,7 @@ export async function apply(ctx) {
     return path => !lighthousePracticeContains(profileDirectory, path)
   }
 
-  async function lessonTaskOptions(selection, signal) {
-    const { view } = await verifiedLessonTaskSource(selection, signal)
+  async function personalWorkspaceIds(signal) {
     const includesPath = await personalTaskPathFilter()
     const workspaces = ctx.get('workspaceRegistry')?.list() ?? []
     const allowed = await Promise.all(workspaces.map(async workspace => {
@@ -3658,7 +3669,12 @@ export async function apply(ctx) {
       return path && path === workspace.path && includesPath(path) ? workspace.id : undefined
     }))
     signal?.throwIfAborted()
-    return { source: view, workspaceIds: allowed.filter(Boolean) }
+    return allowed.filter(Boolean)
+  }
+
+  async function lessonTaskOptions(selection, signal) {
+    const { view } = await verifiedLessonTaskSource(selection, signal)
+    return { source: view, workspaceIds: await personalWorkspaceIds(signal) }
   }
 
   function requestedLessonTask(selection, english) {
@@ -3987,17 +4003,18 @@ export async function apply(ctx) {
       const lessonBaseline = comparisons === workspaceComparisons && comparison.lesson === lighthouseLesson
       const evidencePractice = comparisons === workspaceComparisons && comparison.lesson === evidenceLesson
       const evidenceReplay = comparison.baseline?.evidenceReplay === true
+      const strictEvidence = evidenceReplay || comparison.evidenceRetest === true
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material,
         verifyMaterialDelivery: lessonBaseline || verifyPersonalDelivery,
-        ...((verifyPersonalDelivery || evidencePractice || evidenceReplay) && { exactMessages: true }),
-        linkedChoicesOnly: evidenceReplay }, receipts)
+        ...((verifyPersonalDelivery || evidencePractice || strictEvidence) && { exactMessages: true }),
+        linkedChoicesOnly: strictEvidence }, receipts)
       if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
         result.reason = '未交付本次练习的灯塔补给卡。请查看原会话或开始新的练习。'
       }
       const canReuse = evidencePractice
         ? result.status === 'complete' && (comparisonChoices(result).length > 0 ||
           (comparison.scenario === 'confirmed' && result.deliverables.length > 0))
-        : (!lessonBaseline || result.materialDelivered === true) && (!evidenceReplay || !result.continuationReason) &&
+        : (!lessonBaseline || result.materialDelivered === true) && (!strictEvidence || !result.continuationReason) &&
           reusableComparisonArm(arm, result)
       const canRematch = canReuse && !evidencePractice && !evidenceReplay && materialComparisonStores.includes(comparisons) &&
         (!comparison.baseline || Boolean(previousComparison(comparison)))
@@ -4348,18 +4365,49 @@ export async function apply(ctx) {
     })
   }
 
+  function savedEvidenceComparison(plan) {
+    if (!plan.evidenceOrigin) return
+    const { comparisonId, arm } = plan.evidenceOrigin
+    const record = rematchComparisons.read(comparisonId)
+    const pinned = arm === 'baseline' ? record?.baseline : record?.loadout
+    if (record?.baseline?.evidenceReplay && pinned?.presetId === plan.presetId && pinned.heroId === plan.heroId) return record
+  }
+
+  function requireEvidenceRetest(plans) {
+    const left = buildPlans.read(plans.left.id, plans.left.revision)
+    const right = buildPlans.read(plans.right.id, plans.right.revision)
+    const record = savedEvidenceComparison(left)
+    if (!record || savedEvidenceComparison(right) !== record || left.evidenceOrigin.arm === right.evidenceOrigin.arm) {
+      throw new Error('请选择同一次证据换装两侧保存的方案。')
+    }
+    return record
+  }
+
+  async function evidenceRetestOptions({ id, revision }, signal) {
+    const selected = buildPlans.read(id, revision)
+    const record = savedEvidenceComparison(selected)
+    if (!record) return { alternatives: [], workspaceIds: [] }
+    const alternatives = buildPlans.list().filter(plan => savedEvidenceComparison(plan) === record &&
+      plan.evidenceOrigin.arm !== selected.evidenceOrigin.arm)
+    if (!alternatives.length) return { alternatives: [], workspaceIds: [] }
+    const [ecosystem, workspaceIds] = await Promise.all([discover(), personalWorkspaceIds(signal)])
+    const unavailable = planAvailability(ecosystem)
+    buildPlans.read(id, revision)
+    signal?.throwIfAborted()
+    return { alternatives: unavailable(selected.presetId) ? [] : alternatives.filter(plan => !unavailable(plan.presetId))
+      .map(({ id, revision }) => ({ id, revision })), workspaceIds }
+  }
+
   async function readPlanEvidenceOrigin({ id, revision }, signal) {
     const saved = buildPlans.read(id, revision)
     const unavailable = '这份方案的实测来源已不可查看。'
-    if (!saved.evidenceOrigin) throw new Error(unavailable)
+    const record = savedEvidenceComparison(saved)
+    if (!record) throw new Error(unavailable)
     const { comparisonId, arm } = saved.evidenceOrigin
-    const record = rematchComparisons.read(comparisonId)
-    const pinned = arm === 'baseline' ? record?.baseline : record?.loadout
-    if (!record?.baseline?.evidenceReplay || pinned?.presetId !== saved.presetId || pinned.heroId !== saved.heroId) throw new Error(unavailable)
     const observed = arm === 'baseline' ? await readRematchBaseline(record, previousComparison(record), signal)
       : await readComparisonArm(rematchComparisons, record, arm, signal)
     if (!verifiedEvidenceArm(observed) || !(comparisonChoices(observed).length || observed.deliverables.length)) throw new Error(unavailable)
-    if (arm === 'rematch' && (await rematchComparisons.readArm(comparisonId, arm))?.presetId !== pinned.presetId) throw new Error(unavailable)
+    if (arm === 'rematch' && (await rematchComparisons.readArm(comparisonId, arm))?.presetId !== saved.presetId) throw new Error(unavailable)
     buildPlans.read(id, revision)
     signal?.throwIfAborted()
     return { comparisonId, arm, sessionId: observed.sessionId }
@@ -4388,7 +4436,7 @@ export async function apply(ctx) {
     ])
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
       ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),
-      ...(record.lesson === evidenceLesson && { scenario: record.scenario }) }
+      ...(record.lesson === evidenceLesson && { scenario: record.scenario }), ...(record.evidenceRetest && { evidenceRetest: true }) }
   }
 
   async function createWorkspaceComparison(comparisons, registry, selection, english, signal) {
@@ -5668,6 +5716,8 @@ export async function apply(ctx) {
           updates.notify()
         } else if (selection?.action === 'plan-evidence-origin') {
           value = await readPlanEvidenceOrigin(selection, request.signal)
+        } else if (selection?.action === 'evidence-retest-options') {
+          value = await evidenceRetestOptions(selection, request.signal)
         } else if (selection?.action === 'workspace-materials') {
           value = await workspaceMaterials(selection, request.signal)
         } else if (selection?.action === 'lesson-task-materials') {

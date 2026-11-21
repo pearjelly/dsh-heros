@@ -2087,6 +2087,13 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     assert.equal(staleResult.canReview, undefined)
     assert.equal(staleResult.draft, undefined)
     await assertEvidenceReplay()
+    let earned
+    for (let attempt = 0; attempt < 50 && !earned; attempt++) {
+      const { receipts } = await invoke('match-settlements-page', { sessionId: stale.sessionId })
+      earned = receipts.find(receipt => receipt.awards.some(award => award.id === 'standard'))
+      if (!earned) await delay(40)
+    }
+    assert.ok(earned, 'The manually sent prior turn has finished settling before comparing plan-save XP')
 
     const planState = async () => {
       const { plans, presets } = (await host.request(endpoint)).value
@@ -2197,6 +2204,102 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     assert.deepEqual(pausedBoard.evidenceOutcome.arms[0], { id: 'baseline', choices: [labels[2]], deliverables: [], canPreserve: true })
     assert.deepEqual((await planState()).plans, afterSave.plans)
 
+    const sameArm = await saveEvidencePlan(replay.id, 'baseline', 'Another name for the evidence arm')
+    const otherPair = await saveEvidencePlan(paused.id, 'rematch', 'Delivery from a different comparison')
+    const planKey = ({ id, revision }) => ({ id, revision })
+    const retestOptions = (plan, status) => invoke('evidence-retest-options', planKey(plan), status)
+    const leftOptions = await retestOptions(savedBaseline)
+    assert.deepEqual(leftOptions.alternatives, [planKey(savedReplay)])
+    assert.ok(leftOptions.workspaceIds.includes(next.workspaceId))
+    assert.ok(!leftOptions.workspaceIds.includes(sample.workspaceId))
+    const rightOptions = await retestOptions(savedReplay)
+    assert.deepEqual(new Set(rightOptions.alternatives.map(item => item.id)), new Set([savedBaseline.id, sameArm.id]))
+    assert.deepEqual(await retestOptions(prior), { alternatives: [], workspaceIds: [] })
+    assert.deepEqual(await retestOptions(otherPair), { alternatives: [], workspaceIds: [] })
+    await retestOptions(initialBaseline, 422)
+
+    const retest = { evidenceRetest: true, plans: { left: planKey(savedBaseline), right: planKey(savedReplay) },
+      workspaceId: next.workspaceId, material: nextMaterial, task: nextTask + ' 分别测试这两套已保存出装。' }
+    const retestPreview = (input, status) => invoke('plan-comparison-preview', input, status)
+    const retestOpen = (input, status) => invoke('plan-comparison-open', input, status)
+    const retestMembers = async () => (await host.request(workspace, { inspectWorkspaceId: next.workspaceId })).sessionIds
+    const beforeRetest = await retestMembers()
+    const beforeRetestPlans = (await planState()).plans
+    const oldEvidenceHistory = await evidenceHistory()
+    for (const invalid of [prior, sameArm, otherPair, { ...savedReplay, revision: randomUUID() }, { ...savedReplay, id: randomUUID() }]) {
+      await retestPreview({ ...retest, plans: { ...retest.plans, right: planKey(invalid) } }, 422)
+    }
+    await retestPreview({ ...retest, workspaceId: sample.workspaceId, material: '02-lighthouse.md' }, 422)
+    const checked = await retestPreview(retest)
+    assert.ok(checked.token, JSON.stringify(checked.arms))
+    assert.equal(checked.workspaceId, next.workspaceId)
+    assert.equal(checked.material, nextMaterial)
+    assert.ok(checked.task.includes(retest.task) && !checked.task.includes(qualifiedSession.task))
+    assert.deepEqual(checked.arms.map(({ id, planName, status }) => [id, planName, status]), [
+      ['left', savedBaseline.name, 'unopened'], ['right', savedReplay.name, 'unopened'],
+    ])
+    assert.ok(checked.comparison.lost.some(item => item.id === 'evidence' || item.name === '证据核验'))
+    const editedDraft = { presetId: 'standard', equipmentIds: [] }
+    const edited = { ...retest, draft: editedDraft, plans: { ...retest.plans, left: { ...retest.plans.left, draft: editedDraft } } }
+    assert.deepEqual(await retestPreview(edited), checked)
+    const firstRequest = { ...edited, token: checked.token, launchId: launchId('4'), arm: 'left' }
+    await retestOpen({ ...firstRequest, plans: { ...firstRequest.plans, right: planKey(otherPair) } }, 422)
+    await appendFile(join(newWorkspace, nextMaterial), '\nChanged after retest preview.\n')
+    await retestOpen(firstRequest, 422)
+    await writeFile(join(newWorkspace, nextMaterial), nextBody)
+    assert.deepEqual(await retestMembers(), beforeRetest)
+    assert.deepEqual((await planState()).plans, beforeRetestPlans)
+
+    const left = await retestOpen(firstRequest)
+    const comparisonFilter = { comparisonId: left.id }
+    const right = await retestOpen({ ...comparisonFilter, arm: 'right' })
+    assert.equal(right.id, left.id)
+    assert.notEqual(left.sessionId, right.sessionId)
+    assert.equal(left.task, checked.task)
+    assert.equal(right.task, checked.task)
+    const readRetest = () => invoke('plan-comparison', comparisonFilter)
+    const waiting = await readRetest()
+    assert.equal(waiting.evidenceRetest, true)
+    assert.deepEqual(waiting.arms.map(({ status }) => status), ['waiting', 'waiting'])
+    for (const [opened, expected] of [[left, savedBaseline], [right, savedReplay]]) {
+      const draft = await history(opened.sessionId)
+      assert.equal(draft.presetId, expected.presetId)
+      assert.equal(draft.workspaceId, next.workspaceId)
+      assert.equal(draft.inherited, 0)
+      assert.ok(!draft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+    }
+    assert.deepEqual(new Set(await retestMembers()), new Set([...beforeRetest, left.sessionId, right.sessionId]))
+    assert.deepEqual(await retestOpen(firstRequest), left)
+    await choose(left, labels[1], async () => {
+      const pending = await readRetest()
+      assert.equal(pending.arms[0].status, 'waiting-choice')
+      assert.equal(pending.arms[1].status, 'waiting')
+      assert.deepEqual(pending.arms[0].pendingQuestions[0].options, labels)
+    })
+    await send(right)
+    const completed = await readRetest()
+    assert.deepEqual(completed.arms.map(({ status }) => status), ['complete', 'complete'])
+    assert.deepEqual(completed.arms.map(arm => arm.entries.flatMap(entry => entry.choices ?? [])), [[labels[1]], []])
+    assert.deepEqual(completed.arms.map(arm => arm.deliverables.map(item => item.name)), [['qualified-handoff.md'], [replayFile]])
+    for (const [opened, expected] of [[left, savedCases[0]], [right, savedCases[1]]]) {
+      const native = await history(opened.sessionId)
+      assert.deepEqual(usedTools(native).map(event => event.data.name), expected.tools)
+      assert.equal(provider(native), provider(qualified))
+      assert.deepEqual(files(native).flatMap(event => event.data.files.map(item => item.path)), [join(await realpath(newWorkspace), expected.file)])
+    }
+    assert.deepEqual(await evidenceHistory(), oldEvidenceHistory)
+    assert.equal(await readFile(join(newWorkspace, nextMaterial), 'utf8'), nextBody)
+    assert.deepEqual((await planState()).plans, beforeRetestPlans)
+
+    const alternateInput = { ...retest, plans: { ...retest.plans, left: planKey(sameArm) } }
+    const alternate = await retestPreview(alternateInput)
+    const oneArm = await retestOpen({ ...alternateInput, token: alternate.token, launchId: launchId('5'), arm: 'left' })
+    const renamed = await invoke('plan-save', { ...planKey(sameArm), name: 'Renamed alternate evidence arm' })
+    assert.notEqual(renamed.revision, sameArm.revision)
+    const beforeStaleArm = await retestMembers()
+    await retestOpen({ comparisonId: oneArm.id, arm: 'right' }, 422)
+    assert.deepEqual(await retestMembers(), beforeStaleArm)
+
     const draft = { presetId: 'standard', equipmentIds: [] }
     const forgery = { evidenceOrigin: { comparisonId: replay.id, arm: 'baseline' }, hasEvidenceOrigin: true }
     const replaced = await invoke('plan-save', { id: savedBaseline.id, revision: savedBaseline.revision, name: savedBaseline.name, draft, ...forgery })
@@ -2207,8 +2310,11 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     const ordinary = await invoke('plan-save', { name: 'Ordinary Standard plan', draft, ...forgery })
     assertPublicOrigin(ordinary, false)
     await planOrigin(ordinary, 422)
+    assert.deepEqual(await retestOptions(ordinary), { alternatives: [], workspaceIds: [] })
     assert.deepEqual(await planOrigin(savedReplay), replayOrigin)
-    for (const plan of (await planState()).plans) assertPublicOrigin(plan, plan.id === savedReplay.id)
+    const retainedOrigins = new Set([savedReplay.id, renamed.id, otherPair.id])
+    for (const plan of (await planState()).plans) assertPublicOrigin(plan, retainedOrigins.has(plan.id))
+    assert.deepEqual(await readRetest(), completed)
     assert.deepEqual(await readReplay(), replayProof)
   } finally {
     await host?.stop()

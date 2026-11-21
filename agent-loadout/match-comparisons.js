@@ -128,6 +128,7 @@ export function validWorkspaceComparison(record) {
 export function validPlanComparison(record) {
   const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
   return validWorkspaceComparison(record) && hash(record.inputHash) && hash(record.token) &&
+    (record.evidenceRetest === undefined || record.evidenceRetest === true) &&
     typeof record.brief === 'string' && record.brief.length > 0 && record.brief.length <= 1200 &&
     planComparisonArms.every(arm => {
       const plan = record.plans?.[arm]
