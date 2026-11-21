@@ -15,13 +15,19 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.88.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.89.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 For the desktop app, use its bundled CLI with `--profile desktop`, then quit and reopen the app. If an earlier copy is installed, remove `dsh-agent-loadout` from the same profile before installing the release. The package keeps that identifier for compatibility.
 
 Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
+
+## Play Lighthouse evidence choices
+
+1. In the lobby, choose **Lighthouse evidence choices** next to **Lighthouse Supply Run**. Pick a scenario and choose **Start evidence exercise**. The fresh Standard Mode session comes with Evidence Check and the sample supply card. Review and manually send the prepared task in DSH.
+2. In **Missing key evidence**, the card does not verify a report of two spare batteries. On the native DSH question card, you can gather more evidence, limit the recommendation to what the card supports, or pause submission. In **Evidence available**, the card records two cans of lamp oil, so the handoff can proceed without asking you to resolve a missing source.
+3. Choose **View evidence run** in the session, or find the run in **Run history**. Check actual tool calls, any answer you gave, and any file delivered in that session. A choice to pause can leave the run with zero attachments. Each run uses a separate sample workspace, and any delivery stays in the DSH conversation.
 
 ## Play your first rematch
 

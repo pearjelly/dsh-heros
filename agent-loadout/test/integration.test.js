@@ -1621,6 +1621,166 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
   }
 })
 
+test('Lighthouse Evidence Check offers real choices only for the unsupported handoff claim', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-lighthouse-evidence-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const material = '02-lighthouse.md'
+  const sampleFiles = ['01-waystation.md', material, '03-old-bridge.md']
+  const questions = '/api/loadout-fixture-handoff-question'
+  let host
+  try {
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, fields, status) => (await host.request(endpoint, { action, ...fields }, status)).value
+    const open = (scenario, launchId, status) => invoke('lighthouse-evidence-open', { scenario, launchId }, status)
+    const openEnglish = async (scenario, launchId) => {
+      const response = await host.requestRaw(endpoint, { method: 'POST',
+        headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+        body: JSON.stringify({ action: 'lighthouse-evidence-open', launchId, scenario }) })
+      assert.equal(response.status, 200)
+      return (await response.json()).value
+    }
+    const read = fields => invoke('workspace-comparison', fields)
+    const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
+    const plans = async () => (await host.request(endpoint)).value.plans
+    const send = ({ sessionId, task, requestId }) => host.request(turnEndpoint, { sessionId, text: task, requestId })
+    const tools = native => native.events.filter(item => item.type === 'tool/call')
+    const files = native => native.events.filter(item => item.type === 'deliverables/presented').flatMap(item => item.data.files)
+
+    const normal = await plans()
+    await open('gap', '../', 422)
+    await open('unsupported', 'a'.repeat(32), 422)
+    const launchId = 'a'.repeat(32)
+    const [gather, duplicate] = await Promise.all([open('gap', launchId), open('gap', launchId)])
+    assert.deepEqual(duplicate, gather)
+    await open('confirmed', launchId, 422)
+    assert.match(gather.task, /两节备用电池/u)
+    const lower = await open('gap', 'b'.repeat(32))
+    const pause = await openEnglish('gap', 'c'.repeat(32))
+    const confirmed = await openEnglish('confirmed', 'd'.repeat(32))
+    assert.equal(lower.task, gather.task)
+    assert.match(pause.task, /two spare batteries/u)
+    assert.match(confirmed.task, /2 cans of lamp oil/u)
+    assert.doesNotMatch(confirmed.task, /two spare batteries/u)
+    const cases = [
+      { opened: gather, scenario: 'gap', options: ['继续补证', '降级推荐', '暂缓提交'], decision: '继续补证', calls: ['read', 'ask_user_question', 'glob'] },
+      { opened: lower, scenario: 'gap', options: ['继续补证', '降级推荐', '暂缓提交'], decision: '降级推荐', calls: ['read', 'ask_user_question', 'write', 'present'], file: 'qualified-handoff.md' },
+      { opened: pause, scenario: 'gap', options: ['Continue gathering evidence', 'Lower the recommendation to a qualified draft', 'Pause submission'],
+        decision: 'Pause submission', calls: ['read', 'ask_user_question'] },
+      { opened: confirmed, scenario: 'confirmed', calls: ['read', 'write', 'present'], file: 'verified-handoff.md' },
+    ]
+    assert.equal(new Set(cases.map(testCase => testCase.opened.sessionId)).size, cases.length)
+    assert.equal((await read({})).id, undefined)
+    const proved = []
+    for (const { opened, scenario, options, decision, calls, file } of cases) {
+      const filter = { comparisonId: opened.id }
+      const native = await history(opened.sessionId)
+      const practice = native.workspacePath
+      const seeded = await Promise.all(sampleFiles.map(name => readFile(join(practice, name), 'utf8')))
+      assert.match(seeded[1], /2 cans of lamp oil/u)
+      assert.doesNotMatch(seeded[1], /spare batteries/u)
+      assert.deepEqual((await readdir(practice)).sort(), sampleFiles)
+      assert.equal(native.inherited, 0)
+      assert.ok(!native.events.some(event => event.type === 'user/message' || event.type === 'turn/start'))
+      assert.deepEqual(tools(native), [])
+      const waiting = await read(filter)
+      assert.equal(waiting.lesson, 'lighthouse-evidence')
+      assert.equal(waiting.scenario, scenario)
+      assert.equal(waiting.task, opened.task)
+      assert.equal(waiting.material, material)
+      assert.deepEqual(waiting.arms.map(arm => [arm.id, arm.status]), [['evidence', 'waiting']])
+      assert.deepEqual((await equipmentIn(host, opened.sessionId)).workspaceComparison, {
+        id: opened.id, arm: 'evidence', task: opened.task, lesson: 'lighthouse-evidence', scenario,
+      })
+      await invoke('workspace-comparison-open', { ...filter, arm: 'review' }, 422)
+
+      if (options) {
+        const turn = send(opened)
+        turn.catch(() => {})
+        let question
+        try {
+          for (let attempt = 0; attempt < 100 && !question; attempt++) {
+            question = (await host.request(questions, { sessionId: opened.sessionId })).question
+            if (!question) await delay(40)
+          }
+          assert.deepEqual(question?.options.map(option => option.label), options)
+          const [arm] = (await read(filter)).arms
+          assert.equal(arm.status, 'waiting-choice')
+          assert.deepEqual(arm.pendingQuestions[0].options, options)
+          assert.deepEqual(arm.deliverables, [])
+          assert.deepEqual(files(await history(opened.sessionId)), [])
+        } finally {
+          if (question) await host.request(questions, { sessionId: opened.sessionId, choice: decision })
+          await turn
+        }
+      } else {
+        await send(opened)
+      }
+      const after = await history(opened.sessionId)
+      const user = after.events.find(event => event.type === 'user/message' && event.data.source.kind === 'user')
+      assert.equal(user.data.content[0].text, opened.task)
+      assert.deepEqual(tools(after).map(event => event.data.name), calls)
+      if (calls.includes('glob')) assert.match(JSON.stringify(tools(after).at(-1).data), /batter/u)
+      assert.deepEqual(files(after).map(item => item.path), file ? [join(practice, file)] : [])
+      if (file) {
+        const body = await readFile(join(practice, file), 'utf8')
+        assert.match(body, /Verified: 2 cans of lamp oil/u)
+        if (scenario === 'gap') assert.match(body, /Unverified: two spare batteries/u)
+      }
+      assert.deepEqual(await Promise.all(sampleFiles.map(name => readFile(join(practice, name), 'utf8'))), seeded)
+      const [arm] = (await read({ sessionId: opened.sessionId })).arms
+      assert.equal(arm.status, 'complete')
+      assert.deepEqual(arm.entries.map(entry => [entry.name, entry.state]), calls.map(name => [name, 'completed']))
+      assert.deepEqual(arm.entries.flatMap(entry => entry.choices ?? []), decision ? [decision] : [])
+      assert.deepEqual(arm.deliverables, file ? [{ name: file, turn: 1 }] : [])
+      proved.push({ filter, arm })
+    }
+
+    const plainPath = join(directory, 'plain-workspace')
+    await mkdir(plainPath)
+    await cp(join((await history(gather.sessionId)).workspacePath, material), join(plainPath, material))
+    const plain = await host.request('/api/loadout-fixture-session', { presetId: 'standard', workspacePath: plainPath })
+    await send({ sessionId: plain.sessionId, task: gather.task })
+    const plainHistory = await history(plain.sessionId)
+    assert.deepEqual(tools(plainHistory).map(event => event.data.name), ['read'])
+    assert.deepEqual(files(plainHistory), [])
+    assert.equal(await read({ sessionId: plain.sessionId }), null)
+
+    const edited = await open('gap', 'e'.repeat(32))
+    await send({ ...edited, task: 'Use a different handoff task.' })
+    const [wrongChoice] = (await read({ comparisonId: edited.id })).arms
+    assert.equal(wrongChoice.status, 'unavailable')
+    assert.equal(wrongChoice.reason, 'changed-task')
+    assert.ok(!wrongChoice.deliverables?.length)
+    const changed = await openEnglish('confirmed', 'f'.repeat(32))
+    const changedNative = await history(changed.sessionId)
+    await appendFile(join(changedNative.workspacePath, material), '\nAn unexpected change to this isolated supply card.\n')
+    await send(changed)
+    const changedView = await read({ comparisonId: changed.id })
+    assert.equal(changedView.materialState, 'changed')
+    assert.equal(changedView.arms[0].reason, 'changed-material')
+    assert.ok(!changedView.arms[0].deliverables?.length)
+
+    assert.deepEqual(await plans(), normal)
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual(await open('gap', launchId), gather)
+    await open('confirmed', launchId, 422)
+    for (const { filter, arm } of proved) assert.deepEqual((await read(filter)).arms[0], arm)
+    const chronicle = await invoke('comparison-history', { kind: 'workspace', query: material })
+    for (const { filter } of proved) {
+      const item = chronicle.items.find(item => item.id === filter.comparisonId)
+      assert.equal(item?.lesson, 'lighthouse-evidence')
+      assert.equal(item.scenario, filter.comparisonId === confirmed.id ? 'confirmed' : 'gap')
+    }
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('verified Lighthouse lesson gear carries into a new native task on personal material', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-lesson-task-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }

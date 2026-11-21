@@ -15,13 +15,19 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.88.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.89.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 桌面版用应用随附的 CLI，把 `--profile web` 改为 `--profile desktop`，安装后退出并重新打开应用。如果已安装早期版本，先从同一 Profile 移除 `dsh-agent-loadout` 再安装。发布包沿用这个内部名称，便于兼容原有阵容。
 
 从 DSH 侧栏打开 **深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
+
+## 玩一局灯塔证据取舍
+
+1. 在大厅的 **灯塔补给行动** 旁点 **灯塔证据取舍**。选一个场景，点 **开始证据取舍**。新开的标准模式会话已经装好证据核验并备好样例补给卡。核对任务后，在 DSH 里手动发送。
+2. 选 **关键证据缺失** 时，补给卡无法核实调度消息里的两节备用电池。在原生提问卡选择 **继续补证**、**降级推荐** 或 **暂缓提交**。选 **证据齐全** 时，补给卡足以核实两罐灯油，可以直接继续交接。
+3. 在会话中点 **查看取舍记录**，也可以从 **实战记录** 找回这局。核对实际工具调用、你选的答案和已交付的文件。选暂缓时也可以留下选择和零附件的记录。每局使用独立的样例工作区，交付留在 DSH 对话内。
 
 ## 打完第一次换装复赛
 

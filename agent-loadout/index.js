@@ -18,7 +18,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceLesson, lighthouseEvidenceScenarios, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -50,6 +50,7 @@ const teamworkRecord = 'plugin:dsh-agent-loadout/teamwork'
 const planTaskRecord = 'plugin:dsh-agent-loadout/plan-task'
 const planTaskSessionPrefix = 'session-a076'
 const lighthouseLesson = 'lighthouse-rematch'
+const evidenceLesson = 'lighthouse-evidence'
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
 const equipmentById = new Map(equipment.map(item => [item.id, item]))
@@ -450,10 +451,15 @@ export async function apply(ctx) {
   const buildPlans = await openBuildPlans(join(directory, 'plans'), saveEntry, warnings)
   const lighthouseComparisons = await openMatchComparisons(directory, 'lighthouse-comparison', lighthouseArms, saveEntry,
     () => warnings.push('lighthouse-comparisons'))
-  const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', workspaceComparisonArms, saveEntry,
+  const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', [...workspaceComparisonArms, 'evidence'], saveEntry,
     () => warnings.push('workspace-comparisons'),
-    record => validWorkspaceComparison(record) && (record.lesson === undefined || record.lesson === lighthouseLesson),
-    record => record.lesson === lighthouseLesson ? ['direct'] : workspaceComparisonArms)
+    record => validWorkspaceComparison(record) && (record.lesson === undefined || record.lesson === lighthouseLesson ||
+      (record.lesson === evidenceLesson && lighthouseEvidenceScenarios.includes(record.scenario))),
+    record => {
+      if (record.lesson === evidenceLesson) return ['evidence']
+      if (record.lesson === lighthouseLesson) return ['direct']
+      return workspaceComparisonArms
+    })
   const planComparisons = await openMatchComparisons(directory, 'plan-comparison', planComparisonArms, saveEntry,
     () => warnings.push('plan-comparisons'), validPlanComparison)
   const rematchComparisons = await openMatchComparisons(directory, 'rematch-comparison', ['rematch'], saveEntry,
@@ -3948,13 +3954,18 @@ export async function apply(ctx) {
       }
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
       const lessonBaseline = comparisons === workspaceComparisons && comparison.lesson === lighthouseLesson
+      const evidencePractice = comparisons === workspaceComparisons && comparison.lesson === evidenceLesson
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material,
-        verifyMaterialDelivery: lessonBaseline || verifyPersonalDelivery, ...(verifyPersonalDelivery && { exactMessages: true }) }, receipts)
+        verifyMaterialDelivery: lessonBaseline || verifyPersonalDelivery,
+        ...((verifyPersonalDelivery || evidencePractice) && { exactMessages: true }) }, receipts)
       if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
         result.reason = '未交付本次练习的灯塔补给卡。请查看原会话或开始新的练习。'
       }
-      const canReuse = (!lessonBaseline || result.materialDelivered === true) && reusableComparisonArm(arm, result)
-      const canRematch = canReuse && materialComparisonStores.includes(comparisons) &&
+      const canReuse = evidencePractice
+        ? result.status === 'complete' && (comparisonChoices(result).length > 0 ||
+          (comparison.scenario === 'confirmed' && result.deliverables.length > 0))
+        : (!lessonBaseline || result.materialDelivered === true) && reusableComparisonArm(arm, result)
+      const canRematch = canReuse && !evidencePractice && materialComparisonStores.includes(comparisons) &&
         (!comparison.baseline || Boolean(previousComparison(comparison)))
       const lessonTaskSource = canReuse && saved?.opened && comparison.lesson === lighthouseLesson
         ? { kind: lessonBaseline ? 'workspace' : 'rematch', comparisonId: comparison.id, arm } : undefined
@@ -4076,13 +4087,16 @@ export async function apply(ctx) {
         const workspaceTitle = registry?.get(workspaceId)?.title ?? record.workspaceTitle
         const title = category === 'lighthouse' ? '灯塔补给行动'
           : (record.brief ?? task.split('\n').slice(2, -1).join(' ')).trim().slice(0, 120) || headings[category].split(' ')[0]
-        return { id, kind: category, createdAt, title, material, workspaceTitle, store, record, change: record.change, lesson: record.lesson }
+        return { id, kind: category, createdAt, title, material, workspaceTitle, store, record, change: record.change, lesson: record.lesson,
+          ...(record.lesson === evidenceLesson && { scenario: record.scenario }) }
       }).filter(item => {
         if (older && comparisonHistoryOrder(item, older) <= 0) return false
         const workspaceName = item.workspaceTitle === 'default-workspace' ? 'default-workspace 默认工作区 Default workspace' : item.workspaceTitle
         const planLabels = item.record.plans && Object.values(item.record.plans).flatMap(({ planName, heroName }) => [planName, heroName])
         const searchable = [headings[item.kind], workspaceName, item.material, item.record.task, ...(planLabels ?? []),
           item.lesson === lighthouseLesson ? '灯塔换装练习 Lighthouse rematch lesson' : undefined,
+          item.scenario === 'gap' ? '灯塔证据取舍 Lighthouse evidence choices 关键证据缺失 Missing key evidence'
+            : item.scenario === 'confirmed' ? '灯塔证据取舍 Lighthouse evidence choices 证据齐全 Evidence available' : undefined,
           item.record.baseline?.planName, item.record.baseline?.heroName, item.change?.added?.name, item.change?.removed?.name]
           .join('\n').normalize('NFKC').toLowerCase()
         return words.every(word => searchable.includes(word))
@@ -4120,7 +4134,7 @@ export async function apply(ctx) {
       const sourceId = draft.equipmentSources[id]
       return { id, name: original?.equipmentLabels?.[key] ?? card?.name ?? id, kind: card?.kind ?? 'featured',
         art: art('gear', id, sourceId), sourceName: original?.equipmentSourceLabels?.[key],
-        evidence: id === 'review' && choices.length ? 'decision' : 'equipped' }
+        evidence: (id === 'review' || id === 'evidence') && choices.length ? 'decision' : 'equipped' }
     })
   }
 
@@ -4248,11 +4262,11 @@ export async function apply(ctx) {
       record = comparisons.read(comparisonId)
       if (!record) throw new Error('找不到这组同题对照。')
     } else if (prototype !== true) {
-      record = comparisons === workspaceComparisons ? comparisons.latest(item => item.lesson !== lighthouseLesson) : comparisons.latest()
+      record = comparisons === workspaceComparisons ? comparisons.latest(item => item.lesson === undefined) : comparisons.latest()
     }
     if (!record) return { ...(comparisons === workspaceComparisons && { defaultTask: workspaceComparisonDraft(english) }),
       ...(comparisons === lighthouseComparisons && { task: lighthouseComparisonTask(english) }),
-      arms: comparisons.arms.map(id => ({ id, status: 'unopened' })) }
+      arms: (comparisons === workspaceComparisons ? workspaceComparisonArms : comparisons.arms).map(id => ({ id, status: 'unopened' })) }
     const { id, task, workspaceId, material } = record
     const workspace = material && ctx.get('workspaceRegistry')?.get(workspaceId)
     const [rounds, materialState] = await Promise.all([
@@ -4260,7 +4274,8 @@ export async function apply(ctx) {
       material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
     ])
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
-      ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }) }
+      ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),
+      ...(record.lesson === evidenceLesson && { scenario: record.scenario }) }
   }
 
   async function createWorkspaceComparison(comparisons, registry, selection, english, signal) {
@@ -4284,34 +4299,41 @@ export async function apply(ctx) {
     return record
   }
 
-  async function openLighthouseLesson({ launchId }, english, signal) {
+  async function openLighthouseLesson({ launchId, scenario = 'gap' }, english, signal, lesson = lighthouseLesson) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     if (!validOpeningId(launchId)) throw new Error('开局请求无效，请重试。')
+    const evidence = lesson === evidenceLesson
+    if (evidence && !lighthouseEvidenceScenarios.includes(scenario)) throw new Error('开局请求无效，请重试。')
     const registry = ctx.get('workspaceRegistry')
     if (!registry?.create || !ctx.get('sessionController')?.create || !ctx.get('sessionQuery')) {
       throw new Error('灯塔练习工作区不可用。')
     }
-    if (openingLighthouseLessons.has(launchId)) return openingLighthouseLessons.get(launchId)
-    const key = lighthouseLesson + ':' + launchId
-    const start = async () => {
-      const record = await workspaceComparisons.create(key, async () => {
-        const { workspace, material, task } = await lighthouseRematchLesson(directory, registry, launchId, english)
+    const key = lesson + ':' + launchId
+    let work = openingLighthouseLessons.get(key)
+    if (!work) {
+      work = workspaceComparisons.create(key, async () => {
+        const { workspace, material, task } = evidence
+          ? await lighthouseEvidenceLesson(directory, registry, launchId, english, scenario)
+          : await lighthouseRematchLesson(directory, registry, launchId, english)
         const fields = workspaceComparisonTask({ material, task }, english)
         const digest = await digestWorkspaceMaterial(workspace.path, material, signal)
         signal?.throwIfAborted()
-        return { ...fields, workspaceId: workspace.id, workspaceTitle: workspace.title, cwd: workspace.path, digest, lesson: lighthouseLesson }
-      })
-      return openComparisonArm(workspaceComparisons, { comparisonId: record.id, arm: 'direct' }, english, signal)
+        return { ...fields, workspaceId: workspace.id, workspaceTitle: workspace.title, cwd: workspace.path, digest, lesson,
+          ...(evidence && { scenario }) }
+      }).finally(() => openingLighthouseLessons.delete(key))
+      openingLighthouseLessons.set(key, work)
     }
-    const work = start().finally(() => openingLighthouseLessons.delete(launchId))
-    openingLighthouseLessons.set(launchId, work)
-    return work
+    const record = await work
+    if (evidence && record.scenario !== scenario) throw new Error('本次对照请求与原任务不同，请重新开始。')
+    return openComparisonArm(workspaceComparisons, { comparisonId: record.id, arm: evidence ? 'evidence' : 'direct' }, english, signal)
   }
 
   async function openComparisonArm(comparisons, selection, english, signal) {
     const { comparisonId, arm, launchId } = selection
     if (closed) throw new Error('配装服务正在关闭，请重试。')
-    if (!comparisons.arms.includes(arm) || (comparisonId === undefined ? !validOpeningId(launchId) : !comparisonIdValid(comparisonId))) {
+    if (!comparisons.arms.includes(arm) || (comparisonId === undefined
+      ? !validOpeningId(launchId) || (comparisons === workspaceComparisons && !workspaceComparisonArms.includes(arm))
+      : !comparisonIdValid(comparisonId))) {
       throw new Error('开局请求无效，请重试。')
     }
     const registry = ctx.get('workspaceRegistry')
@@ -4325,7 +4347,9 @@ export async function apply(ctx) {
     else if (comparisons === workspaceComparisons) comparison = await createWorkspaceComparison(comparisons, registry, selection, english, signal)
     else comparison = await comparisons.create(launchId, () => ({ task: lighthouseComparisonTask(english) }))
     if (!comparison) throw new Error('找不到这组同题对照。')
-    if (!comparisons.armsFor(comparison).includes(arm)) throw new Error('灯塔换装练习从直接交付开局。')
+    if (!comparisons.armsFor(comparison).includes(arm)) {
+      throw new Error(comparison.lesson === lighthouseLesson ? '灯塔换装练习从直接交付开局。' : '开局请求无效，请重试。')
+    }
     const { id, task } = comparison
     const { sessionId, requestId } = comparisons.identity(id, arm)
     const response = { id, task, sessionId, requestId }
@@ -4363,11 +4387,12 @@ export async function apply(ctx) {
       } else {
         const delivery = arm === 'delivery'
         const ecosystem = await discover()
-        const draft = comparison.material ? deliveryPlaybookDraft(ecosystem, arm)
+        const draft = arm === 'evidence' ? standardDeliveryDraft(ecosystem, ['present', 'evidence'])
+          : comparison.material ? deliveryPlaybookDraft(ecosystem, arm)
           : standardDeliveryDraft(ecosystem, delivery ? ['present'] : [])
         const { candidate, choices } = await plannedGrowth(draft, { ecosystem })
         const hasTool = name => choices.some(item => item.kind === 'tool' && item.name === name && !item.timing)
-        const ready = comparison.material ? hasTool('present') && (arm !== 'review' || hasTool('ask_user_question'))
+        const ready = comparison.material ? hasTool('present') && (!['review', 'evidence'].includes(arm) || hasTool('ask_user_question'))
           : hasTool('glob') && hasTool('present') === delivery
         if (!ready) throw new Error('标准模式的对照阵容无法装配。')
         const { presetId } = await prepare(draft, candidate)
@@ -5271,8 +5296,8 @@ export async function apply(ctx) {
       if (comparison) value.lighthouseComparison = comparison
       const workspaceComparison = workspaceComparisons.member(sessionId)
       if (workspaceComparison) {
-        const { lesson } = workspaceComparisons.read(workspaceComparison.id)
-        value.workspaceComparison = lesson ? { ...workspaceComparison, lesson } : workspaceComparison
+        const { lesson, scenario } = workspaceComparisons.read(workspaceComparison.id)
+        value.workspaceComparison = { ...workspaceComparison, ...(lesson && { lesson }), ...(lesson === evidenceLesson && { scenario }) }
       }
       const planComparison = planComparisons.member(sessionId)
       if (planComparison) {
@@ -5441,6 +5466,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-open') value = await startWithQuest(selection, request.signal)
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-rematch-open') value = await openLighthouseLesson(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-evidence-open') value = await openLighthouseLesson(selection, english, request.signal, evidenceLesson)
         else if (selection?.action === 'lighthouse-comparison') value = await readComparison(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'lighthouse-comparison-open') value = await openComparisonArm(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'workspace-comparison') value = await readComparison(workspaceComparisons, selection, english, request.signal)
