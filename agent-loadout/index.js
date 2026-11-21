@@ -3788,7 +3788,11 @@ export async function apply(ctx) {
       const sources = options.filter(option => option.state === 'available' && option.sourceId)
         .map(option => ({ id: option.sourceId, name: option.sourceName }))
       if (item.kind === 'tool' ? !sources.length : status.state !== 'available') return []
-      return [{ id: item.id, name: item.name, kind: item.kind ?? 'featured', summary: item.summary, sources }]
+      const terms = [item.name, item.summary, item.trigger, ...sources.map(source => source.name),
+        ...(item.decisions ?? []).map(([label]) => label)]
+      const searchTerms = [...new Set(terms.filter(term => typeof term === 'string' && term)
+        .flatMap(term => [term, englishText(term)]))]
+      return [{ id: item.id, name: item.name, kind: item.kind ?? 'featured', summary: item.summary, sources, searchTerms }]
     }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id))
     signal?.throwIfAborted()
     return { ...view, equipped, available,

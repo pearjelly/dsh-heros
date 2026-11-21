@@ -1653,6 +1653,10 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     const selectedPracticeMaterial = join(directNative.workspacePath, directProof.material)
     const originalPracticeBytes = await readFile(selectedPracticeMaterial, 'utf8')
     const change = { addId: 'review' }
+    const gear = (await invoke('rematch-comparison-options', root)).available.find(item => item.id === 'review')
+    for (const label of ['交付前复核', 'Delivery Review', '退回修改', 'Request changes']) {
+      assert.ok(gear?.searchTerms.includes(label), label)
+    }
     const changePreview = await invoke('rematch-comparison-preview', { ...root, change })
     const review = await invoke('rematch-comparison-open', { ...root, change, token: changePreview.token, launchId: 'b'.repeat(32) })
     const reviewSource = { kind: 'rematch', comparisonId: review.id, arm: 'rematch' }
