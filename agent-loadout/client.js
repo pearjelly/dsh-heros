@@ -1606,9 +1606,9 @@ window.__ModuleLoader__.load({
     ]
     const heroTrialHeroes = [
       { id: 'standard', icon: 'report', name: '标准模式', open: '打开标准模式会话', visit: '查看标准模式原会话',
-        note: '自带原生读取和文件交付工具。' },
+        note: '自带原生读取和文件交付工具。', choiceNote: '原生工具读取和附文件' },
       { id: 'minimal', icon: 'action', name: '极简模式', open: '打开极简模式会话', visit: '查看极简模式原会话',
-        note: '可用终端读取材料并用文字回应。' },
+        note: '可用终端读取材料并用文字回应。', choiceNote: '终端读取和文字交接' },
     ]
     const minimalDeliveryReplayArm = {
       id: 'minimal-present', icon: 'report', name: '极简模式 + 交付物预览', visit: '查看加装后的会话',
@@ -1688,7 +1688,7 @@ window.__ModuleLoader__.load({
             onClick: open }, t(opening ? '正在打开加装会话…' : '打开加装会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, workspaces, focusReplay, backLabel = '返回英雄图鉴' }) {
+    function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, workspaces, focusReplay, firstHeroes, backLabel = '返回英雄图鉴' }) {
       const language = useLanguage()
       const [need, setNeed] = useState('')
       const [activeId, setActiveId] = useState(comparisonId ?? '')
@@ -1739,22 +1739,13 @@ window.__ModuleLoader__.load({
         return () => { abort.abort(); clearTimeout(timer) }
       }, [request, activeId, language, attempt])
 
-      async function start(event) {
-        event.preventDefault()
-        if (!need || mutation.current) return
+      async function launch(action) {
+        if (mutation.current) return
         mutation.current = true
         setBusy(true)
         setError('')
         try {
-          const action = 'hero-trial-create'
-          if (!launchIds.current.has(need)) {
-            const bytes = crypto.getRandomValues(new Uint8Array(16))
-            launchIds.current.set(need, Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''))
-          }
-          const created = await request(action, { action, need, launchId: launchIds.current.get(need) }, undefined, language)
-          launchIds.current.delete(need)
-          setBoard(created)
-          setActiveId(created.id)
+          await action()
         } catch (reason) {
           setError(reason.message)
         } finally {
@@ -1763,21 +1754,33 @@ window.__ModuleLoader__.load({
         }
       }
 
-      async function open(arm) {
-        if (!value || mutation.current) return
-        mutation.current = true
-        setBusy(true)
-        setError('')
-        try {
-          const action = 'hero-trial-open'
-          const opened = await request(action, { action, comparisonId: value.id, arm }, undefined, language)
-          onVisit(opened.sessionId, opened.task)
-        } catch (reason) {
-          setError(reason.message)
-        } finally {
-          mutation.current = false
-          setBusy(false)
-        }
+      async function openArm(id, arm) {
+        const action = 'hero-trial-open'
+        const opened = await request(action, { action, comparisonId: id, arm }, undefined, language)
+        onVisit(opened.sessionId, opened.task)
+      }
+
+      function start(firstArm) {
+        if (!need) return
+        return launch(async () => {
+          const action = 'hero-trial-create'
+          if (!launchIds.current.has(need)) {
+            const bytes = crypto.getRandomValues(new Uint8Array(16))
+            launchIds.current.set(need, Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''))
+          }
+          const created = await request(action, { action, need, launchId: launchIds.current.get(need) }, undefined, language)
+          launchIds.current.delete(need)
+          setBoard(created)
+          try {
+            if (firstArm) await openArm(created.id, firstArm)
+          } finally {
+            setActiveId(created.id)
+          }
+        })
+      }
+
+      function open(arm) {
+        if (value) return launch(() => openArm(value.id, arm))
       }
 
       async function copy() {
@@ -1823,7 +1826,7 @@ window.__ModuleLoader__.load({
         className: setup ? 'moba-starter-dialog' : 'moba-lighthouse-comparison',
         initialFocus: setup ? 'input[type="radio"]' : value ? focusSelector : 'h2',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!busy) onClose() }) },
-        setup ? h('form', { onSubmit: start },
+        setup ? h('form', { onSubmit: event => { event.preventDefault(); if (!firstHeroes) start() } },
           h('p', null, t('同一张内置补给卡，两种交接。先为接班人选好交付要求。')),
           h('fieldset', { className: 'moba-starter-routes', disabled: busy },
             h('legend', null, t('接班人需要什么？')),
@@ -1831,12 +1834,19 @@ window.__ModuleLoader__.load({
               h('input', { type: 'radio', name: group, required: true, value: item.id, checked: need === item.id,
                 onChange: event => setNeed(event.currentTarget.value) }),
               h('span', null, h('strong', null, h(Glyph, { kind: item.icon, size: 16 }), t(item.name)), h('small', null, t(item.note)))))),
+          firstHeroes && h('fieldset', { className: 'moba-hero-trial-picks', disabled: busy || !need },
+            h('legend', null, t('选一位英雄先开局')),
+            firstHeroes.map(hero => h('button', { key: hero.id, type: 'button', className: 'moba-hero-trial-pick',
+              'aria-label': t(hero.open), 'aria-description': t(hero.choiceNote), onClick: () => start(hero.id) },
+              h(HeroArt, { id: hero.id, art: hero.art, className: 'moba-starter-hero' }),
+              h('span', null, h('strong', null, t(hero.name)), h('small', null, t(hero.choiceNote)))))),
+          firstHeroes && busy && h('p', { role: 'status' }, t('正在打开试玩会话…')),
           error && h('p', { role: 'alert', className: 'moba-alert' }, error),
           h('div', { className: 'moba-install-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-text', disabled: busy, onClick: onClose }, t(backLabel)),
             latest?.id && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
               onClick: () => { setBoard(latest); setError(''); setActiveId(latest.id) } }, t('继续上一次试玩')),
-            h('button', { type: 'submit', className: 'moba-start', disabled: busy || !need },
+            !firstHeroes && h('button', { type: 'submit', className: 'moba-start', disabled: busy || !need },
               t(busy ? '正在准备试玩…' : '开始同题试玩'), h(Glyph, { kind: 'arrow', size: 16 }))))
           : h(Fragment, null,
             value ? h(Fragment, null,
@@ -1844,6 +1854,7 @@ window.__ModuleLoader__.load({
                 t(heroTrialNeeds.find(item => item.id === value.need)?.name ?? value.need)),
               !finished && h('p', { className: 'moba-lighthouse-note' }, t('每位英雄有自己的会话。请分别手动发送同一段任务，再回来看结果。')),
               finished && h('p', { className: 'moba-lighthouse-note' }, t('交付是否符合需求依据工具、回复和附件记录。摘要内容可打开原会话核对。')),
+              error && h('p', { role: 'alert', className: 'moba-alert' }, error),
               h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm => {
                 const config = heroTrialHeroes.find(item => item.id === arm.id)
                 return config && renderArm(arm, config, arm.id === 'minimal' && value.canReplayMinimalDelivery && !minimalReplay &&
@@ -1859,7 +1870,7 @@ window.__ModuleLoader__.load({
                 h('textarea', { ref: taskField, readOnly: true, rows: 3, value: value.task })),
               h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制任务')))
               : !error && h('p', { role: 'status' }, t('正在读取英雄试玩…')),
-            error && h('p', { role: 'alert', className: 'moba-alert' }, error),
+            !value && error && h('p', { role: 'alert', className: 'moba-alert' }, error),
             notice && h('p', { role: 'status', className: 'moba-lighthouse-note' }, notice),
             h('div', { className: 'moba-install-actions moba-starter-actions' },
               h('button', { type: 'button', className: 'moba-text', disabled: busy, onClick: onClose }, t(backLabel)),
@@ -6281,6 +6292,8 @@ window.__ModuleLoader__.load({
       const [starterOpen, setStarterOpen] = useState(false)
       const starterLaunchIds = useRef({})
       const starterButton = useRef(null)
+      const [heroTrialOpen, setHeroTrialOpen] = useState(false)
+      const heroTrialButton = useRef(null)
       const [lessonOpen, setLessonOpen] = useState(null)
       const lessonButton = useRef(null)
       const starterLessonButton = useRef(null)
@@ -6466,6 +6479,10 @@ window.__ModuleLoader__.load({
       const workspace = workspaceList.items.find(item => item.workspaceId === workspaceChoice)
         ?? workspaceList.items.find(item => item.workspaceId !== data?.lighthouseWorkspaceId) ?? workspaceList.items[0]
       const comparableWorkspaces = workspaceList.items.filter(item => item.workspaceId !== data?.lighthouseWorkspaceId)
+      const trialHeroes = data?.heroTrialAvailable ? heroTrialHeroes.flatMap(option => {
+        const hero = presets.find(item => item.id === option.id && !item.broken)
+        return hero ? [{ ...option, art: hero.art }] : empty
+      }) : empty
       const historicalHeroMissing = !saved && historicalHero && presetChoice === historicalHero && preset?.id !== historicalHero
       const canCompare = saved ? !saved.broken : Boolean(preset) && !historicalHeroMissing && !unavailable.length && !draftConflicts.length
       const galleryBase = !canCompare && presets.some(item => item.id === stagePreset?.id && !item.broken)
@@ -6951,6 +6968,14 @@ window.__ModuleLoader__.load({
                 onClick: toggleFullscreen, 'aria-label': fullscreen ? t('退出全屏') : t('全屏备战'),
                 'aria-pressed': fullscreen, title: fullscreen ? t('退出全屏') : t('全屏备战') }, h(Glyph, { kind: 'fullscreen' })))),
           data && h('div', { className: 'moba-lighthouse-entry' },
+            trialHeroes.length === 2 && h('button', { type: 'button', ref: heroTrialButton, disabled: pending,
+              className: 'moba-starter-entry moba-hero-trial-entry', 'aria-haspopup': 'dialog', 'aria-label': t(heroTrialTitle),
+              onClick: () => setHeroTrialOpen(true) },
+              h('span', { className: 'moba-hero-trial-emblems' }, trialHeroes.map(hero =>
+                h(HeroArt, { key: hero.id, id: hero.id, art: hero.art, className: 'moba-starter-hero' }))),
+              h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t(heroTrialTitle)),
+                h('span', null, t('同一张补给卡，两种交接'))),
+              h(Glyph, { kind: 'arrow', size: 19 })),
             h('button', { type: 'button', className: 'moba-starter-entry', disabled: pending, ref: starterButton,
               'aria-haspopup': 'dialog', onClick: () => setStarterOpen(true) },
               h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'flag', size: 23 })),
@@ -6967,6 +6992,10 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: evidenceButton, 'aria-haspopup': 'dialog', onClick: () => setLessonOpen({ lesson: lighthouseEvidenceLesson, trigger: evidenceButton }) },
               h(Glyph, { kind: 'search', size: 17 }), t('灯塔证据取舍')))),
+          heroTrialOpen && h(HeroTrial, { request, workspaces: comparableWorkspaces, firstHeroes: trialHeroes, backLabel: '返回大厅', onClose: () => {
+            setHeroTrialOpen(false)
+            requestAnimationFrame(() => heroTrialButton.current?.focus())
+          }, onVisit: (sessionId, task) => { setHeroTrialOpen(false); openDraftSession(sessionId, task) } }),
           starterOpen && h(LighthouseStarter, { hero: presets.find(item => item.id === 'standard' && !item.broken),
             request, launchIds: starterLaunchIds, onCancel: () => {
               setStarterOpen(false)
@@ -9964,6 +9993,11 @@ window.__ModuleLoader__.load({
         text-align: start; }
       .moba-lighthouse-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; margin-block-end: 15px; }
       .moba-lighthouse-entry .moba-starter-entry { margin: 0; }
+      .moba-lighthouse-entry .moba-hero-trial-entry { grid-column: 1 / -1; grid-template-columns: auto minmax(0, 1fr) auto;
+        min-height: 61px; border-color: #a38757; }
+      .moba-hero-trial-entry > svg { color: var(--gold); }
+      .moba-hero-trial-emblems { display: flex; gap: 3px; }
+      .moba-hero-trial-emblems .moba-starter-hero { width: clamp(30px, 9cqi, 42px); }
       .moba-lighthouse-entry-actions { display: grid; grid-template-columns: repeat(3, auto); gap: 7px; }
       .moba-lighthouse-entry .moba-lighthouse-entry-button { align-self: stretch; border-color: #607d78; background: #192c33;
         max-inline-size: 12em; text-align: start; }
@@ -9973,7 +10007,7 @@ window.__ModuleLoader__.load({
         .moba-lighthouse-entry-actions { display: flex; flex-wrap: wrap; }
       }
       @container (max-width: 390px) {
-        .moba-lighthouse-entry .moba-starter-entry { grid-template-columns: auto minmax(0, 1fr); }
+        .moba-lighthouse-entry .moba-starter-entry:not(.moba-hero-trial-entry) { grid-template-columns: auto minmax(0, 1fr); }
         .moba-lighthouse-entry .moba-starter-entry-action { display: none; }
       }
       .moba-starter-entry:hover:not(:disabled) { border-color: var(--gold); background: linear-gradient(115deg, #26414a, #1e2a37 62%, #332b19); }
@@ -10539,6 +10573,17 @@ window.__ModuleLoader__.load({
       .moba-starter-route strong svg { flex: none; color: var(--gold); }
       .moba-starter-route code { color: #a5d9d1; font-size: 12px; }
       .moba-starter-route small, .moba-starter-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .moba-hero-trial-picks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-inline-size: 0;
+        gap: 7px; margin: 12px 0; padding: 0; border: 0; }
+      .moba-hero-trial-picks legend { margin-block-end: 6px; padding: 0; color: var(--gold); font-size: 13px; font-weight: 700; }
+      .moba-hero-trial-pick { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px;
+        min-height: 65px; padding: 7px; border: 1px solid #8a754d; background: #1b272e; color: var(--ink); text-align: start; }
+      .moba-hero-trial-pick .moba-starter-hero { width: clamp(32px, 9cqi, 42px); }
+      .moba-hero-trial-pick strong, .moba-hero-trial-pick small { display: block; overflow-wrap: anywhere; }
+      .moba-hero-trial-pick strong { font-size: 14px; }
+      .moba-hero-trial-pick small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+      .moba-hero-trial-pick:hover:not(:disabled) { border-color: var(--gold); background: #273840; }
+      .moba-hero-trial-pick:disabled { border-color: var(--line); background: #161c27; opacity: .85; }
       .moba-starter-actions { flex-wrap: wrap; }
       .moba-starter-actions .moba-roster-open { min-height: 44px; }
       .moba-playbook-button { border-color: #677d70; background: #182c2a; color: #bfe3d5 !important; }
