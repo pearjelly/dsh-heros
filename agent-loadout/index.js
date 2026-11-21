@@ -18,7 +18,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroDelivery, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -54,6 +54,8 @@ const evidenceLesson = 'lighthouse-evidence'
 const evidenceOpeningChoices = ['gather', 'qualify', 'pause']
 const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).digest('hex')
 const heroTrialUnavailable = '本机的标准模式与极简模式暂时无法进行这场试玩。'
+const heroDeliveryUnavailable = '请先用极简模式完成一局需要原件的试玩，并核对它留下的文字交接。'
+const heroDeliveryChanged = '样例或交付工具已变化，请重新核对。'
 const isEvidenceLessonSource = ({ kind, arm }) => kind === 'workspace' && arm === 'evidence'
 const isPublicEvidenceReplaySource = ({ kind, arm, publicEvidenceReplay }) =>
   kind === 'rematch' && arm === 'rematch' && publicEvidenceReplay === true
@@ -467,7 +469,7 @@ export async function apply(ctx) {
   const buildPlans = await openBuildPlans(join(directory, 'plans'), saveEntry, warnings)
   const lighthouseComparisons = await openMatchComparisons(directory, 'lighthouse-comparison', lighthouseArms, saveEntry,
     () => warnings.push('lighthouse-comparisons'))
-  const heroTrials = await openMatchComparisons(directory, lighthouseHeroTrialFolder, lighthouseHeroArms, saveEntry,
+  const heroTrials = await openMatchComparisons(directory, lighthouseHeroTrialFolder, [...lighthouseHeroArms, lighthouseHeroDelivery], saveEntry,
     () => warnings.push('lighthouse-hero-trials'), record => lighthouseHeroNeeds.includes(record.need) &&
       [lighthouseHeroTask(false), lighthouseHeroTask(true)].includes(record.task))
   const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', [...workspaceComparisonArms, 'evidence'], saveEntry,
@@ -1305,7 +1307,7 @@ export async function apply(ctx) {
 
   function heroTrialToolFit(arm, names) {
     return arm === 'standard' ? names.has('read') && names.has('present')
-      : names.has('bash') && !names.has('present') && !names.has('read')
+      : names.has('bash') && !names.has('read') && names.has('present') === (arm === lighthouseHeroDelivery)
   }
 
   async function heroTrialAvailable(currentEcosystem) {
@@ -4803,7 +4805,9 @@ export async function apply(ctx) {
     try {
       const saved = await heroTrials.readArm(record.id, arm)
       if (!saved?.opened) return opening
-      if (saved.presetId !== arm || saved.digest !== heroTrialDigest ||
+      const validPreset = arm === lighthouseHeroDelivery ? /^loadout-[a-f0-9]{24}$/.test(saved.presetId) && /^[a-f0-9]{64}$/.test(saved.token)
+        : saved.presetId === arm
+      if (!validPreset || saved.digest !== heroTrialDigest ||
         ctx.get('workspaceRegistry')?.get(saved.workspaceId)?.path !== saved.cwd) return unavailable
       const material = lighthouseHeroMaterial
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: 'all', signal })
@@ -4826,18 +4830,57 @@ export async function apply(ctx) {
     }
   }
 
+  function canReplayHeroDelivery(record, original) {
+    return record.need === 'original' && original.status === 'complete' && original.materialState === 'verified' &&
+      original.materialRead === true && Boolean(original.summary) && original.originalAttached === false
+  }
+
   async function readHeroTrial(record, signal) {
     if (!record) return { arms: lighthouseHeroArms.map(id => ({ id, status: 'unopened' })) }
     const { id, need, task } = record
-    return { id, need, task, material: lighthouseHeroMaterial,
-      arms: await Promise.all(lighthouseHeroArms.map(arm => readHeroTrialArm(record, arm, signal))) }
+    const [standard, minimal, replay] = await Promise.all(heroTrials.arms.map(arm => readHeroTrialArm(record, arm, signal)))
+    return { id, need, task, material: lighthouseHeroMaterial, arms: [standard, minimal],
+      ...(replay.status !== 'unopened' ? { minimalReplay: replay }
+        : canReplayHeroDelivery(record, minimal) && { canReplayMinimalDelivery: true }) }
   }
 
-  async function openComparisonArm(comparisons, selection, english, signal, requiredPresetId) {
+  async function checkHeroDeliveryReplay(record, signal) {
+    if (!record) throw new Error(heroDeliveryUnavailable)
+    const original = await readHeroTrialArm(record, 'minimal', signal)
+    if (!canReplayHeroDelivery(record, original)) throw new Error(heroDeliveryUnavailable)
+    const ecosystem = await discover()
+    if (!await heroTrialAvailable(ecosystem)) throw new Error(heroTrialUnavailable)
+    const againstDraft = { presetId: 'minimal', equipmentIds: [] }
+    const draft = { ...againstDraft, equipmentIds: ['present'] }
+    const [candidate, baseline] = await Promise.all([plan(draft, ecosystem), plan(againstDraft, ecosystem)])
+    const comparison = await compare({ ...draft, againstDraft }, ecosystem, candidate, baseline)
+    const gainedTools = comparison.gained.filter(item => item.kind === 'tool').map(item => item.name)
+    if (candidate.id === 'minimal' || !isDeepStrictEqual(gainedTools, ['present']) || comparison.lost.length ||
+      comparison.timingChanges.length || comparison.sourceChanges.length) throw new Error(heroDeliveryChanged)
+    const provider = ctx.pluginPackages.packageOf(equipmentById.get('present').module, ctx.baseUrl)
+    if (!provider || provider.name !== equipmentById.get('present').module) throw new Error(heroDeliveryChanged)
+    const source = { name: provider.name, version: provider.version ?? provider.manifest?.version }
+    const token = createHash('sha256').update(JSON.stringify([record.id, record.task, original.sessionId,
+      original.workspaceId, heroTrialDigest, loadoutIdentity(draft, candidate, ecosystem), source])).digest('hex')
+    signal?.throwIfAborted()
+    return { draft, candidate, token, view: { task: record.task, material: lighthouseHeroMaterial, comparison, source, token } }
+  }
+
+  async function openHeroDeliveryReplay({ comparisonId, token }, english, signal) {
+    const record = heroTrials.read(comparisonId)
+    if (!record || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw new Error(heroDeliveryChanged)
+    const saved = await heroTrials.readArm(comparisonId, lighthouseHeroDelivery)
+    const checked = saved?.opened ? { token: saved.token } : await checkHeroDeliveryReplay(record, signal)
+    if (token !== checked.token) throw new Error(heroDeliveryChanged)
+    return openComparisonArm(heroTrials, { comparisonId, arm: lighthouseHeroDelivery }, english, signal, undefined, checked)
+  }
+
+  async function openComparisonArm(comparisons, selection, english, signal, requiredPresetId, heroReplay) {
     const { comparisonId, arm, launchId } = selection
     const heroTrial = comparisons === heroTrials
+    const heroDelivery = heroTrial && arm === lighthouseHeroDelivery
     if (closed) throw new Error('配装服务正在关闭，请重试。')
-    if (!comparisons.arms.includes(arm) || (comparisonId === undefined
+    if (!comparisons.arms.includes(arm) || heroDelivery !== Boolean(heroReplay) || (comparisonId === undefined
       ? heroTrial || !validOpeningId(launchId) || (comparisons === workspaceComparisons && !workspaceComparisonArms.includes(arm))
       : !comparisonIdValid(comparisonId))) {
       throw new Error('开局请求无效，请重试。')
@@ -4868,16 +4911,25 @@ export async function apply(ctx) {
     const open = async () => {
       let saved = await comparisons.readArm(id, arm)
       if (requiredPresetId && saved && saved.presetId !== requiredPresetId) throw new Error(challengeChanged)
+      if (heroDelivery && saved && saved.token !== heroReplay.token) throw new Error(heroDeliveryChanged)
       if (saved?.opened) return heroTrial ? { ...response, workspaceId: saved.workspaceId } : response
       const pinned = comparison.plans?.[arm]
       let workspace = comparison.workspaceId && registry.get(comparison.workspaceId)
       let verify
       if (heroTrial) {
-        if (!await heroTrialAvailable()) throw new Error(heroTrialUnavailable)
+        const prepared = heroDelivery ? await prepare(heroReplay.draft, heroReplay.candidate) : undefined
+        if (!heroDelivery && !await heroTrialAvailable()) throw new Error(heroTrialUnavailable)
+        if (heroDelivery) {
+          const original = await heroTrials.readArm(id, 'minimal')
+          if (await workspaceMaterialState({ ...original, material: lighthouseHeroMaterial }, signal) !== 'verified') {
+            throw new Error(heroDeliveryChanged)
+          }
+        }
         workspace = await lighthouseHeroWorkspace(comparisons.armDirectory(id), arm, registry)
         const contentDigest = await digestWorkspaceMaterial(workspace.path, lighthouseHeroMaterial, signal)
         if (contentDigest !== heroTrialDigest) throw new Error('示例材料已修改，请另开一组同题对照。')
-        const current = { workspaceId: workspace.id, cwd: workspace.path, presetId: arm, digest: heroTrialDigest }
+        const current = { workspaceId: workspace.id, cwd: workspace.path, presetId: prepared?.presetId ?? arm, digest: heroTrialDigest,
+          ...(heroDelivery && { token: heroReplay.token }) }
         if (saved && !isDeepStrictEqual(saved, current)) throw new Error('这场会话与原对照阵容不一致。')
         if (!saved) await comparisons.writeArm(id, arm, current)
         saved = current
@@ -4950,7 +5002,7 @@ export async function apply(ctx) {
         if (heroTrial) {
           const agent = ctx.get('agents')?.get(sessionId)
           const scope = agent && toolRuntime.scopeOf(agent.ctx)
-          if (!scope || ctx.agentPresets.composedPreset(agent.ctx) !== arm ||
+          if (!scope || ctx.agentPresets.composedPreset(agent.ctx) !== saved.presetId ||
             !heroTrialToolFit(arm, new Set(ctx.tools.schemas(scope).map(tool => tool.name)))) throw new Error(heroTrialUnavailable)
         } else verifyLive({ presetId: saved.presetId, sessionId })
       }
@@ -6005,6 +6057,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
         else if (selection?.action === 'hero-trial-create') value = await createHeroTrial(selection, english, request.signal)
         else if (selection?.action === 'hero-trial-open') value = await openComparisonArm(heroTrials, selection, english, request.signal)
+        else if (selection?.action === 'hero-trial-replay-preview') value = (await checkHeroDeliveryReplay(heroTrials.read(selection.comparisonId), request.signal)).view
+        else if (selection?.action === 'hero-trial-replay-open') value = await openHeroDeliveryReplay(selection, english, request.signal)
         else if (selection?.action === 'hero-trial') {
           const record = selection.comparisonId === undefined ? heroTrials.latest() : heroTrials.read(selection.comparisonId)
           if (selection.comparisonId !== undefined && !record) throw new Error('找不到这组同题对照。')

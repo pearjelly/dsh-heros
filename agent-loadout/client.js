@@ -1598,6 +1598,7 @@ window.__ModuleLoader__.load({
 
     const heroTrialTitle = '英雄同题试玩'
     const heroTrialView = '查看试玩对照'
+    const minimalDeliveryReplayLabel = '给极简模式装上交付物预览'
     const heroTrialNeeds = [
       { id: 'original', icon: 'report', name: '可打开的原件', note: '接班人要在会话里打开原件核对。' },
       { id: 'summary', icon: 'report', name: '可核对的文字摘要', note: '接班人只要拿到补给卡的要点。' },
@@ -1608,6 +1609,10 @@ window.__ModuleLoader__.load({
       { id: 'minimal', icon: 'action', name: '极简模式', open: '打开极简模式会话', visit: '查看极简模式原会话',
         note: '可用终端读取材料并用文字回应。' },
     ]
+    const minimalDeliveryReplayArm = {
+      id: 'minimal-present', icon: 'report', name: '极简模式 + 交付物预览', visit: '查看加装后的会话',
+      note: '同一位英雄，只加一件交付物预览。',
+    }
     function HeroTrialResult({ arm }) {
       const materialNote = { changed: '这局的试玩材料已修改。', unavailable: '暂时无法读取这局的试玩材料。' }[arm.materialState]
       if (!arm.summary && arm.status !== 'complete') return materialNote ? h('p', { role: 'status', className: 'moba-alert' }, t(materialNote)) : null
@@ -1625,6 +1630,63 @@ window.__ModuleLoader__.load({
           h('p', { className: 'moba-lighthouse-note', style: { whiteSpace: 'pre-wrap' } }, arm.summary)))
     }
 
+    function MinimalDeliveryReplay({ request, comparisonId, onBack, onVisit }) {
+      const language = useLanguage()
+      const [checked, setChecked] = useState(null)
+      const [attempt, retry] = useState(0)
+      const [activeDelta, setActiveDelta] = useState('')
+      const [opening, setOpening] = useState(false)
+      const [openError, setOpenError] = useState('')
+      const pending = useRef(false)
+      const state = checked?.attempt === attempt && checked?.language === language ? checked : null
+      const preview = state?.value
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'hero-trial-replay-preview'
+        request(action, { action, comparisonId }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setChecked({ attempt, language, value }) })
+          .catch(reason => { if (!abort.signal.aborted) setChecked({ attempt, language, error: reason.message }) })
+        return () => abort.abort()
+      }, [request, comparisonId, attempt, language])
+
+      async function open() {
+        if (pending.current || !preview?.token || openError) return
+        pending.current = true
+        setOpening(true)
+        try {
+          const action = 'hero-trial-replay-open'
+          const opened = await request(action, { action, comparisonId, token: preview.token }, undefined, language)
+          onVisit(opened.sessionId, opened.task)
+        } catch (reason) {
+          setOpenError(reason.message)
+        } finally {
+          pending.current = false
+          setOpening(false)
+        }
+      }
+
+      const source = preview?.source && [preview.source.name, preview.source.version].filter(Boolean).join(' · ')
+      return h(InstallDialog, { title: t('核对极简模式加装'), className: 'moba-lighthouse-comparison moba-playbook-dialog', busy: opening, onCancel: onBack,
+        initialFocus: '[data-minimal-replay-intro]', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
+        h('p', { tabIndex: -1, 'data-minimal-replay-intro': true }, t('保留极简模式和原有的终端工具。加上交付物预览后，同一张补给卡可以附到会话里。')),
+        preview && h(Fragment, null,
+          h(InstallFacts, { facts: [[t('装备来源'), source], [t('材料文件'), preview.material]] }),
+          preview.comparison && h('section', { className: 'moba-gallery-comparison', 'aria-label': t('对照结果') },
+            h(CapabilityDifferences, { result: preview.comparison, activeDelta, setActiveDelta })),
+          h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
+            h('textarea', { readOnly: true, rows: 3, value: preview.task })),
+          h('p', { className: 'moba-lighthouse-note' }, t('打开加装会话后，请手动发送同一段任务。'))),
+        !state && h('p', { role: 'status' }, t('正在核对极简模式加装…')),
+        (state?.error || openError) && h('p', { role: 'alert', className: 'moba-alert' }, state?.error || openError),
+        h('div', { className: 'moba-install-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-text', disabled: opening, onClick: onBack }, t('返回试玩对照')),
+          (state?.error || openError) && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
+            onClick: () => { setOpenError(''); retry(count => count + 1) } }, t('重新核对')),
+          preview?.token && h('button', { type: 'button', className: 'moba-start', disabled: opening || Boolean(openError),
+            onClick: open }, t(opening ? '正在打开加装会话…' : '打开加装会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
     function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, backLabel = '返回英雄图鉴' }) {
       const language = useLanguage()
       const [need, setNeed] = useState('')
@@ -1635,12 +1697,16 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
       const [attempt, retry] = useState(0)
+      const [replayOpen, setReplayOpen] = useState(false)
       const mutation = useRef(false)
       const launchIds = useRef(new Map())
       const taskField = useRef(null)
+      const replayButton = useRef(null)
+      const heading = useRef(null)
       const group = useId()
       const setup = !activeId
       const value = board?.id === activeId ? board : undefined
+      const minimalReplay = value?.minimalReplay
 
       useEffect(() => {
         const abort = new AbortController()
@@ -1659,7 +1725,7 @@ window.__ModuleLoader__.load({
               return
             }
             setBoard(result)
-            if (result.arms.some(arm => ['waiting', 'running', 'waiting-choice'].includes(arm.status))) {
+            if ([...result.arms, result.minimalReplay].some(arm => ['waiting', 'running', 'waiting-choice'].includes(arm?.status))) {
               timer = setTimeout(refresh, 1600)
             }
           } catch (reason) {
@@ -1729,8 +1795,19 @@ window.__ModuleLoader__.load({
         setNotice('')
       }
 
+      function closeReplay() {
+        setReplayOpen(false)
+        requestAnimationFrame(() => (replayButton.current ?? heading.current)?.focus())
+      }
+
+      function renderArm(arm, config, extraResult) {
+        return h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
+          onStart: arm.id === minimalDeliveryReplayArm.id ? undefined : open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
+          onNotice: status => setNotice(t(comparisonDraftNotices[status])), result: h(Fragment, null, h(HeroTrialResult, { arm }), extraResult) })
+      }
+
       const finished = value?.arms.length > 0 && value.arms.every(arm => arm.status === 'complete')
-      return h(InstallDialog, { title: t(heroTrialTitle), busy, onCancel: onClose,
+      return h(Fragment, null, h(InstallDialog, { title: t(heroTrialTitle), busy, onCancel: onClose,
         className: setup ? 'moba-starter-dialog' : 'moba-lighthouse-comparison',
         initialFocus: setup ? 'input[type="radio"]' : value ? '[data-hero-trial-results]' : 'h2',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!busy) onClose() }) },
@@ -1751,16 +1828,21 @@ window.__ModuleLoader__.load({
               t(busy ? '正在准备试玩…' : '开始同题试玩'), h(Glyph, { kind: 'arrow', size: 16 }))))
           : h(Fragment, null,
             value ? h(Fragment, null,
-              h('p', { tabIndex: -1, 'data-hero-trial-results': true }, h('strong', null, t('接班人需要什么？')), ' ',
+              h('p', { ref: heading, tabIndex: -1, 'data-hero-trial-results': true }, h('strong', null, t('接班人需要什么？')), ' ',
                 t(heroTrialNeeds.find(item => item.id === value.need)?.name ?? value.need)),
               !finished && h('p', { className: 'moba-lighthouse-note' }, t('每位英雄有自己的会话。请分别手动发送同一段任务，再回来看结果。')),
               finished && h('p', { className: 'moba-lighthouse-note' }, t('交付是否符合需求依据工具、回复和附件记录。摘要内容可打开原会话核对。')),
               h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm => {
                 const config = heroTrialHeroes.find(item => item.id === arm.id)
-                return config && h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
-                  onStart: open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
-                  onNotice: status => setNotice(t(comparisonDraftNotices[status])), result: h(HeroTrialResult, { arm }) })
+                return config && renderArm(arm, config, arm.id === 'minimal' && value.canReplayMinimalDelivery && !minimalReplay &&
+                  h('div', { className: 'moba-comparison-previous' },
+                    h('button', { ref: replayButton, type: 'button', className: 'moba-roster-open', disabled: busy, 'aria-haspopup': 'dialog',
+                      onClick: () => setReplayOpen(true) }, t(minimalDeliveryReplayLabel))))
               })),
+              minimalReplay && h('section', { className: 'moba-handoff-outcome', 'aria-label': t('极简模式加装前后') },
+                h('h3', null, t('极简模式加装前后')),
+                h('p', { className: 'moba-lighthouse-note' }, t('原极简模式交付了文字摘要。下面是一件装备加装后的独立实测。')),
+                renderArm(minimalReplay, minimalDeliveryReplayArm)),
               h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
                 h('textarea', { ref: taskField, readOnly: true, rows: 3, value: value.task })),
               h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制任务')))
@@ -1771,14 +1853,16 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'moba-text', disabled: busy, onClick: onClose }, t(backLabel)),
               error && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
                 onClick: () => { setError(''); retry(count => count + 1) } }, t('重试')),
-              !comparisonId && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: reset }, t('另开一组试玩')))))
+              !comparisonId && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: reset }, t('另开一组试玩'))))),
+        replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: activeId, onBack: closeReplay,
+          onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }))
     }
 
     function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn }) {
       const [open, setOpen] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
       const trigger = useRef(null)
-      const hero = heroTrialHeroes.find(item => item.id === member.arm)
+      const hero = member.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === member.arm)
       useEffect(() => {
         const status = consumeDraft(sessionId)
         if (status) setDraftStatus(status)

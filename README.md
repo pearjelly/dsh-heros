@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.107.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.108.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -30,6 +30,10 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 1. In **Hero gallery**, open **Standard** or **Minimal** and choose **Try both heroes**. This exercise requires both supported stock presets to be active in your profile.
 2. Choose **Openable original** or **Verifiable text summary**, then **Start the hero trial**. Open both DSH sessions and manually send the identical task in each. The sessions use separate copies of the same bundled card.
 3. Choose **View the hero trial** to compare actual replies and attachments against what the next shift needs. Open either source session to read the full reply and check any file it delivered.
+
+### Give Minimal one more tool
+
+When the trial called for an **Openable original** and Minimal produced a verified text summary alone, choose **Add Deliverable Preview to Minimal**. The preview adds the native `present` tool and keeps Minimal's existing shell and tool sources. Choose **Open the equipped session** and manually send the same task against a new copy of the same supply card. Under **Minimal + Deliverable Preview**, check whether the original file was actually attached and open the equipped session to inspect the result.
 
 ## Play Lighthouse evidence choices
 

@@ -87,6 +87,7 @@ export function lighthouseEvidenceReplayWorkspace(directory, registry, id) {
 
 export const lighthouseArms = ['recon', 'delivery']
 export const lighthouseHeroArms = ['standard', 'minimal']
+export const lighthouseHeroDelivery = 'minimal-present'
 export const lighthouseHeroNeeds = ['original', 'summary']
 export const lighthouseHeroTrialFolder = 'lighthouse-hero-trial'
 export const lighthouseHeroMaterial = supplyCard
@@ -97,7 +98,9 @@ export const lighthouseHeroTask = english => english
   : '【英雄同题试玩】\n阅读当前工作区的 02-lighthouse.md。在对话里写一段简短的交接说明，包含领取地点、卡上列出的物资和来源文件名。如果原生 present 工具可用，把原卡附到当前对话。请保持工作区文件原样。'
 
 export function lighthouseHeroWorkspace(directory, arm, registry) {
-  const title = arm === 'standard' ? 'Lighthouse handoff · 标准模式 Standard' : 'Lighthouse handoff · 极简模式 Minimal'
+  const titles = { standard: 'Lighthouse handoff · 标准模式 Standard', minimal: 'Lighthouse handoff · 极简模式 Minimal',
+    [lighthouseHeroDelivery]: 'Lighthouse handoff · 极简模式交付复赛 Minimal delivery replay' }
+  const title = titles[arm]
   return seedWorkspace(join(directory, arm), registry, title, true)
 }
 
@@ -108,7 +111,8 @@ export function lighthousePracticeContains(profileDataRoot, candidateCanonicalPa
   return folder === 'lighthouse-supply-run' ||
     [rematchPrefix, evidencePrefix, evidenceReplayPrefix].some(prefix => folder.startsWith(prefix) && openingId.test(folder.slice(prefix.length))) ||
     (folder === 'lighthouse-comparisons' && openingId.test(id) && lighthouseArms.includes(arm)) ||
-    (folder === lighthouseHeroTrialFolder + 's' && openingId.test(id) && lighthouseHeroArms.includes(arm))
+    (folder === lighthouseHeroTrialFolder + 's' && openingId.test(id) &&
+      (lighthouseHeroArms.includes(arm) || arm === lighthouseHeroDelivery))
 }
 
 export const lighthouseComparisonTask = english => english
