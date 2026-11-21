@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.84.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.85.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -55,6 +55,12 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 2. Keep the same material and task. Open a fresh DSH session, review the prepared task, and send it yourself. If the material has changed, start a new comparison to establish a baseline.
 3. Open the two source sessions to check the actual tool calls, recorded choices, and delivered files. Add **Delivery Review** to a direct delivery loadout to see whether the new session asks you to confirm delivery or request changes.
 4. When the rematch is verified, choose **Try one gear change** on that run to use it as the next baseline. Choose **View previous comparison** to follow the changes one run at a time. From **Run history**, revisit any verified run, review its loadout, and save it as a plan.
+
+## Find gear for a rematch
+
+In **Try one gear change**, choose **Add one piece of gear** or **Swap one piece of gear**. For a swap, select the gear to remove first. In **Search gear by name or purpose**, enter a gear name, what you want it to do, or a decision it offers. For example, typing “request changes” finds **Delivery Review**. Search accepts both English and Chinese terms.
+
+Changing or clearing the search keeps your selected gear and source. Choose **Review gear change** to check the effect of the one change you selected.
 
 ## Compare your saved loadouts
 
