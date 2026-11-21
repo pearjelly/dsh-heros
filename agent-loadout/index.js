@@ -59,6 +59,7 @@ const heroDeliveryChanged = '样例或交付工具已变化，请重新核对。
 const isEvidenceLessonSource = ({ kind, arm }) => kind === 'workspace' && arm === 'evidence'
 const isPublicEvidenceReplaySource = ({ kind, arm, publicEvidenceReplay }) =>
   kind === 'rematch' && arm === 'rematch' && publicEvidenceReplay === true
+const isHeroDeliveryTrialSource = ({ kind, arm }) => kind === 'hero-trial' && arm === lighthouseHeroDelivery
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
 const equipmentById = new Map(equipment.map(item => [item.id, item]))
@@ -75,7 +76,7 @@ function validEvidenceOpeningChoice(lesson, scenario, choice) {
 }
 
 function validLessonTaskReference(source) {
-  if (isEvidenceLessonSource(source)) return comparisonIdValid(source.comparisonId)
+  if (isEvidenceLessonSource(source) || isHeroDeliveryTrialSource(source)) return comparisonIdValid(source.comparisonId)
   return (source.kind === 'workspace' || source.kind === 'rematch') && validRematchReference(source)
 }
 
@@ -1287,6 +1288,7 @@ export async function apply(ctx) {
       }
       if (verify) verifyLive({ presetId, sessionId })
       const { planName, material, task, source } = checked.view
+      if (source?.heroDeliveryTrial && !heroTrialLive(lighthouseHeroDelivery, presetId, agent)) throw new Error(heroDeliveryChanged)
       const target = source && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity }
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
         ...(source && { source, target }) })
@@ -1310,11 +1312,17 @@ export async function apply(ctx) {
       : names.has('bash') && !names.has('read') && names.has('present') === (arm === lighthouseHeroDelivery)
   }
 
-  async function heroTrialAvailable(currentEcosystem) {
+  function heroTrialLive(arm, presetId, agent) {
+    const scope = agent && toolRuntime?.scopeOf(agent.ctx)
+    return scope && ctx.agentPresets.composedPreset(agent.ctx) === presetId &&
+      heroTrialToolFit(arm, new Set(ctx.tools.schemas(scope).map(tool => tool.name)))
+  }
+
+  async function heroTrialAvailable(currentEcosystem, arms = lighthouseHeroArms) {
     if (!toolRuntime || !ctx.get('sessionController')?.resolveAgent || !ctx.get('workspaceRegistry')?.create) return false
     try {
       const { ecosystem, sources } = await shareEnvironment(currentEcosystem)
-      return lighthouseHeroArms.every(arm => {
+      return arms.every(arm => {
         const preset = ecosystem.presets.find(item => item.id === arm)
         if (!preset || preset.broken || sources.hero(arm)?.owner.package !== '@deepseek-ai/dsh-web-app') return false
         const tools = [...summarizeCapabilities(ecosystem, arm, {}).values()]
@@ -3780,6 +3788,7 @@ export async function apply(ctx) {
   }
 
   async function verifiedLessonTaskSource(selection, signal) {
+    if (isHeroDeliveryTrialSource(selection)) return verifiedHeroDeliveryLesson(selection.comparisonId, signal)
     const { kind, comparisonId, arm } = selection
     const evidence = isEvidenceLessonSource(selection)
     const lesson = evidence ? evidenceLesson : lighthouseLesson
@@ -3872,7 +3881,8 @@ export async function apply(ctx) {
     const { draft, candidate, ecosystem, proof, view: source } = await verifiedLessonTaskSource(input.source, signal)
     const { workspace, digest } = await readPersonalTaskMaterial(workspaceId, material, signal)
     const cwd = workspace.path
-    const lessonName = source.publicEvidenceReplay ? '灯塔证据换装对照' : source.lesson === evidenceLesson ? '灯塔证据取舍' : '灯塔换装练习'
+    const lessonName = source.heroDeliveryTrial ? '极简模式 + 交付物预览'
+      : source.publicEvidenceReplay ? '灯塔证据换装对照' : source.lesson === evidenceLesson ? '灯塔证据取舍' : '灯塔换装练习'
     const planName = english ? englishText(lessonName) : lessonName
     const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task, source }
     const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, proof])).digest('hex')
@@ -4297,6 +4307,10 @@ export async function apply(ctx) {
     return deliverables.length > 0 && entries.some(item => item.name === 'present' && item.state === 'completed')
   }
 
+  function verifiedPresentHandoff(evidence) {
+    return evidence.materialState === 'verified' && !evidence.continuationReason && completedPresentDelivery(evidence)
+  }
+
   function observedEvidenceOutcome(arms, sources) {
     const [baseline, replay] = arms
     if (arms.length !== 2 || baseline.id !== 'baseline' || replay.id !== 'rematch' ||
@@ -4434,7 +4448,8 @@ export async function apply(ctx) {
     try {
       const { header, launch } = planTaskDetails(source)
       if (!launch?.source || !validLessonTaskReference(launch.source)) return
-      const verifyEvidence = isEvidenceLessonSource(launch.source) || isPublicEvidenceReplaySource(launch.source)
+      const verifyEvidence = isEvidenceLessonSource(launch.source) || isPublicEvidenceReplaySource(launch.source) ||
+        isHeroDeliveryTrialSource(launch.source)
       const { cwd, agentPreset: presetId } = header
       const target = personalTaskTarget(launch, header)
       if ((strict || verifyEvidence) && !target) return
@@ -4459,8 +4474,9 @@ export async function apply(ctx) {
     const choices = comparisonChoices(evidence)
     if (evidenceReplay && (original.launch.source.lesson !== evidenceLesson || hero.id !== 'standard' ||
       record?.equipmentIds.length !== 2 || !record.equipmentIds.includes('evidence') || !record.equipmentIds.includes('present'))) return
-    const canReuse = evidence.status === 'complete' && (evidenceReplay ? !evidence.continuationReason && choices.length > 0
-      : evidence.materialDelivered || choices.length > 0)
+    const canReuse = evidence.status === 'complete' && (isHeroDeliveryTrialSource(original.launch.source)
+      ? verifiedPresentHandoff(evidence) && evidence.materialDelivered
+      : evidenceReplay ? !evidence.continuationReason && choices.length > 0 : evidence.materialDelivered || choices.length > 0)
     return { sessionId, target, hero, observed: evidence, canReuse, ...(evidenceReplay && { evidenceReplay }) }
   }
 
@@ -4472,9 +4488,10 @@ export async function apply(ctx) {
     const choices = comparisonChoices(evidence)
     const evidenceSource = isEvidenceLessonSource(launch.source)
     const publicReplay = isPublicEvidenceReplaySource(launch.source)
+    const heroDeliveryTrial = isHeroDeliveryTrialSource(launch.source)
     const delivered = evidenceSource ? evidence.deliverables?.length > 0 : evidence.materialDelivered
-    const canReview = evidence.status === 'complete' && (publicReplay
-      ? evidence.materialState === 'verified' && !evidence.continuationReason && completedPresentDelivery(evidence)
+    const canReview = evidence.status === 'complete' && (publicReplay || heroDeliveryTrial
+      ? verifiedPresentHandoff(evidence) && (!heroDeliveryTrial || evidence.materialDelivered)
       : (delivered || choices.length > 0) && (!evidenceSource || !evidence.continuationReason))
     const receiptIds = windows.map(({ endSeq }) => sessionId + ':' + endSeq)
     const canContinue = canReview && (!publicReplay || evidence.materialDelivered)
@@ -4835,21 +4852,47 @@ export async function apply(ctx) {
       original.materialRead === true && Boolean(original.summary) && original.originalAttached === false
   }
 
+  function heroDeliveryLessonSource(record, original, replay) {
+    if (canReplayHeroDelivery(record, original) && replay.status === 'complete' && replay.materialState === 'verified' &&
+      replay.meetsNeed === true && replay.originalAttached === true) {
+      return { kind: 'hero-trial', comparisonId: record.id, arm: lighthouseHeroDelivery }
+    }
+  }
+
+  async function verifiedHeroDeliveryLesson(comparisonId, signal) {
+    const record = heroTrials.read(comparisonId)
+    const unavailable = '请从已经核验的灯塔练习开始。'
+    if (!record) throw new Error(unavailable)
+    const [original, replay, saved] = await Promise.all([
+      readHeroTrialArm(record, 'minimal', signal), readHeroTrialArm(record, lighthouseHeroDelivery, signal),
+      heroTrials.readArm(record.id, lighthouseHeroDelivery),
+    ])
+    const source = heroDeliveryLessonSource(record, original, replay)
+    if (!source || !saved?.opened) throw new Error(unavailable)
+    const { candidate, ecosystem, identity, token, view } = await checkHeroDeliveryReplay(record, signal, original)
+    if (token !== saved.token || candidate.id !== saved.presetId) throw new Error('本机配置已变化，无法核对这局的原出装。')
+    const draft = recordedLoadoutDraft(candidate.record, 'minimal', ecosystem)
+    const anchor = { ...source, sessionId: replay.sessionId, heroDeliveryTrial: true, gearSource: view.source }
+    return { draft, candidate, ecosystem, proof: { ...anchor, presetId: saved.presetId, identity },
+      view: { ...anchor, heroName: presetLabels.get('minimal')?.[0] ?? 'Minimal' } }
+  }
+
   async function readHeroTrial(record, signal) {
     if (!record) return { arms: lighthouseHeroArms.map(id => ({ id, status: 'unopened' })) }
     const { id, need, task } = record
     const [standard, minimal, replay] = await Promise.all(heroTrials.arms.map(arm => readHeroTrialArm(record, arm, signal)))
+    const lessonTaskSource = heroDeliveryLessonSource(record, minimal, replay)
     return { id, need, task, material: lighthouseHeroMaterial, arms: [standard, minimal],
-      ...(replay.status !== 'unopened' ? { minimalReplay: replay }
+      ...(replay.status !== 'unopened' ? { minimalReplay: { ...replay, ...(lessonTaskSource && { lessonTaskSource }) } }
         : canReplayHeroDelivery(record, minimal) && { canReplayMinimalDelivery: true }) }
   }
 
-  async function checkHeroDeliveryReplay(record, signal) {
+  async function checkHeroDeliveryReplay(record, signal, observedOriginal) {
     if (!record) throw new Error(heroDeliveryUnavailable)
-    const original = await readHeroTrialArm(record, 'minimal', signal)
+    const original = observedOriginal ?? await readHeroTrialArm(record, 'minimal', signal)
     if (!canReplayHeroDelivery(record, original)) throw new Error(heroDeliveryUnavailable)
     const ecosystem = await discover()
-    if (!await heroTrialAvailable(ecosystem)) throw new Error(heroTrialUnavailable)
+    if (!await heroTrialAvailable(ecosystem, ['minimal'])) throw new Error(heroDeliveryChanged)
     const againstDraft = { presetId: 'minimal', equipmentIds: [] }
     const draft = { ...againstDraft, equipmentIds: ['present'] }
     const [candidate, baseline] = await Promise.all([plan(draft, ecosystem), plan(againstDraft, ecosystem)])
@@ -4860,10 +4903,11 @@ export async function apply(ctx) {
     const provider = ctx.pluginPackages.packageOf(equipmentById.get('present').module, ctx.baseUrl)
     if (!provider || provider.name !== equipmentById.get('present').module) throw new Error(heroDeliveryChanged)
     const source = { name: provider.name, version: provider.version ?? provider.manifest?.version }
+    const identity = loadoutIdentity(draft, candidate, ecosystem)
     const token = createHash('sha256').update(JSON.stringify([record.id, record.task, original.sessionId,
-      original.workspaceId, heroTrialDigest, loadoutIdentity(draft, candidate, ecosystem), source])).digest('hex')
+      original.workspaceId, heroTrialDigest, identity, source])).digest('hex')
     signal?.throwIfAborted()
-    return { draft, candidate, token, view: { task: record.task, material: lighthouseHeroMaterial, comparison, source, token } }
+    return { draft, candidate, ecosystem, identity, token, view: { task: record.task, material: lighthouseHeroMaterial, comparison, source, token } }
   }
 
   async function openHeroDeliveryReplay({ comparisonId, token }, english, signal) {
@@ -5001,9 +5045,7 @@ export async function apply(ctx) {
         }
         if (heroTrial) {
           const agent = ctx.get('agents')?.get(sessionId)
-          const scope = agent && toolRuntime.scopeOf(agent.ctx)
-          if (!scope || ctx.agentPresets.composedPreset(agent.ctx) !== saved.presetId ||
-            !heroTrialToolFit(arm, new Set(ctx.tools.schemas(scope).map(tool => tool.name)))) throw new Error(heroTrialUnavailable)
+          if (!heroTrialLive(arm, saved.presetId, agent)) throw new Error(heroTrialUnavailable)
         } else verifyLive({ presetId: saved.presetId, sessionId })
       }
       await comparisons.writeArm(id, arm, { ...saved, opened: true })

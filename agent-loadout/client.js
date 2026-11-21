@@ -512,7 +512,7 @@ window.__ModuleLoader__.load({
     }
 
     function HeroGallery({ presets, items, roles, current, initialHero, initialEquipment, gear, sources, currentDraft, baseOnly, request, signatureRules, onSignature,
-      onRegistered, onClose, onSelect, onInspectGear, onOpenMatch, onPrepareRound, onPrepareDelivery, heroTrialAvailable, onOpenTrial }) {
+      onRegistered, onClose, onSelect, onInspectGear, onOpenMatch, onPrepareRound, onPrepareDelivery, heroTrialAvailable, onOpenTrial, workspaces }) {
       const [query, setQuery] = useState('')
       const [role, setRole] = useState('')
       const [choice, setChoice] = useState(initialHero ?? current)
@@ -647,7 +647,7 @@ window.__ModuleLoader__.load({
               close()
               if (hero.id !== current) onSelect(hero.id)
             } }, hero?.id === current ? t('返回当前阵容') : t('选择英雄'), h(Glyph, { kind: 'arrow', size: 17 }))))),
-        trialOpen && h(HeroTrial, { request, onClose: () => {
+        trialOpen && h(HeroTrial, { request, workspaces, onClose: () => {
           setTrialOpen(false)
           requestAnimationFrame(() => trialButton.current?.focus())
         }, onVisit: (sessionId, task) => { close(); onOpenTrial(sessionId, task) } }))
@@ -1545,7 +1545,7 @@ window.__ModuleLoader__.load({
     const lighthouseEvidenceReplayLabel = '卸下证据核验再试一局'
 
     function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart, onReuse, onRematch, onLessonTask, outfit,
-      evidenceReplay, testedSource, onLighthouseEvidenceReplay, result, fillOnVisit = true }) {
+      evidenceReplay, testedSource, onLighthouseEvidenceReplay, result, fillOnVisit = true, lessonTaskButton }) {
       const files = arm.deliverables ?? empty
       const pendingQuestions = arm.pendingQuestions ?? empty
       return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status, 'data-comparison-arm': arm.id, tabIndex: -1,
@@ -1579,7 +1579,8 @@ window.__ModuleLoader__.load({
           files.length > 0 && h('ul', null, files.map((file, index) => h('li', { key: index }, file.name)))),
         h('footer', null,
           arm.lessonTaskSource && onLessonTask && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
-            'data-lesson-task-arm': arm.id, onClick: () => onLessonTask(arm) }, t(lessonTaskLabel)),
+            ref: lessonTaskButton, 'aria-haspopup': 'dialog', 'data-lesson-task-arm': arm.id,
+            onClick: () => onLessonTask(arm) }, t(lessonTaskLabel)),
           arm.canRematch && onRematch && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
             'data-rematch-arm': arm.id, onClick: () => onRematch(arm) }, t('换一件再试')),
           arm.canReuse && onReuse && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
@@ -1687,7 +1688,7 @@ window.__ModuleLoader__.load({
             onClick: open }, t(opening ? '正在打开加装会话…' : '打开加装会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, backLabel = '返回英雄图鉴' }) {
+    function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, workspaces, focusReplay, backLabel = '返回英雄图鉴' }) {
       const language = useLanguage()
       const [need, setNeed] = useState('')
       const [activeId, setActiveId] = useState(comparisonId ?? '')
@@ -1698,10 +1699,12 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState('')
       const [attempt, retry] = useState(0)
       const [replayOpen, setReplayOpen] = useState(false)
+      const [personalSource, setPersonalSource] = useState(null)
       const mutation = useRef(false)
       const launchIds = useRef(new Map())
       const taskField = useRef(null)
       const replayButton = useRef(null)
+      const personalButton = useRef(null)
       const heading = useRef(null)
       const group = useId()
       const setup = !activeId
@@ -1800,16 +1803,25 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (replayButton.current ?? heading.current)?.focus())
       }
 
+      function closePersonalTask() {
+        setPersonalSource(null)
+        requestAnimationFrame(() => (personalButton.current ?? heading.current)?.focus())
+      }
+
       function renderArm(arm, config, extraResult) {
+        const equipped = arm.id === minimalDeliveryReplayArm.id
         return h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
-          onStart: arm.id === minimalDeliveryReplayArm.id ? undefined : open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
+          onStart: equipped ? undefined : open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
+          onLessonTask: equipped ? item => setPersonalSource(item.lessonTaskSource) : undefined,
+          lessonTaskButton: equipped ? personalButton : undefined,
           onNotice: status => setNotice(t(comparisonDraftNotices[status])), result: h(Fragment, null, h(HeroTrialResult, { arm }), extraResult) })
       }
 
       const finished = value?.arms.length > 0 && value.arms.every(arm => arm.status === 'complete')
+      const focusSelector = focusReplay && minimalReplay ? '[data-comparison-arm="minimal-present"]' : '[data-hero-trial-results]'
       return h(Fragment, null, h(InstallDialog, { title: t(heroTrialTitle), busy, onCancel: onClose,
         className: setup ? 'moba-starter-dialog' : 'moba-lighthouse-comparison',
-        initialFocus: setup ? 'input[type="radio"]' : value ? '[data-hero-trial-results]' : 'h2',
+        initialFocus: setup ? 'input[type="radio"]' : value ? focusSelector : 'h2',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!busy) onClose() }) },
         setup ? h('form', { onSubmit: start },
           h('p', null, t('同一张内置补给卡，两种交接。先为接班人选好交付要求。')),
@@ -1855,10 +1867,13 @@ window.__ModuleLoader__.load({
                 onClick: () => { setError(''); retry(count => count + 1) } }, t('重试')),
               !comparisonId && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: reset }, t('另开一组试玩'))))),
         replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: activeId, onBack: closeReplay,
-          onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }))
+          onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
+        personalSource && h(LessonLoadoutTask, { source: personalSource, workspaces, request, backLabel: '返回试玩对照',
+          onBack: closePersonalTask, onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }))
     }
 
-    function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn }) {
+    function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn, workspaces }) {
+      const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [open, setOpen] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
       const trigger = useRef(null)
@@ -1880,7 +1895,8 @@ window.__ModuleLoader__.load({
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setOpen(true) }, t(heroTrialView))),
           !hasTurn && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
-        open && h(HeroTrial, { request, comparisonId: member.id, sessionId, onClose: close,
+        open && h(HeroTrial, { request, comparisonId: member.id, sessionId, onClose: close, workspaces: items,
+          focusReplay: member.arm === minimalDeliveryReplayArm.id,
           backLabel: '返回试玩会话', putTask: task => putTask(sessionId, task),
           onVisit: (next, task) => { if (next === sessionId) close(); else { setOpen(false); onVisit(next, task) } } }))
     }
@@ -4990,7 +5006,10 @@ window.__ModuleLoader__.load({
       const preview = reviewed?.value
       const origin = preview?.source ?? lessonSource
       const originArm = origin && comparisonArmConfig(origin.kind, origin.arm, origin.publicEvidenceReplay === true)
-      const sourceLabel = origin && [comparisonArmName(originArm, origin), origin.heroName].filter(Boolean).join(' · ')
+      const heroTrialOrigin = origin?.heroDeliveryTrial === true
+      const sourceLabel = heroTrialOrigin ? t(minimalDeliveryReplayArm.name)
+        : origin && [comparisonArmName(originArm, origin), origin.heroName].filter(Boolean).join(' · ')
+      const gearSource = heroTrialOrigin && origin.gearSource && [origin.gearSource.name, origin.gearSource.version].filter(Boolean).join(' · ')
       const actionPrefix = lessonSource ? 'lesson-task' : 'plan-task'
 
       useEffect(() => () => pending.current?.abort(), [])
@@ -5120,7 +5139,7 @@ window.__ModuleLoader__.load({
 
       return !preview ? h('form', { className: 'moba-plan-form moba-plan-task', onSubmit: submit },
         h('div', { className: 'moba-plan-fields' },
-          origin ? h(Fragment, null, h(InstallFacts, { facts: [[t('练习出装'), sourceLabel]] }),
+          origin ? h(Fragment, null, h(InstallFacts, { facts: [[t('练习出装'), sourceLabel], [t('装备来源'), gearSource]] }),
             h(RematchChangeFacts, { change: origin.change }))
             : choices.length > 0 && (choices.length > 1 || !version) ? h('fieldset', {
               className: 'moba-plan-list moba-task-plan-choices', disabled: Boolean(working),
@@ -5156,6 +5175,7 @@ window.__ModuleLoader__.load({
             h('h3', { ref: reviewHeading, tabIndex: -1 }, t('核对材料和出装')),
             h(InstallFacts, { facts: [
               [t(origin ? '练习出装' : '出装方案'), sourceLabel ?? preview.planName ?? version?.name],
+              [t('装备来源'), gearSource],
               [t('工作区'), workspace ? workspaceFileLabel(workspace, workspaces) : preview.workspaceTitle],
               [t('材料文件相对路径'), preview.material],
             ] }),
@@ -7052,7 +7072,7 @@ window.__ModuleLoader__.load({
               saved: value.saved.map(item => item.baseId === id ? { ...item, heroSignature: signature } : item) })),
             onClose: () => setGalleryOpen(false), onSelect: changePreset, onInspectGear: inspectGalleryEquipment,
             onOpenMatch: openSource, onPrepareRound: prepareHeroRound,
-            heroTrialAvailable: data?.heroTrialAvailable === true, onOpenTrial: openDraftSession,
+            heroTrialAvailable: data?.heroTrialAvailable === true, onOpenTrial: openDraftSession, workspaces: comparableWorkspaces,
             onPrepareDelivery: pending || !canCompare ? undefined : prepareHeroDelivery }),
           flagsOpen && h(FlagCollection, { request, heroId: stagePreset?.id, initialFlagId: flagsOpen.id, onClose: () => setFlagsOpen(null),
             onDisplay: () => setLoadAttempt(attempt => attempt + 1), onOpenMatch: openSource, onPrepare: applyFlagLoadout }),
@@ -9196,7 +9216,7 @@ window.__ModuleLoader__.load({
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
         snapshot?.heroTrial && h(HeroTrialAnchor, { member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
-          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt) }),
+          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), workspaces }),
         snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
           kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openDraftSession,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), onUse: reuseComparisonLoadout,
