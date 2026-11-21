@@ -2576,25 +2576,78 @@ window.__ModuleLoader__.load({
       return h(RunComparisonAnchor, { ...props, kind, workspaces: items })
     }
 
-    function PlanTaskDraftAnchor({ plan, sessionId, consumeDraft, putTask }) {
+    const planTaskDraftNotices = {
+      applied: '任务已填入输入栏。请检查后手动发送。',
+      preserved: '已保留原有草稿。你可以复制这次的任务后手动粘贴。',
+      blocked: '可以复制任务，再粘贴到会话输入栏。',
+    }
+
+    function PlanTaskDraftAnchor({ plan, sessionId, request, consumeDraft, putTask }) {
       const [notice, setNotice] = useState('')
       const [showText, setShowText] = useState(false)
+      const [restoring, setRestoring] = useState('')
+      const [error, setError] = useState('')
       const field = useRef(null)
-      const notices = {
-        applied: '任务已填入输入栏。请检查后手动发送。',
-        preserved: '已保留原有草稿。你可以复制这次的任务后手动粘贴。',
-        blocked: '可以复制任务，再粘贴到会话输入栏。',
-      }
+      const fillButton = useRef(null)
+      const pending = useRef(null)
+      const observedMismatch = useRef(false)
+      const presetChanged = plan.presetChanged === true
 
+      useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => {
+        if (presetChanged) {
+          observedMismatch.current = true
+          setNotice('')
+          return
+        }
+        if (observedMismatch.current) return
         const outcome = consumeDraft(sessionId)
-        if (outcome) setNotice(notices[outcome] ?? notices.blocked)
-      }, [sessionId, consumeDraft])
+        if (outcome) setNotice(planTaskDraftNotices[outcome] ?? planTaskDraftNotices.blocked)
+      }, [presetChanged, sessionId, consumeDraft])
+      useEffect(() => {
+        if (restoring !== 'checking') return
+        if (!presetChanged) {
+          setRestoring('')
+          setNotice('已恢复核对过的出装。填入任务后，请手动发送。')
+          fillButton.current?.focus()
+          return
+        }
+        const timer = setTimeout(() => {
+          setRestoring('')
+          setError('暂时无法确认出装已恢复，可以重试。')
+        }, 5000)
+        return () => clearTimeout(timer)
+      }, [presetChanged, restoring])
       useEffect(() => {
         if (!showText) return
         field.current?.focus()
         field.current?.select()
       }, [showText])
+
+      function fillTask() {
+        if (presetChanged || restoring) return
+        const outcome = consumeDraft(sessionId) ?? putTask(sessionId, plan.task)
+        setNotice(planTaskDraftNotices[outcome] ?? planTaskDraftNotices.blocked)
+      }
+
+      async function restore() {
+        if (!presetChanged || pending.current || restoring) return
+        const abort = pending.current = new AbortController()
+        const action = 'plan-task-draft-restore'
+        setRestoring('requesting')
+        setError('')
+        try {
+          await request(action, { action, sessionId }, abort.signal)
+          if (!abort.signal.aborted) setRestoring('checking')
+        } catch (reason) {
+          if (!abort.signal.aborted) {
+            setError(reason.message)
+            setRestoring('')
+          }
+        } finally {
+          pending.current = null
+        }
+      }
 
       async function copy() {
         try {
@@ -2610,9 +2663,14 @@ window.__ModuleLoader__.load({
           h('div', null, h('strong', null, t(plan.source ? '练习出装新任务' : '出装方案新任务')), h('span', null, plan.planName),
           plan.material && h('span', null, plan.material)),
         h('div', null,
-          h('button', { type: 'button', className: 'moba-settlement-button',
-            onClick: () => setNotice(notices[putTask(sessionId, plan.task)] ?? notices.blocked) }, t('填入任务')),
+          presetChanged ? h('button', { type: 'button', className: 'moba-settlement-button', disabled: Boolean(restoring),
+            onClick: restore }, t('恢复核对过的出装'))
+            : h('button', { ref: fillButton, type: 'button', className: 'moba-settlement-button', disabled: restoring === 'requesting',
+              onClick: fillTask }, t('填入任务')),
           h('button', { type: 'button', className: 'moba-settlement-button', onClick: copy }, t('复制任务'))),
+        presetChanged && h('p', null, t('当前出装和你核对过的出装不同。恢复后可以填入任务。')),
+        restoring && h('p', { role: 'status' }, t('正在恢复核对过的出装…')),
+        error && h('p', { className: 'moba-alert', role: 'alert' }, t(error)),
         notice && h('p', { role: 'status' }, t(notice)),
         showText && h('textarea', { ref: field, readOnly: true, rows: 4, value: plan.task, 'aria-label': t('即将填入会话的任务') }))
     }
@@ -8446,7 +8504,8 @@ window.__ModuleLoader__.load({
         personalFlow?.mode === 'rebaseline' && h(PersonalBaselineTask, { source: personalFlow.source, rebaseline: personalFlow.rebaseline,
           workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
-        snapshot?.planTask && h(PlanTaskDraftAnchor, { plan: snapshot.planTask, sessionId, consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
+        snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
+          consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
         snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
           kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openDraftSession,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), onUse: reuseComparisonLoadout,

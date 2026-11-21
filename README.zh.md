@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.100.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.101.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -120,6 +120,8 @@ dsh web
 2. 如果同一组证据对照的另一侧有可用方案，可以在 **临场换装** 核对备选出装和自己写的备注。选好材料、填好任务后也可以换方案，继续使用已选的材料和已填的任务说明。
 3. 点 **核对材料和出装**，查看本次会话的英雄、装备与来源。选 **确认并打开会话** 后，在新的 DSH 会话看过准备好的任务，再手动发送。
 4. 使用复核后交付的打法时，可先看草稿，在 DSH 提问卡上确认交付或退回修改。成功交付后，在本次会话打开实际附件。
+
+从保存方案或练习出装打开的任务还没发送，若 DSH 再次打开时用了其他预设，任务提示栏会标出变化。原出装仍可用时，可以点 **恢复核对过的出装**，在同一会话恢复。输入栏保留你写的内容，确认恢复的出装后，再手动发送任务。
 
 ## 找回并保存跑通的打法
 

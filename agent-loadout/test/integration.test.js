@@ -3177,6 +3177,7 @@ test('saved Review loadout opens a manually submitted task on new workspace mate
     }
     const previewTask = (fields, status) => invoke('plan-task-preview', fields, status)
     const openTask = (fields, token, id = launchId, status) => invoke('plan-task-open', { ...fields, token, launchId: id }, status)
+    const restoreDraft = (sessionId, status) => invoke('plan-task-draft-restore', { sessionId }, status)
 
     const selected = await host.request(workspace, { presetId: 'standard', workspacePath })
     const other = await host.request(workspace, { presetId: 'standard', workspacePath: otherPath })
@@ -3246,7 +3247,40 @@ test('saved Review loadout opens a manually submitted task on new workspace mate
     assert.deepEqual(new Set((await membership(selected.workspaceId)).sessionIds), new Set([selected.sessionId, opened.sessionId]))
     assert.deepEqual(await catalog(), before)
     await invoke('verify-live', { sessionId: opened.sessionId, presetId: plan.presetId })
-    assert.deepEqual((await equipmentIn(host, opened.sessionId)).planTask, { planName: plan.name, material, task: fresh.task })
+    const reviewedDraft = { planName: plan.name, material, task: fresh.task }
+    assert.deepEqual((await equipmentIn(host, opened.sessionId)).planTask, reviewedDraft)
+
+    const method = 'agentPresets/select'
+    const rpcId = randomUUID()
+    const switched = await host.request('/api/' + method, {
+      type: 'client-request', rpcId, method, payload: { args: { agentId: opened.sessionId, agentPreset: 'standard' } },
+    })
+    assert.equal(switched.rpcId, rpcId)
+    assert.deepEqual(switched.result, { ok: true, value: 'standard' })
+    const changed = await equipmentIn(host, opened.sessionId)
+    assert.equal(changed.presetId, 'standard')
+    assert.deepEqual(changed.planTask, { ...reviewedDraft, presetChanged: true })
+    const changedNative = await history(opened.sessionId)
+    assert.equal(changedNative.presetId, 'standard')
+    assert.equal(changedNative.events.findLast(event => event.type === 'agent-preset/selected')?.data.agentPreset, 'standard')
+    assert.deepEqual(changedNative.events.slice(0, existing.events.length), existing.events)
+    const membersWithDraft = await membership(selected.workspaceId)
+
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual((await equipmentIn(host, opened.sessionId)).planTask, { ...reviewedDraft, presetChanged: true })
+    await restoreDraft(selected.sessionId, 422)
+    await restoreDraft('session-a076' + '0'.repeat(28), 422)
+    assert.deepEqual(await restoreDraft(opened.sessionId), { presetId: plan.presetId })
+    const restoredDraft = await equipmentIn(host, opened.sessionId)
+    assert.equal(restoredDraft.presetId, plan.presetId)
+    assert.deepEqual(restoredDraft.planTask, reviewedDraft)
+    const restoredNative = await history(opened.sessionId)
+    assert.equal(restoredNative.events.findLast(event => event.type === 'agent-preset/selected')?.data.agentPreset, plan.presetId)
+    assert.ok(!restoredNative.events.some(event => ['turn/start', 'user/message', 'tool/call'].includes(event.type)))
+    assert.deepEqual(await membership(selected.workspaceId), membersWithDraft)
+    assert.deepEqual(await catalog(), before)
+    await invoke('verify-live', { sessionId: opened.sessionId, presetId: plan.presetId })
 
     const turn = host.request(turnEndpoint, { sessionId: opened.sessionId, text: opened.task, requestId: opened.requestId })
     turn.catch(() => {})
@@ -3259,6 +3293,7 @@ test('saved Review loadout opens a manually submitted task on new workspace mate
       }
       assert.deepEqual(question?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
       assert.ok(!(await history(opened.sessionId)).events.some(item => item.type === 'deliverables/presented'))
+      await restoreDraft(opened.sessionId, 422)
     } finally {
       if (question) await host.request(questionPath, { sessionId: opened.sessionId, choice: 'Confirm handoff' })
       await turn
@@ -3271,6 +3306,8 @@ test('saved Review loadout opens a manually submitted task on new workspace mate
     assert.equal(delivery.data.files[0].path, join(resolved, material))
     assert.equal(await readFile(join(workspacePath, material), 'utf8'), content)
     assert.equal((await equipmentIn(host, opened.sessionId)).planTask, undefined)
+    await restoreDraft(opened.sessionId, 422)
+    assert.deepEqual(await membership(selected.workspaceId), membersWithDraft)
     assert.deepEqual((await catalog()).plans, before.plans)
 
     await host.stop()

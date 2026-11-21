@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.100.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.101.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -120,6 +120,8 @@ For either side that still matches its saved plan, choose **Record when to use i
 2. If you have an eligible saved plan from the other side of the same evidence comparison, **Choose a tested loadout** shows the available plans and your notes. After choosing material and entering the task, you can switch plans and keep those inputs.
 3. Choose **Review file and loadout** to check the preset and the equipment sources available now. Choose **Confirm and open session** to open a fresh DSH session. Review the prepared task in the conversation and send it yourself.
 4. With a review-first loadout, check the draft and answer the DSH question card when it asks whether to confirm delivery or request changes. Open the actual attachment from that session after it is delivered.
+
+If DSH reopens an unsent task from a saved plan or a lesson with a different preset, the task banner flags the change. Choose **Restore the reviewed loadout** to restore the original loadout in that same session when it is still available. Your draft stays in the composer. Check the restored loadout and send the task yourself when ready.
 
 ## Find a run worth keeping
 

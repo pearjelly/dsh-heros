@@ -1187,7 +1187,9 @@ export async function apply(ctx) {
     const firstTurn = events.findIndex(event => event.type === 'turn/start' || event.type === 'user/message' && event.data.source.kind === 'user')
     const launch = !header.isSeeded && inheritedEventCount === 0 && events.slice(0, firstTurn < 0 ? undefined : firstTurn)
       .find(event => event.type === planTaskRecord && event.ignorable === true && event.data.owner === planTaskOwner)?.data
-    return { header, inheritedEventCount, started: firstTurn >= 0, launch }
+    const preset = events.findLast(event => event.type === 'agent-preset/selected')?.data.agentPreset ?? header.agentPreset
+    const presetChanged = Boolean(header.agentPreset && preset !== header.agentPreset)
+    return { header, inheritedEventCount, started: firstTurn >= 0, launch, presetChanged }
   }
 
   function observePlanTask(sessionId, signal, projectionMode) {
@@ -1206,6 +1208,22 @@ export async function apply(ctx) {
     } finally {
       source[Symbol.dispose]()
     }
+  }
+
+  async function restorePlanTaskDraft(sessionId, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    const saved = await planTaskSession(sessionId, signal)
+    const presetId = saved?.header.agentPreset
+    if (!saved?.launch || saved.started || !presetId) throw new Error('只能在未发送的出装任务里恢复出装。')
+    const controller = ctx.get('sessionController')
+    if (!controller?.resolveAgent || typeof ctx.agentPresets.select !== 'function') throw new Error('当前 DSH 无法恢复原出装。')
+    const result = await controller.resolveAgent(sessionId)
+    if (!result.agent) throw new Error(result.error?.message ?? '无法打开新对局。')
+    signal?.throwIfAborted()
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    await ctx.agentPresets.select(result.agent, presetId)
+    updates.notify(sessionId)
+    return { presetId }
   }
 
   async function openReviewedTask(selection, english, signal, lesson = false) {
@@ -5561,7 +5579,8 @@ export async function apply(ctx) {
       }
       if (savedTask?.launch) {
         const { planName, material, task, source } = savedTask.launch
-        if (!savedTask.started) value.planTask = { planName, material, task, ...(source && { source }) }
+        if (!savedTask.started) value.planTask = { planName, material, task,
+          ...(source && { source }), ...(savedTask.presetChanged && { presetChanged: true }) }
         else if (source) value.lessonTaskResult = true
       }
       return Response.json({ ok: true, value: englishRequest(request) ? localizeDisplay(value) : value },
@@ -5819,6 +5838,8 @@ export async function apply(ctx) {
           value = await previewReviewedTask(await checkPlanTask(requestedPlanTask(selection, english), request.signal), request.signal)
         } else if (selection?.action === 'plan-task-open') {
           value = await openReviewedTask(selection, english, request.signal)
+        } else if (selection?.action === 'plan-task-draft-restore') {
+          value = await restorePlanTaskDraft(selection.sessionId, request.signal)
         } else if (selection?.action === 'lesson-task-preview') {
           value = await previewReviewedTask(await checkLessonTask(requestedLessonTask(selection, english), request.signal), request.signal)
         } else if (selection?.action === 'lesson-task-open') {
