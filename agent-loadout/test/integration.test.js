@@ -2458,7 +2458,9 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
           assert.equal(arm.canReplayLighthouseEvidence, undefined)
           if (opened === lower) await replayOptions(opened.id, 422)
           assert.deepEqual(files(await history(opened.sessionId)), [])
-          assert.equal((await equipmentIn(host, opened.sessionId)).workspaceComparison.lessonTaskSource, undefined)
+          const member = (await equipmentIn(host, opened.sessionId)).workspaceComparison
+          assert.equal(member.lessonTaskSource, undefined)
+          assert.equal(member.canReplayLighthouseEvidence, undefined)
         } finally {
           if (question) await host.request(questions, { sessionId: opened.sessionId, choice: decision })
           await turn
@@ -2487,7 +2489,9 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       assert.equal(arm.canReplayLighthouseEvidence, scenario === 'gap' ? true : undefined)
       const transfer = { kind: 'workspace', comparisonId: opened.id, arm: 'evidence' }
       assert.deepEqual(arm.lessonTaskSource, transfer)
-      assert.deepEqual((await equipmentIn(host, opened.sessionId)).workspaceComparison.lessonTaskSource, transfer)
+      const member = (await equipmentIn(host, opened.sessionId)).workspaceComparison
+      assert.deepEqual(member.lessonTaskSource, transfer)
+      assert.equal(member.canReplayLighthouseEvidence, scenario === 'gap' ? true : undefined)
       const openingResult = openingChoice && { choice: openingChoice, actualChoices: [decision] }
       assert.deepEqual(completed.evidenceOpeningChoice, openingResult)
       proved.push({ filter, arm, openingResult })
@@ -2532,10 +2536,12 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     await invoke('rematch-comparison-open', { ...openFields, comparisonId: pause.id }, 422)
     await invoke('rematch-comparison-open', { ...openFields, change: { removeId: 'present' } }, 422)
     await appendFile(card, '\nUnexpected edit after the public replay preview.\n')
+    assert.equal((await equipmentIn(host, lower.sessionId)).workspaceComparison.canReplayLighthouseEvidence, undefined)
     await replayOptions(lower.id, 422)
     await invoke('rematch-comparison-open', openFields, 422)
     assert.deepEqual(await workspaceDirectories(), before)
     await writeFile(card, cardBytes)
+    assert.equal((await equipmentIn(host, lower.sessionId)).workspaceComparison.canReplayLighthouseEvidence, true)
 
     const [replay, duplicateReplay] = await Promise.all([
       invoke('rematch-comparison-open', openFields), invoke('rematch-comparison-open', openFields),

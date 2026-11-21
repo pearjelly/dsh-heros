@@ -3458,10 +3458,13 @@ window.__ModuleLoader__.load({
       const title = comparisonTitle(kind, member?.lesson, evidenceReplay, publicEvidenceReplay)
       const [open, setOpen] = useState(false)
       const [lessonTaskSource, setLessonTaskSource] = useState(null)
+      const [openEvidenceReplay, setOpenEvidenceReplay] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
       const trigger = useRef(null)
       const lessonTaskTrigger = useRef(null)
+      const evidenceReplayTrigger = useRef(null)
       const availableLessonTask = evidence && member.lessonTaskSource
+      const availableEvidenceReplay = evidence && member.canReplayLighthouseEvidence === true
       useEffect(() => {
         if (!member?.id) return
         const outcome = consumeDraft(sessionId)
@@ -3480,6 +3483,11 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (lessonTaskTrigger.current ?? trigger.current)?.focus())
       }
 
+      function closeEvidenceReplay() {
+        setOpenEvidenceReplay(false)
+        requestAnimationFrame(() => (evidenceReplayTrigger.current ?? trigger.current)?.focus())
+      }
+
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor' },
           h('div', null, h('strong', null, t(title)),
@@ -3487,6 +3495,8 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setOpen(true) }, t(evidenceReplay ? title : evidence ? '查看取舍记录' : lesson ? '查看练习记录' : config.entry)),
+            availableEvidenceReplay && h('button', { ref: evidenceReplayTrigger, type: 'button', 'aria-haspopup': 'dialog',
+              className: 'moba-settlement-button', onClick: () => setOpenEvidenceReplay(true) }, t(lighthouseEvidenceReplayLabel)),
             availableLessonTask && h('button', { ref: lessonTaskTrigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setLessonTaskSource(availableLessonTask) }, t(lessonTaskLabel))),
           draftStatus && h('p', { role: 'status' }, t(draftNotices[draftStatus])),
@@ -3499,6 +3509,10 @@ window.__ModuleLoader__.load({
             : '请手动发送补给卡任务。完成首局后，在练习记录里换一件再试。'))),
         lessonTaskSource && h(LessonLoadoutTask, { source: lessonTaskSource, workspaces, request, onBack: closeLessonTask,
           backLabel: '返回练习会话', onVisit: (next, task) => { setLessonTaskSource(null); onVisit(next, task) } }),
+        openEvidenceReplay && h(RematchEditor, { kind, comparisonId: member.id, arm: member.arm, sourceSessionId: sessionId, request,
+          lesson: true, evidenceReplayHint: true, publicEvidenceReplayHint: true, backLabel: '返回练习会话',
+          onBack: closeEvidenceReplay, onClose: closeEvidenceReplay,
+          onVisit: (next, task) => { if (next === sessionId) closeEvidenceReplay(); else { setOpenEvidenceReplay(false); onVisit(next, task) } } }),
         open && h(RunComparison, { kind, request, comparisonId: member.id, sessionId, onClose: close, workspaces, lessonHint: member.lesson,
           evidenceReplayHint: evidenceReplay, publicEvidenceReplayHint: publicEvidenceReplay,
           putTask: task => putTask(sessionId, task),

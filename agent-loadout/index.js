@@ -6084,8 +6084,12 @@ export async function apply(ctx) {
         const { lesson, scenario } = record
         const evidence = lesson === evidenceLesson
         const observed = evidence && !value.running && await readComparisonArm(workspaceComparisons, record, workspaceComparison.arm, request.signal)
+        const canReplayLighthouseEvidence = completedLighthouseChallenge(record, observed) &&
+          ctx.get('workspaceRegistry')?.get(record.workspaceId)?.path === record.cwd &&
+          await workspaceMaterialState(record, request.signal) === 'verified'
         value.workspaceComparison = { ...workspaceComparison, ...(lesson && { lesson }), ...(evidence && { scenario }),
-          ...(observed?.lessonTaskSource && { lessonTaskSource: observed.lessonTaskSource }) }
+          ...(observed?.lessonTaskSource && { lessonTaskSource: observed.lessonTaskSource }),
+          ...(canReplayLighthouseEvidence && { canReplayLighthouseEvidence: true }) }
       }
       const planComparison = planComparisons.member(sessionId)
       if (planComparison) {
