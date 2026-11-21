@@ -163,9 +163,11 @@ export async function apply(ctx) {
         name = sequence[results.length]
         args = name === 'glob' ? { pattern: 'README.md' } : {}
       } else if (heroDeliveryMaterial) {
+        const read = tools?.some(tool => tool.name === 'read') ? 'read' : 'bash'
         const canPresent = tools?.some(tool => tool.name === 'present')
-        sequence = ['bash', ...(canPresent ? ['present'] : [])]
+        sequence = [read, ...(canPresent ? ['present'] : [])]
         name = sequence[results.length]
+        if (name === 'read') args = { file_path: heroDeliveryMaterial }
         if (name === 'bash') args = { command: "cat -- '值班 材料/设备 台账.md'", description: 'Read the selected equipment ledger' }
         if (name === 'present') args = { files: [{ path: heroDeliveryMaterial, description: '夜班交接台账原件' }] }
         if (!name) {

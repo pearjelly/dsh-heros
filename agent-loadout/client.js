@@ -1601,7 +1601,7 @@ window.__ModuleLoader__.load({
     const lighthouseEvidenceReplayLabel = '卸下证据核验再试一局'
 
     function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart, onReuse, onRematch, onLessonTask, outfit,
-      evidenceReplay, testedSource, onLighthouseEvidenceReplay, result, fillOnVisit = true, lessonTaskButton }) {
+      evidenceReplay, testedSource, onLighthouseEvidenceReplay, result, fillOnVisit = true, lessonTaskAction = lessonTaskLabel }) {
       const files = arm.deliverables ?? empty
       const pendingQuestions = arm.pendingQuestions ?? empty
       return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status, 'data-comparison-arm': arm.id, tabIndex: -1,
@@ -1635,8 +1635,8 @@ window.__ModuleLoader__.load({
           files.length > 0 && h('ul', null, files.map((file, index) => h('li', { key: index }, file.name)))),
         h('footer', null,
           arm.lessonTaskSource && onLessonTask && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
-            ref: lessonTaskButton, 'aria-haspopup': 'dialog', 'data-lesson-task-arm': arm.id,
-            onClick: () => onLessonTask(arm) }, t(lessonTaskLabel)),
+            'aria-haspopup': 'dialog', 'data-lesson-task-arm': arm.id,
+            onClick: event => onLessonTask(arm, event.currentTarget) }, t(lessonTaskAction)),
           arm.canRematch && onRematch && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
             'data-rematch-arm': arm.id, onClick: () => onRematch(arm) }, t('换一件再试')),
           arm.canReuse && onReuse && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
@@ -1655,6 +1655,7 @@ window.__ModuleLoader__.load({
 
     const heroTrialTitle = '英雄同题试玩'
     const heroTrialView = '查看试玩对照'
+    const standardTrialTaskLabel = '用标准模式做自己的任务'
     const minimalDeliveryReplayLabel = '给极简模式装上交付物预览'
     const heroTrialNeeds = [
       { id: 'original', icon: 'report', name: '可打开的原件', note: '接班人要在会话里打开原件核对。' },
@@ -1990,7 +1991,11 @@ window.__ModuleLoader__.load({
 
       function closePersonalTask() {
         setPersonalSource(null)
-        requestAnimationFrame(() => (personalButton.current ?? heading.current)?.focus())
+        requestAnimationFrame(() => {
+          const opener = personalButton.current
+          const target = opener?.isConnected ? opener : heading.current
+          target?.focus()
+        })
       }
 
       function closeSharing() {
@@ -2012,8 +2017,11 @@ window.__ModuleLoader__.load({
         const reportable = canReportHeroHandoff(arm)
         return h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
           onStart: equipped ? undefined : open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
-          onLessonTask: equipped ? item => setPersonalSource(item.lessonTaskSource) : undefined,
-          lessonTaskButton: equipped ? personalButton : undefined,
+          onLessonTask: equipped || arm.id === 'standard' ? (item, opener) => {
+            personalButton.current = opener
+            setPersonalSource(item.lessonTaskSource)
+          } : undefined,
+          lessonTaskAction: arm.id === 'standard' ? standardTrialTaskLabel : lessonTaskLabel,
           onNotice: status => setNotice(t(comparisonDraftNotices[status])), result: h(Fragment, null, h(HeroTrialResult, { arm }), extraResult,
             reportable && h('div', { className: 'moba-comparison-previous' },
               h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
@@ -2092,7 +2100,10 @@ window.__ModuleLoader__.load({
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [open, setOpen] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
+      const [personalSource, setPersonalSource] = useState(null)
       const trigger = useRef(null)
+      const personalTrigger = useRef(null)
+      const availablePersonalTask = member.arm === 'standard' && member.lessonTaskSource
       const hero = member.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === member.arm)
       useEffect(() => {
         const status = consumeDraft(sessionId)
@@ -2104,13 +2115,24 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => trigger.current?.focus())
       }
 
+      function closePersonalTask() {
+        setPersonalSource(null)
+        requestAnimationFrame(() => (personalTrigger.current ?? trigger.current)?.focus())
+      }
+
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor' },
           h('div', null, h('strong', null, t(heroTrialTitle)), hero && h('span', null, t(hero.name))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
-              onClick: () => setOpen(true) }, t(heroTrialView))),
-          !hasTurn && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
+              onClick: () => setOpen(true) }, t(heroTrialView)),
+            availablePersonalTask && h('button', { ref: personalTrigger, type: 'button', 'aria-haspopup': 'dialog',
+              className: 'moba-settlement-button', onClick: () => setPersonalSource(availablePersonalTask) },
+              t(standardTrialTaskLabel))),
+          !hasTurn && !availablePersonalTask && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
+        personalSource && h(LessonLoadoutTask, { source: personalSource, workspaces: items, request,
+          backLabel: '返回试玩会话', onBack: closePersonalTask,
+          onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }),
         open && h(HeroTrial, { request, comparisonId: member.id, sessionId, onClose: close, workspaces: items,
           focusReplay: member.arm === minimalDeliveryReplayArm.id,
           backLabel: '返回试玩会话', putTask: task => putTask(sessionId, task),
@@ -5168,7 +5190,10 @@ window.__ModuleLoader__.load({
         return () => abort.abort()
       }, [request, kind, comparisonId, arm, attempt, language, reference, membership])
 
-      return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : lessonTaskLabel), className: 'moba-lighthouse-comparison', busy: opening,
+      const standardTrial = kind === 'hero-trial' && arm === 'standard'
+      const taskLabel = standardTrial ? standardTrialTaskLabel : lessonTaskLabel
+      return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : taskLabel), busy: opening,
+        className: standardTrial ? 'moba-lighthouse-comparison moba-standard-trial-task' : 'moba-lighthouse-comparison',
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t('用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
         options ? h(LoadoutTaskForm, { lessonSource: options.source, workspaces: allowed, request,
@@ -5224,9 +5249,12 @@ window.__ModuleLoader__.load({
       const origin = preview?.source ?? lessonSource
       const originArm = origin && comparisonArmConfig(origin.kind, origin.arm, origin.publicEvidenceReplay === true)
       const heroTrialOrigin = origin?.heroDeliveryTrial === true
-      const sourceLabel = heroTrialOrigin ? t(minimalDeliveryReplayArm.name)
+      const standardTrialOrigin = origin?.kind === 'hero-trial' && origin.arm === 'standard'
+      const sourceLabel = standardTrialOrigin ? (origin.heroName ?? t('标准模式')) : heroTrialOrigin ? t(minimalDeliveryReplayArm.name)
         : origin && [comparisonArmName(originArm, origin), origin.heroName].filter(Boolean).join(' · ')
-      const gearSource = heroTrialOrigin && origin.gearSource && [origin.gearSource.name, origin.gearSource.version].filter(Boolean).join(' · ')
+      const gearSource = standardTrialOrigin
+        ? origin.gearSources?.map(item => [item.tool, item.name, item.version].filter(Boolean).join(' · ')).join(' / ')
+        : heroTrialOrigin && origin.gearSource && [origin.gearSource.name, origin.gearSource.version].filter(Boolean).join(' · ')
       const actionPrefix = lessonSource ? 'lesson-task' : 'plan-task'
 
       useEffect(() => () => pending.current?.abort(), [])
@@ -9454,7 +9482,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
-        snapshot?.heroTrial && h(HeroTrialAnchor, { member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
+        snapshot?.heroTrial && h(HeroTrialAnchor, { key: sessionId, member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), workspaces }),
         snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
           kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openDraftSession,
@@ -10461,6 +10489,11 @@ window.__ModuleLoader__.load({
       .moba-plan-task dt { color: var(--muted); }
       .moba-plan-task dd { margin: 0; overflow-wrap: anywhere; }
       .moba-plan-task .moba-lighthouse-note { margin: 0; }
+      .moba-standard-trial-task .moba-plan-task,
+      .moba-standard-trial-task .moba-plan-fields { grid-template-columns: minmax(0, 1fr); }
+      .moba-standard-trial-task .moba-plan-fields :is(input, select, textarea) { box-sizing: border-box; }
+      .moba-standard-trial-task .moba-gallery-footer { flex-wrap: wrap; }
+      .moba-standard-trial-task .moba-gallery-footer button { white-space: normal; }
       .moba-plan-fields .moba-share-code { font: 12px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
       .moba-share-fields > h3, .moba-share-review > h3, .moba-share-section h3 { margin: 0; overflow-wrap: anywhere; }
       .moba-share-fields > h3, .moba-share-review > h3 { color: var(--gold); font-size: 17px; }

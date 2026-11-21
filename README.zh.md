@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.115.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.116.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -41,6 +41,10 @@ dsh web
 在已核验的英雄试玩点 **分享这局战报**，再点 **复制战报码**。码里只有公开样例标识、接班需求、所选一局和是否附上原件。回复和文件留在自己的 Profile。
 
 打开相同公开样例、题目语言和接班需求的已核验本机试玩，点 **对照好友战报**。页面分别显示 **本机核对的交接** 和 **好友分享的交接**，后一项来自好友提供的战报码。
+
+### 用标准模式做自己的任务
+
+标准模式读取内置补给卡并实际交付原件，结果通过核验后，可在 DSH 原会话或试玩对照的标准模式结果点 **用标准模式做自己的任务**。选择工作区，也可点 **添加材料文件夹**。选好个人文件，填写新任务说明，点 **核对材料和出装** 查看原装标准模式和工具来源。点 **确认并打开会话**，在新的 DSH 会话手动发送任务。
 
 ### 给极简模式加一件装备
 

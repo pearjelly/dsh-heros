@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.115.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.116.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -41,6 +41,10 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 On a verified hero run, choose **Share this round report**, then **Copy report code**. It carries the public sample identifier, handoff need, selected run, and whether the original card was attached. Replies and files stay in your profile.
 
 Choose **Compare a friend's report** on a verified local run with the same public sample, task language, and handoff need. The comparison shows **Verified on this device** for your result and **Shared by your friend** for the outcome supplied by the code.
+
+### Use Standard on your own task
+
+When Standard has read the bundled card and delivered the verified original, choose **Use Standard on my task** in that DSH session or on the Standard result. Select a workspace or **Add a materials folder**, choose your own file, and write a new brief. In **Review file and loadout**, check the stock Standard preset and its tool sources. Choose **Confirm and open session**, then manually send the new task in DSH.
 
 ### Give Minimal one more tool
 

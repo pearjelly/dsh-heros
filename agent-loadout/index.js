@@ -36,7 +36,7 @@ import { boundToolState, enforceEquippedToolSources, equippedToolBindings } from
 import { openToolDiscoveries } from './tool-discoveries.js'
 import { standingToolClaims } from './ecosystem.js'
 import { isProfileToolSource, profileProviderActive, profileProviderId, scopeApi } from './tool-origins.js'
-import { activeAgentUnits, activePresetUnits, addPluginUnits, checkEquipmentCollection, checkSelectedStandingTools, childModules, collectSessionEquipment, configuredAgentUnits, discoverEcosystem, equipmentMetadata, equipmentToolLinks, executorTools, includeDependencies, metadata, moduleLabel, nativeEquipmentIcon, presetEquipment, profileToolSources, publicEquipment, recordToolDiscovery, registeredToolDetails, registeredToolKey, scopedEquipmentProvider, sessionEquipmentSnapshot, statusForEcosystem, stockToolNames, toolKey, unitFingerprint, verifiedToolKeys, waitingScopedToolSources } from './ecosystem.js'
+import { activeAgentUnits, activePresetUnits, addPluginUnits, checkEquipmentCollection, checkSelectedStandingTools, childModules, collectSessionEquipment, configuredAgentUnits, discoverEcosystem, dispatchedToolDetails, equipmentMetadata, equipmentToolLinks, executorTools, includeDependencies, metadata, moduleLabel, nativeEquipmentIcon, presetEquipment, profileToolSources, publicEquipment, recordToolDiscovery, registeredToolDetails, registeredToolKey, scopedEquipmentProvider, sessionEquipmentSnapshot, statusForEcosystem, stockToolNames, toolKey, unitFingerprint, verifiedToolKeys, waitingScopedToolSources } from './ecosystem.js'
 
 export const name = 'agent-loadout'
 export const inject = ['agentPresets', 'connection', 'loader', 'profileContext', 'tools', 'pluginPackages']
@@ -60,6 +60,9 @@ const isEvidenceLessonSource = ({ kind, arm }) => kind === 'workspace' && arm ==
 const isPublicEvidenceReplaySource = ({ kind, arm, publicEvidenceReplay }) =>
   kind === 'rematch' && arm === 'rematch' && publicEvidenceReplay === true
 const isHeroDeliveryTrialSource = ({ kind, arm }) => kind === 'hero-trial' && arm === lighthouseHeroDelivery
+const isStandardTrialSource = ({ kind, arm }) => kind === 'hero-trial' && arm === 'standard'
+const isHeroTrialTaskSource = source => isHeroDeliveryTrialSource(source) || isStandardTrialSource(source)
+const standardTrialTools = { read: '@deepseek-ai/dsh-tool-fs', present: '@deepseek-ai/dsh-tool-present' }
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
 const equipmentById = new Map(equipment.map(item => [item.id, item]))
@@ -76,7 +79,7 @@ function validEvidenceOpeningChoice(lesson, scenario, choice) {
 }
 
 function validLessonTaskReference(source) {
-  if (isEvidenceLessonSource(source) || isHeroDeliveryTrialSource(source)) return comparisonIdValid(source.comparisonId)
+  if (isEvidenceLessonSource(source) || isHeroTrialTaskSource(source)) return comparisonIdValid(source.comparisonId)
   return (source.kind === 'workspace' || source.kind === 'rematch') && validRematchReference(source)
 }
 
@@ -1289,6 +1292,7 @@ export async function apply(ctx) {
       if (verify) verifyLive({ presetId, sessionId })
       const { planName, material, task, source } = checked.view
       if (source?.heroDeliveryTrial && !heroTrialLive(lighthouseHeroDelivery, presetId, agent)) throw new Error(heroDeliveryChanged)
+      if (checked.standardBindings && !standardTrialLive(presetId, agent, checked.standardBindings)) throw new Error(heroDeliveryChanged)
       const target = source && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity }
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
         ...(source && { source, target }) })
@@ -1316,6 +1320,19 @@ export async function apply(ctx) {
     const scope = agent && toolRuntime?.scopeOf(agent.ctx)
     return scope && ctx.agentPresets.composedPreset(agent.ctx) === presetId &&
       heroTrialToolFit(arm, new Set(ctx.tools.schemas(scope).map(tool => tool.name)))
+  }
+
+  function standardTrialLive(presetId, agent, bindings) {
+    if (!heroTrialLive('standard', presetId, agent)) return false
+    const scope = toolRuntime.scopeOf(agent.ctx)
+    const origins = ctx.get('agentLoadoutToolOrigins')
+    return bindings.every(({ tool, id, sourceId }) => {
+      const definition = ctx.tools.get(tool, scope)
+      const origin = definition && origins?.get(definition, scope)
+      if (origin?.moduleName !== standardTrialTools[tool]) return false
+      const actual = dispatchedToolDetails(ctx, scope, definition, agent.ctx)
+      return actual.id === id && actual.sourceId === sourceId
+    })
   }
 
   async function heroTrialAvailable(currentEcosystem, arms = lighthouseHeroArms) {
@@ -3850,6 +3867,13 @@ export async function apply(ctx) {
 
   async function verifiedLessonTaskSource(selection, signal) {
     if (isHeroDeliveryTrialSource(selection)) return verifiedHeroDeliveryLesson(selection.comparisonId, signal)
+    if (isStandardTrialSource(selection)) {
+      const record = heroTrials.read(selection.comparisonId)
+      const observed = record && await readHeroTrialArm(record, 'standard', signal, true)
+      const checked = record && await verifiedStandardTrialLesson(record, observed, signal)
+      if (!checked) throw new Error('请从已经核验的灯塔练习开始。')
+      return checked
+    }
     const { kind, comparisonId, arm } = selection
     const evidence = isEvidenceLessonSource(selection)
     const lesson = evidence ? evidenceLesson : lighthouseLesson
@@ -3939,16 +3963,17 @@ export async function apply(ctx) {
 
   async function checkLessonTask(input, signal) {
     const { workspaceId, material, task, hash, english } = input
-    const { draft, candidate, ecosystem, proof, view: source } = await verifiedLessonTaskSource(input.source, signal)
+    const { draft, candidate, ecosystem, proof, view: source, standardBindings } = await verifiedLessonTaskSource(input.source, signal)
     const { workspace, digest } = await readPersonalTaskMaterial(workspaceId, material, signal)
     const cwd = workspace.path
-    const lessonName = source.heroDeliveryTrial ? '极简模式 + 交付物预览'
+    const lessonName = isStandardTrialSource(source) ? '标准模式'
+      : source.heroDeliveryTrial ? '极简模式 + 交付物预览'
       : source.publicEvidenceReplay ? '灯塔证据换装对照' : source.lesson === evidenceLesson ? '灯塔证据取舍' : '灯塔换装练习'
     const planName = english ? englishText(lessonName) : lessonName
     const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task, source }
     const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, proof])).digest('hex')
     signal?.throwIfAborted()
-    return { view, cwd, digest, draft, candidate, ecosystem, token, identity: proof.identity }
+    return { view, cwd, digest, draft, candidate, ecosystem, token, identity: proof.identity, standardBindings }
   }
 
   function personalTaskTarget(launch, header) {
@@ -4510,7 +4535,7 @@ export async function apply(ctx) {
       const { header, launch } = planTaskDetails(source)
       if (!launch?.source || !validLessonTaskReference(launch.source)) return
       const verifyEvidence = isEvidenceLessonSource(launch.source) || isPublicEvidenceReplaySource(launch.source) ||
-        isHeroDeliveryTrialSource(launch.source)
+        isHeroTrialTaskSource(launch.source)
       const { cwd, agentPreset: presetId } = header
       const target = personalTaskTarget(launch, header)
       if ((strict || verifyEvidence) && !target) return
@@ -4535,7 +4560,7 @@ export async function apply(ctx) {
     const choices = comparisonChoices(evidence)
     if (evidenceReplay && (original.launch.source.lesson !== evidenceLesson || hero.id !== 'standard' ||
       record?.equipmentIds.length !== 2 || !record.equipmentIds.includes('evidence') || !record.equipmentIds.includes('present'))) return
-    const canReuse = evidence.status === 'complete' && (isHeroDeliveryTrialSource(original.launch.source)
+    const canReuse = evidence.status === 'complete' && (isHeroTrialTaskSource(original.launch.source)
       ? verifiedPresentHandoff(evidence) && evidence.materialDelivered
       : evidenceReplay ? !evidence.continuationReason && choices.length > 0 : evidence.materialDelivered || choices.length > 0)
     return { sessionId, target, hero, observed: evidence, canReuse, ...(evidenceReplay && { evidenceReplay }) }
@@ -4549,7 +4574,7 @@ export async function apply(ctx) {
     const choices = comparisonChoices(evidence)
     const evidenceSource = isEvidenceLessonSource(launch.source)
     const publicReplay = isPublicEvidenceReplaySource(launch.source)
-    const heroDeliveryTrial = isHeroDeliveryTrialSource(launch.source)
+    const heroDeliveryTrial = isHeroTrialTaskSource(launch.source)
     const delivered = evidenceSource ? evidence.deliverables?.length > 0 : evidence.materialDelivered
     const canReview = evidence.status === 'complete' && (publicReplay || heroDeliveryTrial
       ? verifiedPresentHandoff(evidence) && (!heroDeliveryTrial || evidence.materialDelivered)
@@ -4576,7 +4601,8 @@ export async function apply(ctx) {
     if (review !== true || !canReview) return result
     try {
       const [checked, uploaded] = await Promise.all([verifiedLessonTaskSource(launch.source, signal), appearance.index()])
-      if (checked.proof.presetId !== presetId) throw new Error('本机配置已变化，无法核对这局的原出装。')
+      if (checked.proof.presetId !== presetId || (isStandardTrialSource(launch.source) &&
+        checked.proof.identity !== target?.identity)) throw new Error('本机配置已变化，无法核对这局的原出装。')
       const { draft, candidate, ecosystem } = checked
       const art = packageArt(uploaded, ecosystem)
       const hero = { id: draft.presetId, name: checked.view.heroName, art: art('hero', draft.presetId) }
@@ -4875,7 +4901,7 @@ export async function apply(ctx) {
     return readHeroTrial(record, signal)
   }
 
-  async function readHeroTrialArm(record, arm, signal) {
+  async function readHeroTrialArm(record, arm, signal, includeBindings = false) {
     const opening = { id: arm, status: 'unopened' }
     const { sessionId } = heroTrials.identity(record.id, arm)
     const unavailable = { id: arm, sessionId, status: 'unavailable', reason: 'session-unavailable' }
@@ -4896,7 +4922,7 @@ export async function apply(ctx) {
       const materialState = result.materialState === 'verified' ? currentMaterialState : (result.materialState ?? currentMaterialState)
       const details = { id: arm, sessionId, workspaceId: saved.workspaceId, ...result, materialState }
       if (result.status !== 'complete' || result.continuationReason) return details
-      const proof = observedHeroHandoff(source.events, result.turn, saved.cwd, material, lighthouseHeroContents)
+      const proof = observedHeroHandoff(source.events, result.turn, saved.cwd, material, lighthouseHeroContents, includeBindings)
       const meetsNeed = materialState === 'verified' && proof.materialRead && Boolean(proof.summary) &&
         (record.need === 'summary' || proof.originalAttached)
       return { ...details, ...proof, meetsNeed }
@@ -4938,12 +4964,47 @@ export async function apply(ctx) {
       view: { ...anchor, heroName: presetLabels.get('minimal')?.[0] ?? 'Minimal' } }
   }
 
+  async function verifiedStandardTrialLesson(record, observed, signal) {
+    if (!observed.bindings || !verifiedHeroHandoff(observed) || !observed.originalAttached) return
+    const { ecosystem, sources } = await shareEnvironment()
+    if (sources.hero('standard')?.owner.package !== '@deepseek-ai/dsh-web-app') return
+    const capabilities = summarizeCapabilities(ecosystem, 'standard', {})
+    const gearSources = observed.bindings.map(({ tool, id, sourceId }) => {
+      const current = capabilities.get(id)
+      const module = standardTrialTools[tool]
+      if (current?.name !== tool || current.sourceId !== sourceId ||
+        !ecosystem.unitsByPreset.get('standard')?.some(unit => unit.active && unit.id === sourceId && unit.modules.includes(module))) return
+      const provider = sources.packageFor(module)
+      if (provider?.package === module) return { tool, name: module, version: provider.version }
+    })
+    if (!gearSources.every(Boolean)) return
+    const { draft, candidate, identity } = await verifiedPlanComparisonArm({ presetId: 'standard', heroId: 'standard' }, ecosystem)
+    signal?.throwIfAborted()
+    const standardBindings = observed.bindings
+    const reference = { kind: 'hero-trial', comparisonId: record.id, arm: 'standard' }
+    const source = { ...reference, sessionId: observed.sessionId }
+    return { reference, draft, candidate, ecosystem, standardBindings,
+      proof: { ...source, presetId: 'standard', identity, standardBindings, gearSources },
+      view: { ...source, heroName: presetLabels.get('standard')?.[0] ?? 'Standard', gearSources } }
+  }
+
+  async function standardTrialTaskReference(record, observed, signal) {
+    try {
+      return (await verifiedStandardTrialLesson(record, observed, signal))?.reference
+    } catch {
+      signal?.throwIfAborted()
+    }
+  }
+
   async function readHeroTrial(record, signal) {
     if (!record) return { arms: lighthouseHeroArms.map(id => ({ id, status: 'unopened' })) }
     const { id, need, task } = record
-    const [standard, minimal, replay] = await Promise.all(heroTrials.arms.map(arm => readHeroTrialArm(record, arm, signal)))
+    const [standard, minimal, replay] = await Promise.all(heroTrials.arms.map(arm => readHeroTrialArm(record, arm, signal, arm === 'standard')))
+    const standardLesson = await standardTrialTaskReference(record, standard, signal)
+    const { bindings, ...standardView } = standard
+    if (standardLesson) standardView.lessonTaskSource = standardLesson
     const lessonTaskSource = heroDeliveryLessonSource(record, minimal, replay)
-    return { id, need, task, material: lighthouseHeroMaterial, arms: [standard, minimal],
+    return { id, need, task, material: lighthouseHeroMaterial, arms: [standardView, minimal],
       ...([standard, minimal].some(verifiedHeroHandoff) && { canShareHeroChallenge: true }),
       ...(replay.status !== 'unopened' ? { minimalReplay: { ...replay, ...(lessonTaskSource && { lessonTaskSource }) } }
         : canReplayHeroDelivery(record, minimal) && { canReplayMinimalDelivery: true }) }
@@ -5997,7 +6058,15 @@ export async function apply(ctx) {
           ...evidenceReplayView(baseline) }
       }
       const heroTrial = heroTrials.member(sessionId)
-      if (heroTrial && (await heroTrials.readArm(heroTrial.id, heroTrial.arm))?.opened) value.heroTrial = heroTrial
+      if (heroTrial && (await heroTrials.readArm(heroTrial.id, heroTrial.arm))?.opened) {
+        value.heroTrial = heroTrial
+        if (heroTrial.arm === 'standard' && !value.running) {
+          const record = heroTrials.read(heroTrial.id)
+          const observed = await readHeroTrialArm(record, 'standard', request.signal, true)
+          const lessonTaskSource = await standardTrialTaskReference(record, observed, request.signal)
+          if (lessonTaskSource) value.heroTrial = { ...heroTrial, lessonTaskSource }
+        }
+      }
       if (savedTask?.launch) {
         const { planName, material, task, source } = savedTask.launch
         if (!savedTask.started) value.planTask = { planName, material, task,

@@ -478,28 +478,39 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     ...(followUps.continuationReason && { continuationReason: followUps.continuationReason }), ...(includeWindows && { windows }) }
 }
 
-export function observedHeroHandoff(events, turn, cwd, material, contents) {
+export function observedHeroHandoff(events, turn, cwd, material, contents, includeBindings = false) {
   const body = events.filter(event => event.data?.turn === turn)
-  const calls = new Map(body.filter(event => event.type === 'tool/call').map(event => [event.data.callId, event.data.name]))
+  const calls = new Map(body.filter(event => event.type === 'tool/call').map(event => [event.data.callId, event]))
   const results = body.filter(event => event.type === 'tool/result' && event.surfaceOp === 'append' && !event.data.message.isError)
   const fullCard = contents.trimEnd().split('\n').filter(Boolean)
   const read = results.find(({ data }) => {
-    const tool = calls.get(data.message.toolCallId)
+    const tool = calls.get(data.message.toolCallId)?.data.name
     if (tool !== 'read' && tool !== 'bash') return false
     if (tool === 'read' && data.meta?.path && resolve(cwd, data.meta.path) !== resolve(cwd, material)) return false
     const text = data.message.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
     return fullCard.every(line => text.includes(line))
   })
-  const presented = new Set(results.filter(({ data }) => calls.get(data.message.toolCallId) === 'present')
+  const presented = new Set(results.filter(({ data }) => calls.get(data.message.toolCallId)?.data.name === 'present')
     .map(({ data }) => data.message.toolCallId))
-  const originalAttached = body.some(event => event.type === 'deliverables/presented' && presented.has(event.data.callId) &&
+  const original = body.find(event => event.type === 'deliverables/presented' && presented.has(event.data.callId) &&
     event.data.files.some(file => typeof file.path === 'string' && resolve(cwd, file.path) === resolve(cwd, material)))
   const summary = body.filter(event => event.type === 'assistant/message' && event.surfaceOp === 'append' &&
     (!read || event.seq > read.seq) &&
     event.data.message.source.kind === 'model').flatMap(({ data }) =>
     data.message.content.filter(part => part.type === 'text' && part.text.trim()).map(part => part.text.trim()))
     .at(-1)?.slice(0, 1800)
-  return { materialRead: Boolean(read), originalAttached, ...(summary && { summary }) }
+  const result = { materialRead: Boolean(read), originalAttached: Boolean(original), ...(summary && { summary }) }
+  if (!includeBindings || !read || !original) return result
+  const readCall = calls.get(read.data.message.toolCallId)
+  const presentCall = calls.get(original.data.callId)
+  if (readCall?.data.name !== 'read' || !presentCall) return result
+  // Tool attribution is written as a separate record without a turn field.
+  const bindings = [readCall, presentCall].map(call => {
+    const source = events.findLast(event => event.type === toolSourceRecord && event.ignorable === true &&
+      event.data.callSeq === call.seq && event.data.blocked !== true)?.data
+    return source?.id && validSourceId(source.sourceId) && { tool: call.data.name, id: source.id, sourceId: source.sourceId }
+  })
+  return bindings.every(Boolean) ? { ...result, bindings } : result
 }
 
 export async function matchReport(source, before, receipts) {

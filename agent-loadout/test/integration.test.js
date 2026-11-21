@@ -1497,6 +1497,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const [trial, duplicate] = await Promise.all([create(launchId('a'), 'original', 200, 'zh'), create(launchId('a'), 'original', 200, 'zh')])
     assert.deepEqual(duplicate, trial)
     const transfer = { kind: 'hero-trial', comparisonId: trial.id, arm: 'minimal-present' }
+    const standardTransfer = { ...transfer, arm: 'standard' }
     assert.equal(trial.need, 'original')
     assert.equal(trial.material, material)
     assert.match(trial.task, /^【英雄同题试玩】\n/u)
@@ -1523,6 +1524,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const standardFields = { sample, need: 'original', arm: 'standard', originalAttached: true }
     await shareHandoff(trial.id, 'standard', 422)
     await compareHandoff(trial.id, 'standard', reportCode(standardFields), 422)
+    await invoke('lesson-task-options', standardTransfer, 422)
     for (const [hero, opened] of [['standard', standard], ['minimal', minimal]]) {
       assert.equal(opened.id, trial.id)
       assert.equal(opened.task, trial.task)
@@ -1546,6 +1548,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     await send(standard)
     const between = await read(trial.id)
     assert.equal(byHero(between, 'minimal').status, 'waiting')
+    assert.deepEqual(byHero(between, 'standard').lessonTaskSource, standardTransfer)
+    assert.deepEqual((await equipmentIn(host, standard.sessionId)).heroTrial.lessonTaskSource, standardTransfer)
     assert.notEqual(between.canReplayMinimalDelivery, true)
     await previewReplay(trial.id, 422)
     assert.equal(between.canShareHeroChallenge, true)
@@ -1791,7 +1795,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(options.source.sessionId, replay.sessionId)
     assert.equal(options.source.heroDeliveryTrial, true)
     assert.deepEqual(options.source.gearSource, replayPreview.source)
-    for (const bad of [{ ...transfer, arm: 'standard' }, { ...transfer, arm: 'minimal' }, { ...transfer, kind: 'workspace' }]) {
+    for (const bad of [{ ...transfer, arm: 'minimal' }, { ...transfer, kind: 'workspace' }]) {
       await invoke('lesson-task-options', bad, 422)
     }
     const listed = await invoke('lesson-task-materials', { ...transfer, workspaceId, directory: ownFolder })
@@ -1852,6 +1856,57 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(ownResult.draft.presetId, 'minimal')
     assert.deepEqual(await read(trial.id), replayed)
 
+    const standardOptions = await invoke('lesson-task-options', standardTransfer)
+    assert.equal(standardOptions.source.sessionId, standard.sessionId)
+    assert.deepEqual(standardOptions.source.gearSources.map(({ tool, name }) => [tool, name]),
+      [['read', '@deepseek-ai/dsh-tool-fs'], ['present', '@deepseek-ai/dsh-tool-present']])
+    assert.ok(standardOptions.workspaceIds.includes(workspaceId))
+    assert.ok([standard, minimal, replay].every(item => !standardOptions.workspaceIds.includes(item.workspaceId)))
+    assert.deepEqual((await invoke('lesson-task-materials', { ...standardTransfer, workspaceId, directory: ownFolder })).entries, listed.entries)
+    await invoke('lesson-task-materials', { ...standardTransfer, workspaceId: standard.workspaceId }, 422)
+    await invoke('lesson-task-preview', { ...selection, ...standardTransfer, workspaceId: standard.workspaceId, material }, 422)
+    const standardSelection = { ...selection, ...standardTransfer }
+    const standardPreview = await invoke('lesson-task-preview', standardSelection)
+    assert.deepEqual(standardPreview.source, standardOptions.source)
+    assert.ok(standardPreview.task.includes(ownMaterial) && standardPreview.task.includes(standardSelection.task))
+    assert.ok(!standardPreview.task.includes(material) && standardPreview.task !== standard.task)
+    const standardFieldsForOwn = { ...standardSelection, token: standardPreview.token, launchId: launchId('9') }
+    const stockTrace = await history(standard.sessionId)
+    const unavailableCard = join(stockTrace.workspacePath, material)
+    const beforeStandardPersonal = await nativeSessions()
+    await appendFile(unavailableCard, '\nChanged after the verified original handoff.\n')
+    assert.equal(byHero(await read(trial.id), 'standard').lessonTaskSource, undefined)
+    assert.equal((await equipmentIn(host, standard.sessionId)).heroTrial.lessonTaskSource, undefined)
+    await invoke('lesson-task-open', standardFieldsForOwn, 422)
+    await writeFile(unavailableCard, materialBytes)
+    assert.deepEqual(await nativeSessions(), beforeStandardPersonal)
+    const standardOwn = await invoke('lesson-task-open', standardFieldsForOwn)
+    assert.notEqual(standardOwn.sessionId, standard.sessionId)
+    assert.notEqual(standardOwn.sessionId, own.sessionId)
+    assert.equal(standardOwn.workspaceId, workspaceId)
+    assert.deepEqual(await nativeSessions(), [...beforeStandardPersonal, standardOwn.sessionId].sort())
+    const stockDraft = await history(standardOwn.sessionId)
+    assert.equal(stockDraft.presetId, 'standard')
+    assert.equal(stockDraft.inherited, 0)
+    assert.ok(!stockDraft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+    assert.deepEqual((await equipmentIn(host, standardOwn.sessionId)).planTask.source, standardOptions.source)
+    await send(standardOwn)
+    const stockPersonal = await history(standardOwn.sessionId)
+    const personalPrompt = stockPersonal.events.find(event => event.type === 'user/message' && event.data.source.kind === 'user')
+    assert.equal(personalPrompt?.data.content[0].text, standardPreview.task)
+    assert.deepEqual(traceTools(stockPersonal).map(event => event.data.name), ['read', 'present'])
+    for (const name of ['read', 'present']) assert.deepEqual(toolSource(stockPersonal, name), toolSource(stockTrace, name))
+    const stockDelivery = stockPersonal.events.find(event => event.type === 'deliverables/presented')
+    assert.equal(stockDelivery?.data.callId, traceTools(stockPersonal).at(-1).data.callId)
+    assert.deepEqual(traceFiles(stockPersonal).map(file => file.path), [await realpath(ownPath)])
+    assert.equal(await readFile(ownPath, 'utf8'), ownContent)
+    const stockResult = await invoke('lesson-task-result', { sessionId: standardOwn.sessionId, review: true })
+    assert.equal(stockResult.materialState, 'verified')
+    assert.equal(stockResult.materialDelivered, true)
+    assert.equal(stockResult.canReview, true)
+    assert.equal(stockResult.draft?.presetId, 'standard')
+    assert.deepEqual(await read(trial.id), replayed)
+
     const summary = await create(launchId('b'), 'summary', 200, 'zh')
     assert.equal(summary.task, trial.task)
     assert.equal(summary.need, 'summary')
@@ -1880,6 +1935,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(await open(trial.id, 'standard'), standard)
     assert.deepEqual(await openReplay(trial.id, replayPreview.token), replay)
     assert.deepEqual(await invoke('lesson-task-open', ownFields), own)
+    assert.deepEqual(await invoke('lesson-task-open', standardFieldsForOwn), standardOwn)
     assert.equal((await read()).id, summary.id)
     const alternateTrial = await create(launchId('e'), 'original')
     const alternate = await open(alternateTrial.id, 'standard')
@@ -1895,6 +1951,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(wrongFile.summary, handoff)
     assert.equal(wrongFile.originalAttached, false)
     assert.equal(wrongFile.meetsNeed, false)
+    assert.equal(wrongFile.lessonTaskSource, undefined)
+    await invoke('lesson-task-options', { ...standardTransfer, comparisonId: alternateTrial.id }, 422)
     const badMinimal = await open(alternateTrial.id, 'minimal')
     await send(badMinimal)
     assert.equal((await shareTrial(alternateTrial.id)).code, challengeCode('lighthouse-hero-handoff-1-en', 'original'))
@@ -1926,6 +1984,19 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(archived.id, trial.id)
     assert.equal(archived.need, 'original')
     assert.deepEqual(byHero(archived, 'standard'), byHero(result, 'standard'))
+    assert.deepEqual(await invoke('lesson-task-options', standardTransfer), standardOptions)
+
+    const preSourceChange = await nativeSessions()
+    await host.stop()
+    await writeFile(patch, JSON.stringify([fixture, { id: 'preset-standard',
+      config: { id: 'standard', plugins: [
+        { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
+        { id: 'present', name: '@deepseek-ai/dsh-tool-present', disabled: true },
+      ] } }]))
+    host = await startHost(env, patch)
+    await invoke('lesson-task-options', standardTransfer, 422)
+    await invoke('lesson-task-preview', standardSelection, 422)
+    assert.deepEqual(await nativeSessions(), preSourceChange)
   } finally {
     await recipient?.stop()
     await host?.stop()
