@@ -3570,7 +3570,7 @@ export async function apply(ctx) {
         buildPlans.read(ref.id, ref.revision)
         const removed = historicalRemovals(candidate, presetEquipment(ecosystem, saved.heroId), ecosystem)
         return { view: { ...view, removed }, draft, candidate, pinned: { ...ref, identity, presetId: saved.presetId, heroId: saved.heroId,
-          planName: saved.name, heroName: saved.heroName } }
+          planName: saved.name, heroName: saved.heroName }, ...(source && { originArm: saved.evidenceOrigin.arm }) }
       } catch (error) {
         return { view: { ...view, reason: error instanceof Error ? error.message : '无法核对当前出装的配置。' } }
       }
@@ -3582,7 +3582,7 @@ export async function apply(ctx) {
     const plans = { left: left.pinned, right: right.pinned }
     const token = createHash('sha256').update(JSON.stringify([inputHash, workspace.path, digest, plans])).digest('hex')
     return { view, record: { workspaceId, workspaceTitle: workspace.title, cwd: workspace.path, material, task, brief, digest, inputHash, plans, token,
-      ...(evidenceRetest && { evidenceRetest }) },
+      ...(source && { evidenceRetest, evidenceRetestSource: { comparisonId: source.id, left: left.originArm, right: right.originArm } }) },
       ecosystem, left, right }
   }
 
@@ -4366,20 +4366,23 @@ export async function apply(ctx) {
   }
 
   function savedEvidenceComparison(plan) {
-    if (!plan.evidenceOrigin) return
+    if (!plan?.evidenceOrigin) return
     const { comparisonId, arm } = plan.evidenceOrigin
     const record = rematchComparisons.read(comparisonId)
     const pinned = arm === 'baseline' ? record?.baseline : record?.loadout
     if (record?.baseline?.evidenceReplay && pinned?.presetId === plan.presetId && pinned.heroId === plan.heroId) return record
   }
 
+  function matchingEvidenceRetest(left, right) {
+    const record = savedEvidenceComparison(left)
+    if (record && savedEvidenceComparison(right) === record && left.evidenceOrigin.arm !== right.evidenceOrigin.arm) return record
+  }
+
   function requireEvidenceRetest(plans) {
     const left = buildPlans.read(plans.left.id, plans.left.revision)
     const right = buildPlans.read(plans.right.id, plans.right.revision)
-    const record = savedEvidenceComparison(left)
-    if (!record || savedEvidenceComparison(right) !== record || left.evidenceOrigin.arm === right.evidenceOrigin.arm) {
-      throw new Error('请选择同一次证据换装两侧保存的方案。')
-    }
+    const record = matchingEvidenceRetest(left, right)
+    if (!record) throw new Error('请选择同一次证据换装两侧保存的方案。')
     return record
   }
 
@@ -4413,6 +4416,40 @@ export async function apply(ctx) {
     return { comparisonId, arm, sessionId: observed.sessionId }
   }
 
+  function originalRetestPair(record) {
+    let reference = record.evidenceRetestSource
+    if (!reference) {
+      // Older retests did not record this link. Recover it only while both saved origins still match.
+      const plans = buildPlans.list()
+      const left = plans.find(plan => plan.id === record.plans.left.id)
+      const right = plans.find(plan => plan.id === record.plans.right.id)
+      const source = matchingEvidenceRetest(left, right)
+      if (!source) return
+      reference = { comparisonId: source.id, left: left.evidenceOrigin.arm, right: right.evidenceOrigin.arm }
+    }
+    const source = rematchComparisons.read(reference.comparisonId)
+    if (!source?.baseline?.evidenceReplay || !planComparisonArms.every(side => {
+      const origin = reference[side] === 'baseline' ? source.baseline : source.loadout
+      return origin.presetId === record.plans[side].presetId && origin.heroId === record.plans[side].heroId
+    })) return
+    return { source, reference }
+  }
+
+  async function readEvidenceRetestOutcome(record, arms, signal) {
+    if (arms.length !== 2 || arms.some(arm => !verifiedEvidenceArm(arm))) return
+    const original = originalRetestPair(record)
+    if (!original) return
+    const { source, reference } = original
+    const { evidenceOutcome } = await readComparisonArms(rematchComparisons, source, signal)
+    if (!evidenceOutcome) return
+    return { source: { kind: 'rematch', comparisonId: source.id, arm: 'rematch', evidenceReplay: true },
+      arms: arms.map(arm => {
+        const { choices, deliverables } = evidenceOutcome.arms.find(item => item.id === reference[arm.id])
+        return { id: arm.id, original: { choices, deliverables },
+          retest: { choices: comparisonChoices(arm), deliverables: arm.deliverables } }
+      }) }
+  }
+
   async function readComparison(comparisons, { comparisonId, sessionId, prototype }, english, signal) {
     let record
     if (sessionId !== undefined) {
@@ -4434,9 +4471,11 @@ export async function apply(ctx) {
       readComparisonArms(comparisons, record, signal),
       material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
     ])
+    const evidenceRetestOutcome = record.evidenceRetest && await readEvidenceRetestOutcome(record, rounds.arms, signal)
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
       ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),
-      ...(record.lesson === evidenceLesson && { scenario: record.scenario }), ...(record.evidenceRetest && { evidenceRetest: true }) }
+      ...(record.lesson === evidenceLesson && { scenario: record.scenario }), ...(record.evidenceRetest && { evidenceRetest: true }),
+      ...(evidenceRetestOutcome && { evidenceRetestOutcome }) }
   }
 
   async function createWorkspaceComparison(comparisons, registry, selection, english, signal) {

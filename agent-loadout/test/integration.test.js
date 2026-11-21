@@ -2230,17 +2230,18 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
       await retestPreview({ ...retest, plans: { ...retest.plans, right: planKey(invalid) } }, 422)
     }
     await retestPreview({ ...retest, workspaceId: sample.workspaceId, material: '02-lighthouse.md' }, 422)
-    const checked = await retestPreview(retest)
+    const reversed = { ...retest, plans: { left: retest.plans.right, right: retest.plans.left } }
+    const checked = await retestPreview(reversed)
     assert.ok(checked.token, JSON.stringify(checked.arms))
     assert.equal(checked.workspaceId, next.workspaceId)
     assert.equal(checked.material, nextMaterial)
     assert.ok(checked.task.includes(retest.task) && !checked.task.includes(qualifiedSession.task))
     assert.deepEqual(checked.arms.map(({ id, planName, status }) => [id, planName, status]), [
-      ['left', savedBaseline.name, 'unopened'], ['right', savedReplay.name, 'unopened'],
+      ['left', savedReplay.name, 'unopened'], ['right', savedBaseline.name, 'unopened'],
     ])
-    assert.ok(checked.comparison.lost.some(item => item.id === 'evidence' || item.name === '证据核验'))
+    assert.ok(checked.comparison.gained.some(item => item.id === 'evidence' || item.name === '证据核验'))
     const editedDraft = { presetId: 'standard', equipmentIds: [] }
-    const edited = { ...retest, draft: editedDraft, plans: { ...retest.plans, left: { ...retest.plans.left, draft: editedDraft } } }
+    const edited = { ...reversed, draft: editedDraft, plans: { ...reversed.plans, right: { ...reversed.plans.right, draft: editedDraft } } }
     assert.deepEqual(await retestPreview(edited), checked)
     const firstRequest = { ...edited, token: checked.token, launchId: launchId('4'), arm: 'left' }
     await retestOpen({ ...firstRequest, plans: { ...firstRequest.plans, right: planKey(otherPair) } }, 422)
@@ -2252,16 +2253,24 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
 
     const left = await retestOpen(firstRequest)
     const comparisonFilter = { comparisonId: left.id }
+    const storedRetestPath = join(dirname(plansDir), 'plan-comparisons', left.id + '.json')
+    const storedRetest = JSON.parse(await readFile(storedRetestPath, 'utf8'))
+    const { evidenceRetestSource: pinnedOrigin, ...legacyRetest } = storedRetest
+    assert.deepEqual(pinnedOrigin, { comparisonId: replay.id, left: 'rematch', right: 'baseline' })
+    const readRetest = () => invoke('plan-comparison', comparisonFilter)
+    const unopened = await readRetest()
+    assert.deepEqual(unopened.arms.map(({ status }) => status), ['waiting', 'unopened'])
+    assert.equal(unopened.evidenceRetestOutcome, undefined)
     const right = await retestOpen({ ...comparisonFilter, arm: 'right' })
     assert.equal(right.id, left.id)
     assert.notEqual(left.sessionId, right.sessionId)
     assert.equal(left.task, checked.task)
     assert.equal(right.task, checked.task)
-    const readRetest = () => invoke('plan-comparison', comparisonFilter)
     const waiting = await readRetest()
     assert.equal(waiting.evidenceRetest, true)
+    assert.equal(waiting.evidenceRetestOutcome, undefined)
     assert.deepEqual(waiting.arms.map(({ status }) => status), ['waiting', 'waiting'])
-    for (const [opened, expected] of [[left, savedBaseline], [right, savedReplay]]) {
+    for (const [opened, expected] of [[left, savedReplay], [right, savedBaseline]]) {
       const draft = await history(opened.sessionId)
       assert.equal(draft.presetId, expected.presetId)
       assert.equal(draft.workspaceId, next.workspaceId)
@@ -2270,23 +2279,37 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     }
     assert.deepEqual(new Set(await retestMembers()), new Set([...beforeRetest, left.sessionId, right.sessionId]))
     assert.deepEqual(await retestOpen(firstRequest), left)
-    await choose(left, labels[1], async () => {
+    await send(left)
+    const oneComplete = await readRetest()
+    assert.deepEqual(oneComplete.arms.map(({ status }) => status), ['complete', 'waiting'])
+    assert.equal(oneComplete.evidenceRetestOutcome, undefined)
+    await choose(right, labels[2], async () => {
       const pending = await readRetest()
-      assert.equal(pending.arms[0].status, 'waiting-choice')
-      assert.equal(pending.arms[1].status, 'waiting')
-      assert.deepEqual(pending.arms[0].pendingQuestions[0].options, labels)
+      assert.equal(pending.arms[0].status, 'complete')
+      assert.equal(pending.arms[1].status, 'waiting-choice')
+      assert.deepEqual(pending.arms[1].pendingQuestions[0].options, labels)
+      assert.equal(pending.evidenceRetestOutcome, undefined)
     })
-    await send(right)
     const completed = await readRetest()
     assert.deepEqual(completed.arms.map(({ status }) => status), ['complete', 'complete'])
-    assert.deepEqual(completed.arms.map(arm => arm.entries.flatMap(entry => entry.choices ?? [])), [[labels[1]], []])
-    assert.deepEqual(completed.arms.map(arm => arm.deliverables.map(item => item.name)), [['qualified-handoff.md'], [replayFile]])
-    for (const [opened, expected] of [[left, savedCases[0]], [right, savedCases[1]]]) {
-      const native = await history(opened.sessionId)
-      assert.deepEqual(usedTools(native).map(event => event.data.name), expected.tools)
-      assert.equal(provider(native), provider(qualified))
-      assert.deepEqual(files(native).flatMap(event => event.data.files.map(item => item.path)), [join(await realpath(newWorkspace), expected.file)])
-    }
+    assert.deepEqual(completed.arms.map(arm => arm.entries.flatMap(entry => entry.choices ?? [])), [[], [labels[2]]])
+    assert.deepEqual(completed.arms.map(arm => arm.deliverables.map(item => item.name)), [[replayFile], []])
+    const retestedDelivery = await history(left.sessionId)
+    assert.deepEqual(usedTools(retestedDelivery).map(event => event.data.name), savedCases[1].tools)
+    assert.equal(provider(retestedDelivery), provider(qualified))
+    assert.deepEqual(files(retestedDelivery).flatMap(event => event.data.files.map(item => item.path)), [join(await realpath(newWorkspace), replayFile)])
+    const retestedPause = await history(right.sessionId)
+    assert.deepEqual(usedTools(retestedPause).map(event => event.data.name), ['read', 'ask_user_question'])
+    assert.deepEqual(files(retestedPause), [])
+    assert.deepEqual(completed.evidenceRetestOutcome, {
+      source: { kind: 'rematch', comparisonId: replay.id, arm: 'rematch', evidenceReplay: true },
+      arms: [
+        { id: 'left', original: { choices: clarification.length ? ['简明摘要'] : [], deliverables: replayArm.deliverables },
+          retest: { choices: [], deliverables: completed.arms[0].deliverables } },
+        { id: 'right', original: { choices: [labels[1]], deliverables: baselineArm.deliverables },
+          retest: { choices: [labels[2]], deliverables: [] } },
+      ],
+    })
     assert.deepEqual(await evidenceHistory(), oldEvidenceHistory)
     assert.equal(await readFile(join(newWorkspace, nextMaterial), 'utf8'), nextBody)
     assert.deepEqual((await planState()).plans, beforeRetestPlans)
@@ -2300,13 +2323,25 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     await retestOpen({ comparisonId: oneArm.id, arm: 'right' }, 422)
     assert.deepEqual(await retestMembers(), beforeStaleArm)
 
+    const renamedBaseline = await invoke('plan-save', { ...planKey(savedBaseline), name: 'Renamed original evidence plan' })
+    assert.notEqual(renamedBaseline.revision, savedBaseline.revision)
+    assert.deepEqual(await readRetest(), completed)
+    await host.stop()
+    await writeFile(storedRetestPath, JSON.stringify(legacyRetest))
+    host = await startHost(env, patch)
+    assert.deepEqual(await readRetest(), completed)
+
     const draft = { presetId: 'standard', equipmentIds: [] }
     const forgery = { evidenceOrigin: { comparisonId: replay.id, arm: 'baseline' }, hasEvidenceOrigin: true }
-    const replaced = await invoke('plan-save', { id: savedBaseline.id, revision: savedBaseline.revision, name: savedBaseline.name, draft, ...forgery })
+    const replaced = await invoke('plan-save', { ...planKey(renamedBaseline), name: renamedBaseline.name, draft, ...forgery })
     assert.notEqual(replaced.presetId, savedBaseline.presetId)
     assertPublicOrigin(replaced, false)
     await planOrigin(savedBaseline, 422)
     await planOrigin(replaced, 422)
+    const { evidenceRetestOutcome, ...withoutOrigin } = await readRetest()
+    assert.equal(evidenceRetestOutcome, undefined)
+    const { evidenceRetestOutcome: expectedOutcome, ...completedRounds } = completed
+    assert.deepEqual(withoutOrigin, completedRounds)
     const ordinary = await invoke('plan-save', { name: 'Ordinary Standard plan', draft, ...forgery })
     assertPublicOrigin(ordinary, false)
     await planOrigin(ordinary, 422)
@@ -2314,6 +2349,10 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     assert.deepEqual(await planOrigin(savedReplay), replayOrigin)
     const retainedOrigins = new Set([savedReplay.id, renamed.id, otherPair.id])
     for (const plan of (await planState()).plans) assertPublicOrigin(plan, retainedOrigins.has(plan.id))
+    await host.stop()
+    await writeFile(storedRetestPath, JSON.stringify(storedRetest))
+    host = await startHost(env, patch)
+    assert.deepEqual((await readRetest()).evidenceRetestOutcome, expectedOutcome)
     assert.deepEqual(await readRetest(), completed)
     assert.deepEqual(await readReplay(), replayProof)
   } finally {
@@ -3381,6 +3420,7 @@ test('saved plan comparisons pin two different native workflows on the same mate
     assert.notEqual(left.sessionId, sessionId)
     const filter = { comparisonId: left.id }
     const openedLeft = await read(filter)
+    assert.equal(openedLeft.evidenceRetestOutcome, undefined)
     assert.equal(armOf(openedLeft, 'left').status, 'waiting')
     assert.equal(armOf(openedLeft, 'right').status, 'unopened')
     const native = async (attempt, expected) => {
@@ -3435,6 +3475,7 @@ test('saved plan comparisons pin two different native workflows on the same mate
       await waiting
     }
     const complete = await read({ sessionId: right.sessionId })
+    assert.equal(complete.evidenceRetestOutcome, undefined)
     const delivered = armOf(complete, 'right')
     assert.equal(delivered.status, 'complete')
     assert.deepEqual(delivered.entries.map(item => [item.name, item.state]), [['ask_user_question', 'completed'], ['present', 'completed']])

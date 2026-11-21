@@ -1479,6 +1479,33 @@ window.__ModuleLoader__.load({
         })))
     }
 
+    function EvidenceRetestRun({ label, run }) {
+      const heading = useId()
+      return h('section', { className: 'moba-lighthouse-artifacts', 'aria-labelledby': heading },
+        h('h5', { id: heading }, t(label)),
+        h(ObservedChoiceSummary, { choices: run.choices }),
+        run.deliverables.length > 0 ? h(Fragment, null,
+          h('p', { className: 'moba-lighthouse-note' }, t('交付文件') + ' · ' + run.deliverables.length),
+          h('ul', null, run.deliverables.map((file, index) => h('li', { key: index }, file.name))))
+          : h('p', { className: 'moba-lighthouse-note' }, t('本局没有交付文件。')))
+    }
+
+    function EvidenceRetestOutcome({ outcome, arms, onViewSource }) {
+      const heading = useId()
+      return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading },
+        h('h3', { id: heading }, t('这次复测有什么变化')),
+        h('div', { className: 'moba-lighthouse-arms' }, outcome.arms.map(arm => {
+          const label = comparisonArmName(comparisonArmConfig('plans', arm.id), arms.find(item => item.id === arm.id) ?? arm)
+          return h('section', { key: arm.id, className: 'moba-lighthouse-arm', 'aria-label': label },
+            h('h4', null, label),
+            h(EvidenceRetestRun, { label: '原实战', run: arm.original }),
+            h(EvidenceRetestRun, { label: '本次复测', run: arm.retest }))
+        })),
+        onViewSource && h('div', { className: 'moba-comparison-previous' },
+          h('button', { type: 'button', className: 'moba-roster-open', 'data-comparison-previous': '',
+            onClick: onViewSource }, h(Glyph, { kind: 'back', size: 15 }), t('查看原实战对照'))))
+    }
+
     function previousComparisonIsValid(reference) {
       if (!reference?.comparisonId || typeof reference.comparisonId !== 'string') return false
       const { kind, arm } = reference
@@ -1649,6 +1676,7 @@ window.__ModuleLoader__.load({
       const [path, setPath] = useState(() => previousComparisonIsValid(initialPrevious) && !sameComparison(origin, initialPrevious) ? [initialPrevious] : [])
       const [returning, setReturning] = useState(false)
       const current = path.at(-1) ?? origin
+      const navigatingFromRetest = kind === 'plans' && path.length === 1 && current.evidenceReplay
 
       function canView(reference) {
         return previousComparisonIsValid(reference) && !sameComparison(origin, reference) && !path.some(item => sameComparison(item, reference))
@@ -1671,7 +1699,8 @@ window.__ModuleLoader__.load({
         focusArm: returning ? undefined : current.arm,
         testedSourceArm: path.length ? undefined : testedSourceArm,
         focusPrevious: returning, canViewPrevious: canView, onPrevious: viewPrevious,
-        backLabel: path.length ? t('返回后一组对照') : backLabel, onBack: path.length ? returnToNewer : onBack })
+        backLabel: path.length ? t(navigatingFromRetest ? '返回本次复测' : '返回后一组对照') : backLabel,
+        onBack: path.length ? returnToNewer : onBack })
     }
 
     function ComparisonBoard({ kind, request, comparisonId, sessionId, onClose, onVisit, putTask, canViewPrevious, lessonHint, evidenceReplayHint,
@@ -1724,6 +1753,7 @@ window.__ModuleLoader__.load({
       const evidenceReplay = kind === 'rematch' && (value?.evidenceReplay ?? evidenceReplayHint)
       const handoff = kind === 'rematch' && !evidenceReplay ? value?.handoffOutcome : undefined
       const evidenceOutcome = evidenceReplay && !testedSourceArm ? value?.evidenceOutcome : undefined
+      const retestOutcome = kind === 'plans' ? value?.evidenceRetestOutcome : undefined
       const task = value?.task
       const lessonMarker = value?.lesson ?? lessonHint
       const lesson = lessonMarker === lighthouseRematchLesson
@@ -1735,7 +1765,8 @@ window.__ModuleLoader__.load({
       const finished = !directLesson && !evidence && value?.arms.every(arm => arm.status === 'complete')
       const setup = kind === 'workspace' && value && !value.id
       const previous = kind === 'rematch' && canViewPrevious(value?.previous) ? value.previous : null
-      const focusSelector = focusPrevious && previous ? '[data-comparison-previous]'
+      const retestSource = retestOutcome && canViewPrevious(retestOutcome.source) ? retestOutcome.source : undefined
+      const focusSelector = focusPrevious && (previous || retestSource) ? '[data-comparison-previous]'
         : value?.arms.some(arm => arm.id === focusArm) ? `[data-comparison-arm="${focusArm}"]` : ''
       const workspaceId = workspaces.some(item => item.workspaceId === selectedWorkspaceId) ? selectedWorkspaceId : ''
       const defaultBrief = value?.defaultTask ?? t('根据这份材料准备一份可交接的成果，简要说明重点，并按当前交付流程处理。')
@@ -1857,6 +1888,8 @@ window.__ModuleLoader__.load({
             onPreserve: onUse && value.id ? arm => setReuse({ id: value.id, arm, handoff: true }) : undefined }),
           evidenceOutcome && h(EvidenceOutcomeSummary, { outcome: evidenceOutcome,
             onPreserve: arm => setReuse({ id: value.id, arm, evidence: true }) }),
+          retestOutcome && h(EvidenceRetestOutcome, { outcome: retestOutcome, arms: value.arms,
+            onViewSource: retestSource ? () => onPrevious(retestSource) : undefined }),
           h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm =>
             h(ComparisonArm, { key: arm.id, arm, config: comparisonArmConfig(kind, arm.id, evidenceReplay), evidenceReplay,
               testedSource: testedSourceArm === arm.id,

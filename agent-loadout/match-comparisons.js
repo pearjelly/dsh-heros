@@ -127,8 +127,12 @@ export function validWorkspaceComparison(record) {
 
 export function validPlanComparison(record) {
   const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+  const source = record.evidenceRetestSource
+  const sourceArms = ['baseline', 'rematch']
   return validWorkspaceComparison(record) && hash(record.inputHash) && hash(record.token) &&
     (record.evidenceRetest === undefined || record.evidenceRetest === true) &&
+    (source === undefined || (record.evidenceRetest === true && comparisonIdValid(source?.comparisonId) &&
+      sourceArms.includes(source.left) && sourceArms.includes(source.right) && source.left !== source.right)) &&
     typeof record.brief === 'string' && record.brief.length > 0 && record.brief.length <= 1200 &&
     planComparisonArms.every(arm => {
       const plan = record.plans?.[arm]
