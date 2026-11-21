@@ -1250,10 +1250,15 @@ window.__ModuleLoader__.load({
       return arm.planName ? label + ' · ' + arm.planName : label
     }
 
+    function canRematchComparisonArm(kind, arm) {
+      return arm.canRematch && (kind === 'workspace' || kind === 'plans' || kind === 'rematch' && arm.id === 'rematch')
+    }
+
     function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart, onReuse, onRematch, outfit }) {
       const files = arm.deliverables ?? empty
       const pendingQuestions = arm.pendingQuestions ?? empty
-      return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status },
+      return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status, 'data-comparison-arm': arm.id, tabIndex: -1,
+        'aria-label': comparisonArmName(config, arm) },
         h('header', null, h(Glyph, { kind: config.icon, size: 20 }),
           h('div', null, h('h3', null, comparisonArmName(config, arm)),
             arm.heroName ? h('small', { className: 'moba-lighthouse-arm-hero' }, arm.heroName)
@@ -1291,10 +1296,39 @@ window.__ModuleLoader__.load({
               h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
+    function rematchGearName(item) {
+      return item && [item.name, item.sourceName].filter(Boolean).join(' · ')
+    }
+
+    function rematchChangeSummary(change) {
+      if (!change) return ''
+      return [
+        change.removed && t('已卸下 ', '已卸下（换装摘要）') + rematchGearName(change.removed),
+        change.added && t('已装上 ') + rematchGearName(change.added),
+      ].filter(Boolean).join(' / ')
+    }
+
     function RematchChangeFacts({ change }) {
       if (!change) return null
-      const name = item => item && [item.name, item.sourceName].filter(Boolean).join(' · ')
-      return h(InstallFacts, { facts: [[t('卸下的装备'), name(change.removed)], [t('装上的装备'), name(change.added)]] })
+      return h(InstallFacts, { facts: [[t('卸下的装备'), rematchGearName(change.removed)], [t('装上的装备'), rematchGearName(change.added)]] })
+    }
+
+    function previousComparisonIsValid(reference) {
+      if (!reference?.comparisonId || typeof reference.comparisonId !== 'string') return false
+      const { kind, arm } = reference
+      if (kind === 'rematch') return arm === 'rematch'
+      return (kind === 'workspace' || kind === 'plans') && comparisonKinds[kind].arms.some(side => side.id === arm)
+    }
+
+    function sameComparison(first, second) {
+      return first.kind === second.kind && first.comparisonId === second.comparisonId
+    }
+
+    function PreviousComparisonLink({ reference, onOpen, buttonRef, disabled }) {
+      return h('div', { className: 'moba-comparison-previous' },
+        h('button', { ref: buttonRef, type: 'button', className: 'moba-roster-open', 'data-comparison-previous': '',
+          onClick: () => onOpen(reference), disabled }, h(Glyph, { kind: 'back', size: 15 }), t('查看上一组对照')),
+        h('p', { className: 'moba-lighthouse-note' }, rematchChangeSummary(reference.change) || t(comparisonKinds[reference.kind].title)))
     }
 
     function MaterialBreadcrumb({ directory, onBrowse }) {
@@ -1444,8 +1478,35 @@ window.__ModuleLoader__.load({
       return item.path && duplicate ? title + ' · ' + item.path : title
     }
 
-    function RunComparison({ kind = 'lighthouse', request, comparisonId, sessionId, onClose, onVisit, putTask,
-      workspaces = empty, initialWorkspaceId, onUse, onHistory, onBack }) {
+    function RunComparison({ kind = 'lighthouse', comparisonId, initialPrevious, onBack, ...props }) {
+      const origin = { kind, comparisonId }
+      const [path, setPath] = useState(() => previousComparisonIsValid(initialPrevious) && !sameComparison(origin, initialPrevious) ? [initialPrevious] : [])
+      const [returning, setReturning] = useState(false)
+      const current = path.at(-1) ?? origin
+
+      function canView(reference) {
+        return previousComparisonIsValid(reference) && !sameComparison(origin, reference) && !path.some(item => sameComparison(item, reference))
+      }
+
+      function viewPrevious(reference) {
+        if (!canView(reference)) return
+        setReturning(false)
+        setPath(items => items.some(item => sameComparison(item, reference)) ? items : [...items, reference])
+      }
+
+      function returnToNewer() {
+        setReturning(true)
+        setPath(items => items.at(-1) === current ? items.slice(0, -1) : items)
+      }
+
+      return h(ComparisonBoard, { ...props, key: current.kind + ':' + current.comparisonId,
+        kind: current.kind, comparisonId: current.comparisonId, focusArm: returning ? undefined : current.arm,
+        focusPrevious: returning, canViewPrevious: canView, onPrevious: viewPrevious,
+        backLabel: path.length ? t('返回后一组对照') : undefined, onBack: path.length ? returnToNewer : onBack })
+    }
+
+    function ComparisonBoard({ kind, request, comparisonId, sessionId, onClose, onVisit, putTask, canViewPrevious,
+      workspaces = empty, initialWorkspaceId, onUse, onHistory, onBack, backLabel, onPrevious, focusArm, focusPrevious }) {
       const language = useLanguage()
       const config = comparisonKinds[kind]
       const personal = kind !== 'lighthouse'
@@ -1492,7 +1553,9 @@ window.__ModuleLoader__.load({
       const task = value?.task
       const finished = value?.arms.every(arm => arm.status === 'complete')
       const setup = kind === 'workspace' && value && !value.id
-      const permitsRematch = kind === 'workspace' || kind === 'plans'
+      const previous = kind === 'rematch' && canViewPrevious(value?.previous) ? value.previous : null
+      const focusSelector = focusPrevious && previous ? '[data-comparison-previous]'
+        : value?.arms.some(arm => arm.id === focusArm) ? `[data-comparison-arm="${focusArm}"]` : ''
       const workspaceId = workspaces.some(item => item.workspaceId === selectedWorkspaceId) ? selectedWorkspaceId : ''
       const defaultBrief = value?.defaultTask ?? t('根据这份材料准备一份可交接的成果，简要说明重点，并按当前交付流程处理。')
       const brief = customBrief ?? defaultBrief
@@ -1565,7 +1628,7 @@ window.__ModuleLoader__.load({
         onBack: () => { returnFocus.current = `[data-rematch-arm="${rematch.arm}"]`; setRematch(null) }, onVisit, onClose })
 
       return h(InstallDialog, { title: t(config.title), className: 'moba-lighthouse-comparison', busy: Boolean(launch),
-        onCancel: onBack ?? onClose, initialFocus: returnFocus.current || '.moba-lighthouse-close',
+        onCancel: onBack ?? onClose, initialFocus: returnFocus.current || focusSelector || '.moba-lighthouse-close',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!starting.current) (onBack ?? onClose)() }) },
         h('p', { className: 'moba-lighthouse-note' }, t(kind === 'workspace'
           ? '用同一份材料试两种交付方式。进入各自会话后，用输入栏手动发送任务。'
@@ -1582,6 +1645,7 @@ window.__ModuleLoader__.load({
             ['工作区', linkedWorkspace ? workspaceTitle(linkedWorkspace) : value.workspaceTitle], ['材料文件相对路径', value.material],
           ].map(([label, text]) => [t(label), text]) }),
           kind === 'rematch' && h(RematchChangeFacts, { change: value.change }),
+          previous && h(PreviousComparisonLink, { reference: previous, onOpen: onPrevious, disabled: Boolean(launch) }),
           personal && value.materialState === 'verified' && h('p', { className: 'moba-lighthouse-note' }, t('材料与本组记录的版本一致。')),
           materialWarning && h('p', { className: 'moba-alert', role: 'status' }, t(materialWarning), ' ',
             !error && h('button', { type: 'button', className: 'moba-text', onClick: refresh }, t('刷新对照'))),
@@ -1594,12 +1658,12 @@ window.__ModuleLoader__.load({
             h(ComparisonArm, { key: arm.id, arm, config: config.arms.find(item => item.id === arm.id), task: materialWarning ? undefined : task, sessionId,
               busy: Boolean(launch), canStart: !materialWarning && (!setup || Boolean(workspaces.length)), onStart: kind === 'rematch' ? undefined : start, onVisit, putTask,
               onReuse: onUse && value.id ? arm => setReuse({ id: value.id, arm }) : undefined,
-              onRematch: permitsRematch && value.id ? arm => setRematch({ id: value.id, arm: arm.id, sessionId: arm.sessionId }) : undefined,
+              onRematch: canRematchComparisonArm(kind, arm) && value.id ? arm => setRematch({ id: value.id, arm: arm.id, sessionId: arm.sessionId }) : undefined,
               onNotice: outcome => setNotice(t(comparisonDraftNotices[outcome] ?? comparisonDraftNotices.blocked)) }))),
           finished && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t('两次尝试已完成，可以回看实际调用和交付。'))),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
           (onBack || onHistory) && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
-            onClick: onBack ?? onHistory }, onBack ? backToRunHistoryLabel() : runHistoryLabel()),
+            onClick: onBack ?? onHistory }, onBack ? backLabel ?? backToRunHistoryLabel() : runHistoryLabel()),
           (kind === 'workspace' || kind === 'lighthouse') && value?.id && !prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
             onClick: () => switchPreview(true) }, t('开始新的对照')),
           prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
@@ -1608,13 +1672,15 @@ window.__ModuleLoader__.load({
             onClick: onClose }, t('关闭同题对照'))))
     }
 
-    function ComparisonHistoryEntry({ item, onOpen, onSource, onReuse, onRematch, storeFocus }) {
+    function ComparisonHistoryEntry({ item, onOpen, onSource, onReuse, onRematch, onPrevious, storeFocus }) {
       const config = comparisonKinds[item.kind]
       const title = item.kind === 'lighthouse' ? t('灯塔补给行动')
         : !item.title || item.title === config.title ? t(config.title) : item.title
       const workspace = item.workspaceTitle && workspaceTitle({ title: item.workspaceTitle })
       const subtitle = [t(config.title), workspace, item.material].filter(text => text && text !== title).join(' · ')
       const time = new Date(item.createdAt)
+      const previous = item.kind === 'rematch' && previousComparisonIsValid(item.previous) &&
+        !sameComparison({ kind: item.kind, comparisonId: item.id }, item.previous) ? item.previous : null
       return h('li', { className: 'moba-history-entry' },
         h('header', null,
           h('div', null, h('h3', null, title),
@@ -1637,14 +1703,16 @@ window.__ModuleLoader__.load({
             h('div', { className: 'moba-history-actions' },
               arm.sessionId && h('button', { type: 'button', className: 'moba-text', onClick: () => onSource(arm.sessionId),
                 'aria-label': t('查看原会话') + ' · ' + label }, t('查看原会话')),
-              (item.kind === 'workspace' || item.kind === 'plans') && arm.canRematch && h('button', {
+              canRematchComparisonArm(item.kind, arm) && h('button', {
                 type: 'button', className: 'moba-text', ref: node => storeFocus('rematch:' + arm.id, node),
                 onClick: () => onRematch(item, arm), 'aria-label': t('换一件再试') + ' · ' + label }, t('换一件再试')),
               arm.canReuse && h('button', { type: 'button', className: 'moba-text', ref: node => storeFocus(arm.id, node),
                 onClick: () => onReuse(item, arm.id), 'aria-label': t('核对并复用出装') + ' · ' + label }, t('核对并复用出装'))))
         })),
-        h('button', { type: 'button', className: 'moba-roster-open', ref: node => storeFocus('board', node),
-          onClick: () => onOpen(item) }, t('查看对照'), h(Glyph, { kind: 'arrow', size: 15 })))
+        h('div', { className: 'moba-history-card-actions' },
+          previous && h(PreviousComparisonLink, { reference: previous, onOpen: () => onPrevious(item), buttonRef: node => storeFocus('previous', node) }),
+          h('button', { type: 'button', className: 'moba-roster-open', ref: node => storeFocus('board', node),
+            onClick: () => onOpen(item) }, t('查看对照'), h(Glyph, { kind: 'arrow', size: 15 }))))
     }
 
     function ComparisonHistory({ request, workspaces, initialWorkspaceId, onClose, onSource, onVisit, onUse, initialKind = 'all' }) {
@@ -1696,8 +1764,12 @@ window.__ModuleLoader__.load({
         setSelection({ id: item.id, kind: item.kind, arm: arm.id, sessionId: arm.sessionId, rematch: true })
       }
 
+      function selectPrevious(item) {
+        setSelection({ id: item.id, kind: item.kind, previous: item.previous })
+      }
+
       function back() {
-        const action = selection.rematch ? 'rematch:' + selection.arm : selection.arm ?? 'board'
+        const action = selection.rematch ? 'rematch:' + selection.arm : selection.previous ? 'previous' : selection.arm ?? 'board'
         const target = [selection.kind, selection.id, action].join(':')
         setSelection(null)
         requestAnimationFrame(() => focus.current.get(target)?.focus())
@@ -1708,7 +1780,7 @@ window.__ModuleLoader__.load({
       if (selection?.arm) return h(ComparisonLoadoutReview, { kind: selection.kind, comparisonId: selection.id,
         arm: selection.arm, request, onBack: back, onClose, onUse })
       if (selection) return h(RunComparison, { kind: selection.kind, comparisonId: selection.id, request,
-        workspaces, initialWorkspaceId, onBack: back, onClose, onVisit, onUse })
+        workspaces, initialWorkspaceId, initialPrevious: selection.previous, onBack: back, onClose, onVisit, onUse })
 
       return h(InstallDialog, { title: runHistoryLabel(), className: 'moba-lighthouse-comparison moba-comparison-history',
         onCancel: onClose, initialFocus: '.moba-comparison-history-query', onKeyDown: event => closeDialogOnEscape(event, onClose) },
@@ -1725,6 +1797,7 @@ window.__ModuleLoader__.load({
             filters.outcome.map(([id, name]) => h('option', { key: id, value: id }, t(name)))))),
         current?.items.length > 0 && h('ul', { className: 'moba-history-list' }, current.items.map(item =>
           h(ComparisonHistoryEntry, { key: item.kind + ':' + item.id, item, onOpen: select, onReuse: select, onRematch: selectRematch,
+            onPrevious: selectPrevious,
             onSource, storeFocus: (arm, node) => {
               const id = [item.kind, item.id, arm].join(':')
               if (node) focus.current.set(id, node)
@@ -1780,6 +1853,7 @@ window.__ModuleLoader__.load({
       const baseline = preview?.baseline ?? options?.baseline
       const originalArm = comparisonKinds[kind].arms.find(item => item.id === arm)
       const baselineName = [baseline?.planName ?? t(originalArm?.name), baseline?.heroName].filter(Boolean).join(' · ')
+      const baselineChange = rematchChangeSummary(baseline?.change)
       const originalItem = preview?.change.removed && equippedById.get(preview.change.removed.id)
       const changeFacts = preview && { ...preview.change, removed: preview.change.removed &&
         { ...preview.change.removed, sourceName: preview.change.removed.sourceName ?? originalItem?.sourceName } }
@@ -1867,7 +1941,7 @@ window.__ModuleLoader__.load({
         busy: working === 'open', onCancel: returnStep, initialFocus: '.moba-rematch-back', onKeyDown: event => closeDialogOnEscape(event, returnStep) },
         options && h(Fragment, null,
           h(InstallFacts, { facts: [[t('原局'), baselineName], [t('工作区'), options.workspaceTitle === 'default-workspace'
-            ? t('默认工作区') : options.workspaceTitle], [t('材料文件相对路径'), options.material]] }),
+            ? t('默认工作区') : options.workspaceTitle], [t('材料文件相对路径'), options.material], [t('基准局的换装'), baselineChange]] }),
           h('div', { className: 'moba-lighthouse-task' },
             h('label', null, t('两边共用的任务'), h('textarea', { readOnly: true, rows: 4, value: preview?.task ?? options.task }))),
           preview ? h(Fragment, null,
@@ -8621,6 +8695,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-comparison button { font: inherit; }
       .moba-lighthouse-comparison :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
       .moba-lighthouse-note { margin: 6px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+      .moba-comparison-previous { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; margin-block: 7px; }
+      .moba-comparison-previous p { margin: 0; }
       .moba-lighthouse-task { display: grid; gap: 5px; align-items: start; margin: 10px 0; padding: 8px;
         border: 1px solid #4b655f; background: #16252b; }
       .moba-lighthouse-task label { display: grid; gap: 5px; color: #b8ded4; font-size: 12px; }
@@ -8687,7 +8763,8 @@ window.__ModuleLoader__.load({
       .moba-history-entry h3 { margin: 0; color: var(--ink); font-size: 15px; }
       .moba-history-entry p, .moba-history-entry time { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
       .moba-history-entry time { flex: none; }
-      .moba-history-entry > button { justify-self: end; }
+      .moba-history-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+      .moba-history-card-actions .moba-comparison-previous { margin-block: 0; margin-inline-end: auto; }
       .moba-history-arms { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); align-items: start; gap: 5px; }
       .moba-history-arms > li { min-width: 0; padding: 5px; border: 1px solid #3d4051; font-size: 12px; }
       .moba-history-state { margin-inline-start: 6px; color: var(--muted); }

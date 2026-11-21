@@ -24,7 +24,7 @@ import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt
 import { matchEvents } from './match-events.js'
 import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } from './match-growth.js'
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
-import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
+import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
 import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
@@ -3554,23 +3554,23 @@ export async function apply(ctx) {
   }
 
   function rematchReference({ kind, comparisonId, arm }) {
-    const comparisons = kind === 'workspace' || kind === 'plans' ? comparisonStores[kind] : undefined
+    const comparisons = validRematchReference({ kind, comparisonId, arm }) ? comparisonStores[kind] : undefined
     const record = comparisons?.read(comparisonId)
-    if (!record || !comparisons.arms.includes(arm)) throw new Error('请选择一局已核验的实战作为原局。')
+    if (!record) throw new Error('请选择一局已核验的实战作为原局。')
     return { comparisons, record, arm }
   }
 
   async function checkedRematchBaseline(selection, signal) {
     const { comparisons, record, arm } = rematchReference(selection)
     const [observed, saved] = await Promise.all([readComparisonArm(comparisons, record, arm, signal), comparisons.readArm(record.id, arm)])
-    if (!saved?.opened || !observed.canReuse) throw new Error('请选择一局已核验的实战作为原局。')
+    if (!saved?.opened || !observed.canRematch) throw new Error('请选择一局已核验的实战作为原局。')
     const { workspaceId, cwd, digest, material, task, workspaceTitle } = record
     const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
     if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
     const materialState = await workspaceMaterialState(record, signal)
     if (materialState !== 'verified') throw new Error(materialState === 'changed' ? '材料已变化，请用现在的文件开始新的对照。'
       : '无法读取所选材料，请核对工作区内的文件路径。')
-    const pinned = record.plans?.[arm]
+    const pinned = record.plans?.[arm] ?? record.loadout
     const heroId = pinned?.heroId ?? records.get(saved.presetId)?.baseId ?? saved.presetId
     const ecosystem = await discover()
     const preset = ecosystem.presets.find(item => item.id === heroId && !item.broken)
@@ -3583,7 +3583,7 @@ export async function apply(ctx) {
     const baseline = { kind: selection.kind, comparisonId: record.id, arm, sessionId: observed.sessionId,
       presetId: saved.presetId, heroId, heroName, identity, ...(pinned && { planName: pinned.planName }) }
     const view = { workspaceId, workspaceTitle: workspace.title ?? workspaceTitle, material, task,
-      baseline: { sessionId: baseline.sessionId, heroName, planName: baseline.planName } }
+      baseline: { sessionId: baseline.sessionId, heroName, planName: baseline.planName, ...(record.change && { change: record.change }) } }
     const brief = record.brief ?? task.split('\n').slice(2, -1).join('\n').trim()
     return { ecosystem, preset, draft, candidate, baseline, view, fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
   }
@@ -3727,7 +3727,8 @@ export async function apply(ctx) {
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material }, receipts)
       const canReuse = reusableComparisonArm(arm, result)
-      const canRematch = canReuse && (comparisons === workspaceComparisons || comparisons === planComparisons)
+      const canRematch = canReuse && materialComparisonStores.includes(comparisons) &&
+        (!comparison.baseline || Boolean(previousComparison(comparison)))
       return { id: arm, ...labels, sessionId, ...result, canReuse, ...(canRematch && { canRematch }) }
     } catch {
       signal?.throwIfAborted()
@@ -3737,23 +3738,35 @@ export async function apply(ctx) {
     }
   }
 
-  async function readRematchBaseline(comparison, signal) {
-    const { kind, comparisonId, arm, sessionId, heroName, planName } = comparison.baseline
+  function previousComparison(comparison) {
+    if (!comparison.baseline) return
+    const { kind, comparisonId, arm, sessionId, presetId, identity } = comparison.baseline
     const comparisons = comparisonStores[kind]
     const original = comparisons.read(comparisonId)
+    if (!original || original === comparison || comparisons.identity(comparisonId, arm).sessionId !== sessionId ||
+      original.cwd !== comparison.cwd || original.digest !== comparison.digest || original.task !== comparison.task ||
+      original.workspaceId !== comparison.workspaceId || original.material !== comparison.material) return
+    const pinned = original.loadout ?? original.plans?.[arm]
+    if (pinned && (pinned.presetId !== presetId || pinned.identity !== identity)) return
+    return { original, comparisons, view: { kind, comparisonId, arm, sessionId, ...(original.change && { change: original.change }) } }
+  }
+
+  async function readRematchBaseline(comparison, previous, signal) {
+    const { arm, sessionId, heroName, planName } = comparison.baseline
     const id = 'baseline'
     const missing = { id, sessionId, heroName, planName, status: 'unavailable', reason: 'session-unavailable' }
-    if (!original || original.cwd !== comparison.cwd || original.digest !== comparison.digest || original.task !== comparison.task ||
-      original.workspaceId !== comparison.workspaceId || original.material !== comparison.material) return missing
+    if (!previous) return missing
+    const { comparisons, original } = previous
     const result = await readComparisonArm(comparisons, original, arm, signal)
     if (sessionId !== result.sessionId) return missing
     return { ...result, id, heroName, planName, canRematch: false }
   }
 
-  function readComparisonArms(comparisons, record, signal) {
+  async function readComparisonArms(comparisons, record, signal) {
+    const previous = previousComparison(record)
     const arms = comparisons.arms.map(arm => readComparisonArm(comparisons, record, arm, signal))
-    if (record.baseline) arms.unshift(readRematchBaseline(record, signal))
-    return Promise.all(arms)
+    if (record.baseline) arms.unshift(readRematchBaseline(record, previous, signal))
+    return { arms: await Promise.all(arms), ...(previous && { previous: previous.view }) }
   }
 
   function comparisonChoices({ entries = [] }) {
@@ -3813,14 +3826,14 @@ export async function apply(ctx) {
       signal?.throwIfAborted()
       const group = matches.slice(inspected, inspected + Math.min(6, pageSize - items.length, scanLimit - inspected))
       const cards = await Promise.all(group.map(async ({ store, record, ...item }) => {
-        const observed = await readComparisonArms(store, record, signal)
+        const { arms: observed, previous } = await readComparisonArms(store, record, signal)
         const arms = observed.map(arm => {
           const { id, status, sessionId, turn, deliverables, reason, continuationReason, canReuse, canRematch, planName, heroName } = arm
           const choices = comparisonChoices(arm)
           return { id, status, sessionId, turn, deliverables, choices, reason, continuationReason, planName, heroName, canReuse: Boolean(canReuse),
             ...(canRematch && { canRematch }), pending: Boolean(arm.pendingQuestions?.length) }
         })
-        return { ...item, arms }
+        return { ...item, arms, ...(previous && { previous }) }
       }))
       inspected += cards.length
       items.push(...cards.filter(item => outcome === 'all' || item.arms.some(arm =>
@@ -3834,7 +3847,7 @@ export async function apply(ctx) {
     const store = Object.hasOwn(comparisonStores, kind) ? comparisonStores[kind] : undefined
     const record = store?.read(comparisonId)
     if (record?.baseline && arm === 'baseline') {
-      const observed = await readRematchBaseline(record, signal)
+      const observed = await readRematchBaseline(record, previousComparison(record), signal)
       if (!observed.canReuse) throw new Error('这局还没有可复用出装的实战记录。')
       return comparisonLoadout(record.baseline, signal)
     }
@@ -3868,7 +3881,9 @@ export async function apply(ctx) {
     try {
       signal?.throwIfAborted()
       const verified = pinned && await verifiedPlanComparisonArm(pinned, ecosystem)
-      if (pinned && verified.identity !== pinned.identity) throw new Error('本机配置已变化，无法核对这局的原出装。')
+      if (pinned && (pinned.presetId !== saved.presetId || verified.identity !== pinned.identity)) {
+        throw new Error('本机配置已变化，无法核对这局的原出装。')
+      }
       const candidate = verified?.candidate ?? await verifyRecordedLoadout(saved.presetId, draft, ecosystem)
       const comparison = await compare(draft, ecosystem, candidate)
       return { ...result, gear: result.gear.map(item => ({ ...item, available: true })), draft, comparison }
@@ -3895,11 +3910,11 @@ export async function apply(ctx) {
       arms: comparisons.arms.map(id => ({ id, status: 'unopened' })) }
     const { id, task, workspaceId, material } = record
     const workspace = material && ctx.get('workspaceRegistry')?.get(workspaceId)
-    const [arms, materialState] = await Promise.all([
+    const [rounds, materialState] = await Promise.all([
       readComparisonArms(comparisons, record, signal),
       material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
     ])
-    return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, arms,
+    return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
       ...(record.change && { change: record.change }) }
   }
 

@@ -5,8 +5,14 @@ import { isAbsolute, join, relative, sep } from 'node:path'
 
 export const workspaceComparisonArms = ['direct', 'review']
 export const planComparisonArms = ['left', 'right']
+const rematchBaselineArms = { workspace: workspaceComparisonArms, plans: planComparisonArms, rematch: ['rematch'] }
 export const comparisonIdValid = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id)
 export const materialProofRecord = 'plugin:dsh-agent-loadout/comparison-material'
+
+export function validRematchReference({ kind, comparisonId, arm }) {
+  return typeof kind === 'string' && Object.hasOwn(rematchBaselineArms, kind) &&
+    rematchBaselineArms[kind].includes(arm) && comparisonIdValid(comparisonId)
+}
 
 function comparisonHash(namespace, ...parts) {
   return createHash('sha256').update(JSON.stringify([namespace, ...parts])).digest('hex').slice(0, 32)
@@ -122,8 +128,7 @@ export function validRematchComparison(record) {
   const pinned = item => item && [item.presetId, item.heroId, item.heroName].every(value => typeof value === 'string' && Boolean(value)) &&
     /^[a-f0-9]{24}$/.test(item.identity)
   return validWorkspaceComparison(record) && pinned(baseline) && pinned(loadout) &&
-    ['workspace', 'plans'].includes(baseline.kind) && comparisonIdValid(baseline.comparisonId) &&
-    (baseline.kind === 'plans' ? planComparisonArms : workspaceComparisonArms).includes(baseline.arm) &&
+    validRematchReference(baseline) && (baseline.kind !== 'rematch' || baseline.comparisonId !== record.id) &&
     /^session-[a-f0-9]{32}$/.test(baseline.sessionId) && /^[a-f0-9]{64}$/.test(inputHash) && /^[a-f0-9]{64}$/.test(token) &&
     edit && change && (edit.addId !== undefined || edit.removeId !== undefined) &&
     (edit.removeId === undefined ? change.removed === undefined : label(change.removed) && change.removed.id === edit.removeId) &&
