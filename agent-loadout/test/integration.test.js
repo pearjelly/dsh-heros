@@ -1266,6 +1266,9 @@ test('shared plans resolve in a fresh profile without saving or copying private 
     const encode = (plan, revision = plan.revision, status) =>
       invoke(sender, 'plan-share-export', { id: plan.id, revision }, status)
     const decode = (code, status) => invoke(receiver, 'plan-share-preview', { code }, status)
+    const options = (code, slot, query, status) =>
+      invoke(receiver, 'plan-share-options', { code, slot, query }, status)
+    const adapt = (code, choices, status) => invoke(receiver, 'plan-share-adapt', { code, choices }, status)
 
     const { draft } = await invoke(sender, 'field-playbook-preview', { id: 'review' })
     const review = await invoke(sender, 'plan-save', { name: 'Reviewed delivery', draft })
@@ -1328,6 +1331,40 @@ test('shared plans resolve in a fresh profile without saving or copying private 
     assert.deepEqual(new Set(preview.gear.map(item => item.operation)), new Set(['equip', 'remove']))
     assert.deepEqual(preview.comparison.gained.find(item => item.id === 'review').decisions.map(([label]) => label),
       ['确认交付', '退回修改'])
+
+    const oldVersion = '0.0.0'
+    const olderHero = { ...portable.hero, owner: { ...portable.hero.owner, version: oldVersion } }
+    const versionCode = shareText({ ...portable, hero: olderHero,
+      gear: portable.gear.map(item => item.operation === 'remove' ? { ...item, source: { ...item.source, hero: olderHero } } : item),
+      dependencies: portable.dependencies.map(item => ({ ...item, version: oldVersion })),
+    })
+    const versionMismatch = await decode(versionCode)
+    assert.equal(versionMismatch.blocked, true)
+    assert.ok(versionMismatch.adaptation?.hero)
+    const removedSlot = versionMismatch.adaptation.slots.find(item => item.operation === 'remove').slot
+    const versionOptions = await options(versionCode, removedSlot)
+    const localRemoval = versionOptions.choices.find(item => receiverReview.draft.removedEquipmentIds.includes(item.id))
+    assert.ok(localRemoval)
+    const localVersions = await adapt(versionCode, [{ slot: removedSlot, id: localRemoval.id }])
+    assert.equal(localVersions.adapted, true)
+    assert.deepEqual([...localVersions.draft.equipmentIds].sort(), [...receiverReview.draft.equipmentIds].sort())
+    assert.deepEqual(localVersions.draft.removedEquipmentIds, receiverReview.draft.removedEquipmentIds)
+    assert.ok(localVersions.dependencyChanges.some(item => item.previousVersion === oldVersion &&
+      item.version === portable.hero.owner.version && item.state === 'changed'))
+
+    const missingRemovalCode = shareText({ ...portable, gear: portable.gear.map(item => item.operation === 'remove'
+      ? { ...item, source: { ...item.source, entry: 'missing-old-present-slot' } } : item) })
+    const missingRemoval = await decode(missingRemovalCode)
+    const oldSlot = missingRemoval.adaptation.slots.find(item => item.operation === 'remove').slot
+    const previewSlot = portable.gear.findIndex(item => item.id === 'present')
+    const conflicting = await adapt(missingRemovalCode, [{ slot: oldSlot, skip: true }, { slot: previewSlot, id: 'present' }])
+    assert.equal(conflicting.blocked, true)
+    assert.equal(conflicting.draft, undefined)
+    assert.match(conflicting.reason, /无法核对要保留的自带装备/)
+    const retained = await adapt(missingRemovalCode, [{ slot: oldSlot, skip: true }, { slot: previewSlot, skip: true }])
+    assert.deepEqual(retained.draft.equipmentIds, ['review'])
+    assert.deepEqual(retained.draft.removedEquipmentIds, [])
+
     assert.deepEqual(await state(receiver), receiverBefore)
     assert.deepEqual(await state(sender), senderBefore)
 
@@ -1375,12 +1412,65 @@ test('shared plans resolve in a fresh profile without saving or copying private 
     const external = JSON.parse(Buffer.from(foreignShare.code.slice('DSHH1.'.length), 'base64url').toString('utf8'))
     assert.deepEqual(external.gear[0].source.owner, { package: senderPackage, version: '1.0.0' })
     const beforeExternal = await state(receiver)
+    const receiverManifest = join(receiverEnv.DSH_HOME, 'profiles/web/package.json')
+    const installedPackages = await readFile(receiverManifest, 'utf8')
     const missing = await decode(foreignShare.code)
     assert.equal(missing.draft, undefined)
     assert.equal(missing.blocked, true)
     assert.ok(missing.dependencies.some(item => item.name === senderPackage && item.state === 'missing'))
     assert.ok(missing.gear.some(item => item.name === 'fixture_equal_schema' && item.state === 'different'))
+    const row = missing.adaptation.slots.find(item => item.name === 'fixture_equal_schema')
+    assert.ok(row?.required)
+    const { slot } = row
+    const alternatives = await options(foreignShare.code, slot, 'fixture_equal_schema')
+    assert.equal(alternatives.canSkip, true)
+    const recommended = alternatives.choices.find(item => item.id === unrelated.id && item.sourceId === unrelated.sourceId)
+    assert.ok(recommended, JSON.stringify(alternatives))
+    assert.equal(recommended.version, '1.0.0')
+    assert.ok(recommended.sourceName)
+    const changedSchema = shareText({ ...external, gear: external.gear.map(item => ({ ...item, schema: 'tool:ffffffffffff' })) })
+    const interfaceChange = (await options(changedSchema, slot, 'fixture_equal_schema')).choices.find(item =>
+      item.id === unrelated.id && item.sourceId === unrelated.sourceId)
+    assert.match(interfaceChange?.note, /接口有变化/)
+    assert.deepEqual((await options(foreignShare.code, slot, 'no-matching-fixture-name')).choices, [])
+    await options(foreignShare.code, -1, '', 422)
+    const unresolvedChoice = await adapt(foreignShare.code, [])
+    assert.equal(unresolvedChoice.draft, undefined)
+    assert.ok(unresolvedChoice.blocked || unresolvedChoice.unresolved?.length)
+    const choice = { slot, id: unrelated.id, sourceId: unrelated.sourceId }
+    await adapt(foreignShare.code, [{ ...choice, sourceId: source.sourceId }], 422)
+    await adapt(foreignShare.code, [choice, choice], 422)
+    await adapt(foreignShare.code, [{ ...choice, skip: true }], 422)
+    const skipped = await adapt(foreignShare.code, [{ slot, skip: true }])
+    assert.equal(skipped.adapted, true)
+    assert.deepEqual(skipped.draft?.equipmentIds, [])
+    assert.ok(skipped.dependencyChanges.some(item => item.name === senderPackage && item.state === 'removed'))
+    const repaired = await adapt(foreignShare.code, [choice])
+    assert.equal(repaired.adapted, true)
+    assert.ok(repaired.comparison)
+    assert.deepEqual(repaired.draft?.equipmentSources, { [unrelated.id]: unrelated.sourceId })
+    assert.ok(repaired.changes?.length)
+    assert.ok(repaired.dependencyChanges.some(item => item.name === senderPackage && item.state === 'removed'))
+    assert.ok(repaired.dependencyChanges.some(item => item.name === receiverPackage && item.state === 'added'))
+    const workflow = (await options(foreignShare.code, slot, '确认交付')).choices.find(item => item.id === 'review')
+    assert.deepEqual(workflow?.decisions.map(([label]) => label), ['确认交付', '退回修改'])
+    const revised = await adapt(foreignShare.code, [{ slot, id: workflow.id }])
+    assert.deepEqual(revised.draft?.equipmentIds, ['review'])
+    const reviewEffect = revised.comparison.gained.find(item => item.id === 'review')
+    assert.deepEqual(reviewEffect?.decisions.map(([label]) => label), ['确认交付', '退回修改'])
+    const deliverable = await adapt(foreignShare.code, [{ slot, id: 'present' }])
+    assert.deepEqual(deliverable.draft?.removedEquipmentIds, receiverReview.draft.removedEquipmentIds)
+    assert.equal(deliverable.additionalRemovals.length, 1)
     assert.deepEqual(await state(receiver), beforeExternal)
+    assert.equal(await readFile(receiverManifest, 'utf8'), installedPackages)
+
+    const localPlan = await invoke(receiver, 'plan-save', { name: 'Local replacement', draft: repaired.draft })
+    const localSession = await receiver.request('/api/loadout-fixture-session', { presetId: localPlan.presetId })
+    await invoke(receiver, 'verify-live', { sessionId: localSession.sessionId, presetId: localPlan.presetId })
+    const reshared = await invoke(receiver, 'plan-share-export', { id: localPlan.id, revision: localPlan.revision })
+    const localRecipe = JSON.parse(Buffer.from(reshared.code.slice('DSHH1.'.length), 'base64url').toString('utf8'))
+    assert.deepEqual(localRecipe.gear[0].source.owner, { package: receiverPackage, version: '1.0.0' })
+    assert.equal((await decode(foreignShare.code)).blocked, true)
 
     await receiver.stop()
     await packageAction('remove', receiverPackage, receiverDir, receiverEnv)

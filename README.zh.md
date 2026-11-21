@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.70.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.71.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -42,3 +42,5 @@ dsh web
 在 **出装方案** 里选一套已保存的阵容，点击 **分享方案** 获取分享码。分享码包含方案名、英雄和装备来源、卸下的自带装备以及所需的插件版本。方案说明和个人配置留在本机。需要接收方重新配置的本地文件或自定义装备会在导出时提示。
 
 接收方在 **出装方案 → 导入分享码** 核对来源和能力变化。缺件、版本不同或同名工具的来源不同，都会标出来。核对通过后可以采用为大厅草稿，再像平时一样锁定阵容或保存为自己的方案。
+
+遇到缺件或版本不符时，可以在 **比较本机换装** 中选择已安装装备，也可以留空。对照会标明工具接口、随装依赖和工作选择的变化。例如，加上 **交付前复核** 后，模型在明确交接前会提示你确认交付或退回修改。确认采用后更新大厅草稿，也可以把换好的阵容重新保存和分享。
