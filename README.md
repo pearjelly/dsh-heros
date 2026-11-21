@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.85.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.86.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -48,6 +48,12 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 1. Open **View task result** in the original personal session. When the run has verified material, choose **Try one gear change**, then add, remove, or swap one piece of gear and review the change.
 2. Open the rematch in the same workspace and manually send the prepared task. The task and material carry over. Open the two original sessions to compare actual tool calls, any DSH question-card choices, and the files each session delivered.
 3. If the file has changed or the run was opened in v0.82 or v0.83 without a material check, choose **Rerun baseline with current material**. Select the current file or another material, review the original task brief and edit it if needed, then manually send from the new baseline session. You can still view the earlier result in its original session.
+
+## Try a review step before delivery
+
+1. After a Standard Mode direct delivery run actually delivers your selected file, open **Try one gear change** from its task result. **Try Delivery Review** appears when the original material is still verified and the review gear can be added while keeping the original delivery tool and source.
+2. Choose **Try Delivery Review** to preview adding just that piece of gear. Review the changes, then choose **Open rematch session** and manually send the same task in DSH.
+3. Compare the original delivery with the rematch. The rematch records what you chose on the DSH question card. A successful delivery after approval shows its actual attachment. If you request changes, check the recorded choice and whether a file was delivered in the rematch.
 
 ## Try one gear change
 
