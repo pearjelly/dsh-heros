@@ -1442,6 +1442,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
   const patch = join(directory, 'fixture.yml')
   const fixture = { insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }
   const material = '02-lighthouse.md'
+  const sample = 'lighthouse-hero-handoff-1-zh'
   const handoff = 'Handoff: Collect 2 cans of lamp oil and 1 signal flag at the second-floor lookout. Source: 02-lighthouse.md.'
   let host
   let recipient
@@ -1463,7 +1464,10 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const previewReplay = (comparisonId, status) => invoke('hero-trial-replay-preview', { comparisonId }, status)
     const openReplay = (comparisonId, token, status) => invoke('hero-trial-replay-open', { comparisonId, token }, status)
     const shareTrial = (comparisonId, status) => invoke('hero-trial-challenge-share', { comparisonId }, status)
+    const shareHandoff = (comparisonId, arm, status) => invoke('hero-trial-handoff-report', { comparisonId, arm }, status)
+    const compareHandoff = (comparisonId, arm, code, status) => invoke('hero-trial-handoff-compare', { comparisonId, arm, code }, status)
     const challengeCode = (sample, need) => 'DSHC2.' + Buffer.from(JSON.stringify({ sample, need })).toString('base64url')
+    const reportCode = fields => 'DSHR1.' + Buffer.from(JSON.stringify(fields)).toString('base64url')
     const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
     const send = ({ sessionId, task, requestId }) => host.request(turnEndpoint, { sessionId, text: task, requestId })
     const byHero = (trial, hero) => trial.arms.find(arm => arm.id === hero)
@@ -1476,8 +1480,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       return [source.data.id, source.data.sourceId]
     }
     const launchId = value => value.repeat(32)
-    const nativeSessions = async () => {
-      const entries = await readdir(join(env.DSH_HOME, 'sessions'), { recursive: true, withFileTypes: true }).catch(error => {
+    const nativeSessions = async (home = env.DSH_HOME) => {
+      const entries = await readdir(join(home, 'sessions'), { recursive: true, withFileTypes: true }).catch(error => {
         if (error.code === 'ENOENT') return []
         throw error
       })
@@ -1505,6 +1509,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     await open(launchId('d'), 'standard', 422)
     await previewReplay(trial.id, 422)
     await shareTrial(trial.id, 422)
+    await shareHandoff(trial.id, 'standard', 422)
     assert.deepEqual(await nativeSessions(), beforeSessions)
 
     const [standard, sameStandard] = await Promise.all([open(trial.id, 'standard'), open(trial.id, 'standard')])
@@ -1515,6 +1520,9 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(await nativeSessions(), [...beforeSessions, standard.sessionId, minimal.sessionId].sort())
     const drafts = new Map()
     const waiting = await read(trial.id)
+    const standardFields = { sample, need: 'original', arm: 'standard', originalAttached: true }
+    await shareHandoff(trial.id, 'standard', 422)
+    await compareHandoff(trial.id, 'standard', reportCode(standardFields), 422)
     for (const [hero, opened] of [['standard', standard], ['minimal', minimal]]) {
       assert.equal(opened.id, trial.id)
       assert.equal(opened.task, trial.task)
@@ -1541,6 +1549,12 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.notEqual(between.canReplayMinimalDelivery, true)
     await previewReplay(trial.id, 422)
     await shareTrial(trial.id, 422)
+    const senderHandoff = await shareHandoff(trial.id, 'standard')
+    const standardOutcome = { arm: 'standard', originalAttached: true, meetsNeed: true }
+    assert.deepEqual(senderHandoff, { need: 'original', local: standardOutcome, code: reportCode(standardFields) })
+    assert.deepEqual(JSON.parse(Buffer.from(senderHandoff.code.slice('DSHR1.'.length), 'base64url').toString('utf8')), standardFields)
+    await shareHandoff(trial.id, 'minimal', 422)
+    await shareHandoff(trial.id, 'ptc', 422)
     await send(minimal)
     const result = await read(trial.id)
     for (const [hero, opened] of [['standard', standard], ['minimal', minimal]]) {
@@ -1567,7 +1581,6 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       assert.deepEqual(arm.entries.map(item => [item.name, item.state]), names.map(name => [name, 'completed']))
     }
 
-    const sample = 'lighthouse-hero-handoff-1-zh'
     const { code } = await shareTrial(trial.id)
     assert.equal(code, challengeCode(sample, 'original'))
     const payload = JSON.parse(Buffer.from(code.slice('DSHC2.'.length), 'base64url').toString('utf8'))
@@ -1628,6 +1641,9 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(await readFile(join(recipientDraft.workspacePath, material)), materialBytes)
     const recipientTrial = () => receive('hero-trial', { comparisonId: joined.id })
     assert.deepEqual((await recipientTrial()).arms.map(({ id, status }) => [id, status]), [['standard', 'unopened'], ['minimal', 'waiting']])
+    const recipientHandoff = (action, arm, fields, status) => receive(action, { comparisonId: joined.id, arm, ...fields }, status)
+    await recipientHandoff('hero-trial-handoff-report', 'minimal', {}, 422)
+    await recipientHandoff('hero-trial-handoff-compare', 'minimal', { code: senderHandoff.code }, 422)
     await recipient.request(turnEndpoint, { ...joined, text: joined.task })
     const recipientRound = await recipientHistory()
     assert.equal(recipientRound.events.find(event => event.type === 'user/message' && event.data.source.kind === 'user')?.data.content[0].text, trial.task)
@@ -1642,6 +1658,25 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(await joinChallenge(receiverLaunch), joined)
     assert.equal((await recipientSessions()).length, 1)
     await receive('hero-trial-challenge-share', { comparisonId: joined.id }, 422)
+    const reportSessions = await nativeSessions()
+    const recipientReportSessions = await nativeSessions(recipientEnv.DSH_HOME)
+    const friendHandoff = await recipientHandoff('hero-trial-handoff-report', 'minimal')
+    const minimalOutcome = { arm: 'minimal', originalAttached: false, meetsNeed: false }
+    const friendFields = { sample, need: 'original', arm: 'minimal', originalAttached: false }
+    assert.deepEqual(friendHandoff, { need: 'original', local: minimalOutcome, code: reportCode(friendFields) })
+    assert.deepEqual(JSON.parse(Buffer.from(friendHandoff.code.slice('DSHR1.'.length), 'base64url').toString('utf8')), friendFields)
+    assert.deepEqual(await compareHandoff(trial.id, 'standard', friendHandoff.code),
+      { need: 'original', local: standardOutcome, friend: minimalOutcome })
+    assert.deepEqual(await recipientHandoff('hero-trial-handoff-compare', 'minimal', { code: senderHandoff.code }),
+      { need: 'original', local: minimalOutcome, friend: standardOutcome })
+    for (const changes of [{ sample: 'lighthouse-hero-handoff-1-en' }, { need: 'summary' }, { arm: 'ptc' },
+      { originalAttached: 'yes' }, { status: 'complete' }, { sessionId: joined.sessionId }]) {
+      await compareHandoff(trial.id, 'standard', reportCode({ ...friendFields, ...changes }), 422)
+    }
+    await recipientHandoff('hero-trial-handoff-report', 'standard', {}, 422)
+    assert.deepEqual(await nativeSessions(), reportSessions)
+    assert.deepEqual(await nativeSessions(recipientEnv.DSH_HOME), recipientReportSessions)
+    assert.deepEqual(await recipientTrial(), received)
     assert.deepEqual(await read(trial.id), result)
     await recipient.stop()
     recipient = undefined
@@ -1669,6 +1704,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const originalCard = join(original.workspacePath, material)
     await appendFile(originalCard, '\nChanged after reviewing the replay.\n')
     assert.notEqual((await read(trial.id)).canReplayMinimalDelivery, true)
+    await shareHandoff(trial.id, 'minimal', 422)
     await previewReplay(trial.id, 422)
     await openReplay(trial.id, replayPreview.token, 422)
     assert.deepEqual(await nativeSessions(), [...beforeSessions, standard.sessionId, minimal.sessionId].sort())
@@ -1698,6 +1734,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(replayWaiting.minimalReplay.status, 'waiting')
     assert.equal(replayWaiting.minimalReplay.summary, undefined)
     assert.equal(replayWaiting.minimalReplay.lessonTaskSource, undefined)
+    await shareHandoff(trial.id, 'minimal-present', 422)
     await invoke('lesson-task-options', transfer, 422)
 
     await send(replay)
@@ -1723,6 +1760,9 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(replayed.minimalReplay.deliverables.map(file => file.name), [material])
     assert.deepEqual(replayed.minimalReplay.entries.map(item => [item.name, item.state]), [['bash', 'completed'], ['present', 'completed']])
     assert.deepEqual(replayed.minimalReplay.lessonTaskSource, transfer)
+    const equippedOutcome = { arm: 'minimal-present', originalAttached: true, meetsNeed: true }
+    assert.deepEqual(await shareHandoff(trial.id, 'minimal-present'), { need: 'original', local: equippedOutcome,
+      code: reportCode({ ...standardFields, arm: 'minimal-present' }) })
     await open(trial.id, 'minimal-present', 422)
 
     const ownWorkspace = join(directory, 'personal-ledger')

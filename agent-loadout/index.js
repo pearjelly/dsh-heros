@@ -10,7 +10,7 @@ import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, 
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
 import { openBuildPlans, planTaskPrompt } from './build-plans.js'
-import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseHeroChallenge, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseHeroChallenge, isLighthouseHeroChallenge, lighthouseChallengeName } from './build-sharing.js'
+import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, isLighthouseHeroChallenge, lighthouseChallengeName } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
 import { customActionStore } from './custom-actions.js'
@@ -1601,19 +1601,40 @@ export async function apply(ctx) {
     return openLighthouseLesson({ launchId: challengeId, scenario: 'gap', openingChoice }, english, signal, evidenceLesson, presetId)
   }
 
-  function completedHeroChallenge(arms) {
-    return arms.every(arm => arm.status === 'complete' && arm.materialState === 'verified' &&
-      arm.materialRead === true && Boolean(arm.summary))
+  function verifiedHeroHandoff(arm) {
+    return arm.status === 'complete' && arm.materialState === 'verified' &&
+      arm.materialRead === true && Boolean(arm.summary) && typeof arm.originalAttached === 'boolean'
   }
 
   async function shareHeroChallenge({ comparisonId }, signal) {
     const record = heroTrials.read(comparisonId)
     if (!record) throw new Error('请先完成并核验两位英雄的试玩。')
     const arms = await Promise.all(lighthouseHeroArms.map(arm => readHeroTrialArm(record, arm, signal)))
-    if (!completedHeroChallenge(arms)) throw new Error('请先完成并核验两位英雄的试玩。')
+    if (!arms.every(verifiedHeroHandoff)) throw new Error('请先完成并核验两位英雄的试玩。')
     signal?.throwIfAborted()
     const language = record.task === lighthouseHeroTask(true) ? 'en' : 'zh'
     return { code: encodeLighthouseHeroChallenge(language, record.need) }
+  }
+
+  async function heroHandoffReport({ comparisonId, arm, code }, signal, compare = false) {
+    const record = heroTrials.read(comparisonId)
+    const language = record?.task === lighthouseHeroTask(true) ? 'en'
+      : record?.task === lighthouseHeroTask(false) ? 'zh' : undefined
+    const unavailable = '请先完成这局灯塔交接，再核对战报。'
+    if (!language || !heroTrials.arms.includes(arm)) throw new Error(unavailable)
+    const { need } = record
+    const friend = compare ? decodeLighthouseHeroReport(code) : undefined
+    if (friend && (friend.language !== language || friend.need !== need)) {
+      throw new Error('这份战报的题目语言或接班需求与本局不同。')
+    }
+    const local = await readHeroTrialArm(record, arm, signal)
+    signal?.throwIfAborted()
+    if (!verifiedHeroHandoff(local)) throw new Error(unavailable)
+    const result = { arm, originalAttached: local.originalAttached, meetsNeed: local.meetsNeed }
+    return compare
+      ? { need, local: result, friend: { arm: friend.arm, originalAttached: friend.originalAttached,
+        meetsNeed: need === 'summary' || friend.originalAttached } }
+      : { need, local: result, code: encodeLighthouseHeroReport(language, need, arm, local.originalAttached) }
   }
 
   async function previewHeroChallenge(code, signal) {
@@ -4922,7 +4943,7 @@ export async function apply(ctx) {
     const [standard, minimal, replay] = await Promise.all(heroTrials.arms.map(arm => readHeroTrialArm(record, arm, signal)))
     const lessonTaskSource = heroDeliveryLessonSource(record, minimal, replay)
     return { id, need, task, material: lighthouseHeroMaterial, arms: [standard, minimal],
-      ...(completedHeroChallenge([standard, minimal]) && { canShareHeroChallenge: true }),
+      ...([standard, minimal].every(verifiedHeroHandoff) && { canShareHeroChallenge: true }),
       ...(replay.status !== 'unopened' ? { minimalReplay: { ...replay, ...(lessonTaskSource && { lessonTaskSource }) } }
         : canReplayHeroDelivery(record, minimal) && { canReplayMinimalDelivery: true }) }
   }
@@ -6150,6 +6171,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-evidence-open') value = await openLighthouseLesson(selection, english, request.signal, evidenceLesson)
         else if (selection?.action === 'lighthouse-challenge-share') value = await shareLighthouseChallenge(selection, request.signal)
         else if (selection?.action === 'hero-trial-challenge-share') value = await shareHeroChallenge(selection, request.signal)
+        else if (selection?.action === 'hero-trial-handoff-report') value = await heroHandoffReport(selection, request.signal)
+        else if (selection?.action === 'hero-trial-handoff-compare') value = await heroHandoffReport(selection, request.signal, true)
         else if (selection?.action === 'lighthouse-challenge-preview') {
           value = isLighthouseHeroChallenge(selection.code) ? await previewHeroChallenge(selection.code, request.signal)
             : (await checkLighthouseChallenge(selection.code, request.signal, selection.useLocal === true)).preview

@@ -1,4 +1,4 @@
-import { lighthouseHeroNeeds } from './lighthouse.js'
+import { lighthouseHeroArms, lighthouseHeroDelivery, lighthouseHeroNeeds } from './lighthouse.js'
 
 const prefix = 'DSHH1.'
 const codeLimit = 16_384
@@ -186,4 +186,38 @@ export function decodeLighthouseHeroChallenge(value) {
     // Only canonical recipes for bundled public tasks can be replayed.
   }
   throw new Error(invalidChallenge)
+}
+
+const heroReportPrefix = 'DSHR1.'
+const heroReportLimit = 192
+const invalidHeroReport = '英雄战报码无效或版本不受支持。'
+
+export function encodeLighthouseHeroReport(language, need, arm, originalAttached) {
+  if (!Object.hasOwn(heroChallengeSamples, language) || !lighthouseHeroNeeds.includes(need) ||
+    (!lighthouseHeroArms.includes(arm) && arm !== lighthouseHeroDelivery) || typeof originalAttached !== 'boolean') {
+    throw new Error(invalidHeroReport)
+  }
+  const sample = heroChallengeSamples[language]
+  return heroReportPrefix + Buffer.from(JSON.stringify({ sample, need, arm, originalAttached })).toString('base64url')
+}
+
+export function decodeLighthouseHeroReport(code) {
+  if (typeof code !== 'string' || code.length > heroReportLimit || !code.startsWith(heroReportPrefix)) {
+    throw new Error(invalidHeroReport)
+  }
+  const payload = code.slice(heroReportPrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidHeroReport)
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (shape(data, ['sample', 'need', 'arm', 'originalAttached'])) {
+      const { sample, need, arm, originalAttached } = data
+      const language = Object.keys(heroChallengeSamples).find(key => heroChallengeSamples[key] === sample)
+      if (language && encodeLighthouseHeroReport(language, need, arm, originalAttached) === code) {
+        return { language, need, arm, originalAttached }
+      }
+    }
+  } catch {
+    // Only canonical reports on a versioned public sample can be compared.
+  }
+  throw new Error(invalidHeroReport)
 }

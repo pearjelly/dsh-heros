@@ -1690,6 +1690,114 @@ window.__ModuleLoader__.load({
           h('p', { className: 'moba-lighthouse-note', style: { whiteSpace: 'pre-wrap' } }, arm.summary)))
     }
 
+    const heroHandoffReportCodeLimit = 192
+
+    function HeroHandoffReport({ report, comparisonId, request, onBack }) {
+      const language = useLanguage()
+      const [input, setInput] = useState('')
+      const [result, setResult] = useState(null)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [busy, setBusy] = useState(false)
+      const pending = useRef(null)
+      const field = useRef(null)
+      const heading = useRef(null)
+      const share = report.mode === 'share'
+      const shareAction = 'hero-trial-handoff-report'
+      const compareAction = 'hero-trial-handoff-compare'
+
+      useEffect(() => () => pending.current?.abort(), [])
+      useEffect(() => {
+        if (!share) return
+        const abort = new AbortController()
+        setResult(null)
+        setError('')
+        request(shareAction, { action: shareAction, comparisonId, arm: report.arm }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setResult(value) })
+          .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
+        return () => abort.abort()
+      }, [share, request, comparisonId, report.arm, language])
+      useEffect(() => { if (!share && result) heading.current?.focus() }, [share, result])
+
+      async function check(event) {
+        event.preventDefault()
+        const code = input.trim()
+        if (pending.current || !code) return
+        setResult(null)
+        if (input.length > heroHandoffReportCodeLimit || !/^DSHR1\.[A-Za-z0-9_-]+$/.test(code)) {
+          setError(t('英雄战报码无效或版本不受支持。'))
+          field.current?.focus()
+          return
+        }
+        const abort = new AbortController()
+        pending.current = abort
+        setBusy(true)
+        setError('')
+        try {
+          const value = await request(compareAction, { action: compareAction, comparisonId, arm: report.arm, code },
+            abort.signal, language)
+          if (!abort.signal.aborted) setResult(value)
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setBusy(false)
+        }
+      }
+
+      async function copy() {
+        try {
+          await navigator.clipboard.writeText(result.code)
+          setNotice(t('战报码已复制。'))
+        } catch {
+          field.current?.focus()
+          field.current?.select()
+          setNotice(t('战报码已选中，可以手动复制。'))
+        }
+      }
+
+      function renderSide(side, title) {
+        const hero = side.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === side.arm)
+        return h('article', { className: 'moba-lighthouse-arm moba-handoff-report-side', 'data-met': side.meetsNeed },
+          h('header', null, h(HeroArt, { id: side.arm === minimalDeliveryReplayArm.id ? 'minimal' : side.arm, art: hero.art,
+            className: 'moba-starter-hero' }), h('h4', null, t(title), h('span', null, t(hero.name)))),
+          h('dl', { className: 'moba-handoff-report-facts' },
+            h('dt', null, t('补给卡原件')), h('dd', null, t(side.originalAttached ? '已附上' : '未附上')),
+            h('dt', null, t('接班需求')), h('dd', null, t(side.meetsNeed ? '符合' : '未满足'))))
+      }
+
+      const title = share ? '分享这局战报' : '对照好友战报'
+      const comparison = result?.friend
+      const need = result && heroTrialNeeds.find(item => item.id === result.need)
+      return h(InstallDialog, { title: t(title), className: 'moba-lighthouse-comparison moba-starter-dialog',
+        onCancel: onBack, initialFocus: share ? '.moba-challenge-back' : '.moba-share-code',
+        onKeyDown: event => closeDialogOnEscape(event, onBack) },
+        h('form', { onSubmit: check },
+          h('div', { className: 'moba-plan-fields moba-share-fields' },
+            h('p', { className: 'moba-starter-note' }, t(share
+              ? '战报码只包含公开题目版本、接班需求、出装和是否附上原件。'
+              : '粘贴同一题、同一接班需求的战报码，看看两套出装交接得怎么样。')),
+            share && result?.code && h('label', null, t('战报码'),
+              h('textarea', { ref: field, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
+                spellCheck: false, onFocus: event => event.currentTarget.select() })),
+            !share && h('label', null, t('好友战报码'),
+              h('textarea', { className: 'moba-share-code', ref: field, value: input, rows: 3, maxLength: heroHandoffReportCodeLimit + 1,
+                readOnly: busy, spellCheck: false,
+                autoComplete: 'off', autoCapitalize: 'off', onChange: event => { setInput(event.target.value); setResult(null); setError('') } })),
+            (busy || share && !result && !error) && h('p', { role: 'status' }, t('正在核对战报…')),
+            error && h('p', { className: 'moba-alert', role: 'alert' }, error),
+            result && h('section', { className: 'moba-handoff-outcome' },
+              h('h3', { ref: heading, tabIndex: -1 }, t('接班人需要什么？'), ' ', t(need.name)),
+              h('div', { className: 'moba-lighthouse-arms moba-handoff-report-grid' },
+                renderSide(result.local, '本机核对的交接'), comparison && renderSide(comparison, '好友分享的交接')),
+              comparison && h('p', { className: 'moba-lighthouse-note' }, t('可以打开自己的原会话核对细节。好友的交接来自对方提供的战报码。'))),
+            notice && h('p', { role: 'status', className: 'moba-empty' }, notice)),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-challenge-back', onClick: onBack }, t('返回')),
+            share ? result?.code && h('button', { type: 'button', className: 'moba-start', onClick: copy }, t('复制战报码'))
+              : h('button', { type: 'submit', className: 'moba-start', disabled: busy || !input.trim() }, t('对照这两局')))))
+    }
+
     function MinimalDeliveryReplay({ request, comparisonId, onBack, onVisit }) {
       const language = useLanguage()
       const [checked, setChecked] = useState(null)
@@ -1760,6 +1868,7 @@ window.__ModuleLoader__.load({
       const [replayOpen, setReplayOpen] = useState(false)
       const [personalSource, setPersonalSource] = useState(null)
       const [sharing, setSharing] = useState(false)
+      const [handoffReport, setHandoffReport] = useState(null)
       const mutation = useRef(false)
       const launchIds = useRef(new Map())
       const taskField = useRef(null)
@@ -1877,13 +1986,29 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (shareButton.current ?? heading.current)?.focus())
       }
 
+      function closeHandoffReport() {
+        setHandoffReport(null)
+        requestAnimationFrame(() => {
+          const opener = handoffReport?.opener
+          const target = opener?.isConnected ? opener : heading.current
+          target?.focus()
+        })
+      }
+
       function renderArm(arm, config, extraResult) {
         const equipped = arm.id === minimalDeliveryReplayArm.id
+        const reportable = arm.status === 'complete' && arm.materialState === 'verified' &&
+          arm.materialRead === true && Boolean(arm.summary) && typeof arm.originalAttached === 'boolean'
         return h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
           onStart: equipped ? undefined : open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
           onLessonTask: equipped ? item => setPersonalSource(item.lessonTaskSource) : undefined,
           lessonTaskButton: equipped ? personalButton : undefined,
-          onNotice: status => setNotice(t(comparisonDraftNotices[status])), result: h(Fragment, null, h(HeroTrialResult, { arm }), extraResult) })
+          onNotice: status => setNotice(t(comparisonDraftNotices[status])), result: h(Fragment, null, h(HeroTrialResult, { arm }), extraResult,
+            reportable && h('div', { className: 'moba-comparison-previous' },
+              h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
+                onClick: event => setHandoffReport({ mode: 'share', arm: arm.id, opener: event.currentTarget }) }, t('分享这局战报')),
+              h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
+                onClick: event => setHandoffReport({ mode: 'compare', arm: arm.id, opener: event.currentTarget }) }, t('对照好友战报')))) })
       }
 
       const finished = value?.arms.length > 0 && value.arms.every(arm => arm.status === 'complete')
@@ -1944,6 +2069,7 @@ window.__ModuleLoader__.load({
         replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: activeId, onBack: closeReplay,
           onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
         sharing && h(LighthouseChallengeShare, { comparisonId: activeId, request, heroTrial: true, onBack: closeSharing }),
+        handoffReport && h(HeroHandoffReport, { report: handoffReport, comparisonId: activeId, request, onBack: closeHandoffReport }),
         personalSource && h(LessonLoadoutTask, { source: personalSource, workspaces, request, backLabel: '返回试玩对照',
           onBack: closePersonalTask, onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }))
     }
@@ -10612,6 +10738,13 @@ window.__ModuleLoader__.load({
       .moba-handoff-outcome .moba-lighthouse-arms { margin: 6px 0 0; }
       .moba-handoff-outcome .moba-lighthouse-note { margin: 0; }
       .moba-handoff-outcome .moba-lighthouse-arm footer { justify-content: start; align-self: end; }
+      .moba-handoff-report-grid { grid-template-columns: repeat(auto-fit, minmax(min(206px, 100%), 1fr)); }
+      .moba-handoff-report-side header { align-items: center; }
+      .moba-handoff-report-side header span:not(.moba-starter-hero) { display: block; color: var(--muted); font-weight: 500; }
+      .moba-handoff-report-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; margin: 0; }
+      .moba-handoff-report-facts dd { margin: 0; overflow-wrap: anywhere; }
+      .moba-handoff-report-side[data-met="true"] dd:last-child { color: #afddc0; }
+      .moba-handoff-report-side[data-met="false"] dd:last-child { color: #efc3a4; }
       .moba-lighthouse-comparison > .moba-market-actions { position: sticky; inset-block-end: 0; background: #171c27; padding-block: 4px; }
       .moba-lighthouse-anchor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
         gap: 3px 7px; padding: 6px 8px; margin-block-end: 5px; border: 1px solid #607d78; background: #192c33; color: #f3e9d2; font-size: 12px; }
