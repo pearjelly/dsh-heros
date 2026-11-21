@@ -2258,9 +2258,13 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     const { evidenceRetestSource: pinnedOrigin, ...legacyRetest } = storedRetest
     assert.deepEqual(pinnedOrigin, { comparisonId: replay.id, left: 'rematch', right: 'baseline' })
     const readRetest = () => invoke('plan-comparison', comparisonFilter)
+    const readNote = (arm, status) => invoke('evidence-retest-note', { ...comparisonFilter, arm }, status)
+    const saveNote = (arm, fields, status) => invoke('evidence-retest-note-save', { ...comparisonFilter, arm, ...fields }, status)
     const unopened = await readRetest()
     assert.deepEqual(unopened.arms.map(({ status }) => status), ['waiting', 'unopened'])
     assert.equal(unopened.evidenceRetestOutcome, undefined)
+    await readNote('right', 422)
+    await saveNote('left', { revision: savedReplay.revision, note: 'An unfinished retest' }, 422)
     const right = await retestOpen({ ...comparisonFilter, arm: 'right' })
     assert.equal(right.id, left.id)
     assert.notEqual(left.sessionId, right.sessionId)
@@ -2289,6 +2293,7 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
       assert.equal(pending.arms[1].status, 'waiting-choice')
       assert.deepEqual(pending.arms[1].pendingQuestions[0].options, labels)
       assert.equal(pending.evidenceRetestOutcome, undefined)
+      await readNote('left', 422)
     })
     const completed = await readRetest()
     assert.deepEqual(completed.arms.map(({ status }) => status), ['complete', 'complete'])
@@ -2305,16 +2310,44 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
       source: { kind: 'rematch', comparisonId: replay.id, arm: 'rematch', evidenceReplay: true },
       arms: [
         { id: 'left', original: { choices: clarification.length ? ['简明摘要'] : [], deliverables: replayArm.deliverables },
-          retest: { choices: [], deliverables: completed.arms[0].deliverables } },
+          retest: { choices: [], deliverables: completed.arms[0].deliverables }, canEditPlanNote: true },
         { id: 'right', original: { choices: [labels[1]], deliverables: baselineArm.deliverables },
-          retest: { choices: [labels[2]], deliverables: [] } },
+          retest: { choices: [labels[2]], deliverables: [] }, canEditPlanNote: true },
       ],
     })
     assert.deepEqual(await evidenceHistory(), oldEvidenceHistory)
     assert.equal(await readFile(join(newWorkspace, nextMaterial), 'utf8'), nextBody)
     assert.deepEqual((await planState()).plans, beforeRetestPlans)
 
-    const alternateInput = { ...retest, plans: { ...retest.plans, left: planKey(sameArm) } }
+    const planNote = ({ id, revision, name, note }) => ({ id, revision, name, note })
+    const initialLeftNote = await readNote('left')
+    assert.deepEqual(initialLeftNote, { ...planNote(savedReplay), note: '' })
+    assert.deepEqual(await readNote('right'), planNote(savedBaseline))
+    await readNote('baseline', 422)
+    await saveNote('baseline', { revision: savedReplay.revision, note: 'Invalid side' }, 422)
+    await saveNote('left', { revision: savedBaseline.revision, note: 'Revision for the other side' }, 422)
+    await saveNote('left', { revision: savedReplay.revision }, 422)
+    const leftNoteText = '材料齐全时直接交付。\n保留原台账，另生成交接说明。'
+    const leftUpdate = await saveNote('left', { revision: initialLeftNote.revision, note: leftNoteText,
+      id: savedBaseline.id, name: 'Attempted rename', draft: { presetId: 'standard', equipmentIds: [] } })
+    const savedLeftNote = await readNote('left')
+    assert.deepEqual(leftUpdate, savedLeftNote)
+    assert.notEqual(savedLeftNote.revision, initialLeftNote.revision)
+    assert.deepEqual(savedLeftNote, { ...initialLeftNote, revision: savedLeftNote.revision, note: leftNoteText })
+    await saveNote('left', { revision: initialLeftNote.revision, note: 'Stale revision cannot overwrite the note' }, 422)
+    assert.deepEqual(await readNote('left'), savedLeftNote)
+    assert.deepEqual(await readNote('right'), planNote(savedBaseline))
+    const notedReplay = (await planState()).plans.find(plan => plan.id === savedReplay.id)
+    const initialReplayCard = beforeRetestPlans.find(plan => plan.id === savedReplay.id)
+    assert.deepEqual(notedReplay, { ...initialReplayCard, ...savedLeftNote, updatedAt: notedReplay.updatedAt })
+    await planOrigin(savedReplay, 422)
+    assert.deepEqual(await planOrigin(notedReplay), replayOrigin)
+    assert.deepEqual(await readRetest(), completed)
+    assert.deepEqual(await history(left.sessionId), retestedDelivery)
+    assert.deepEqual(await history(right.sessionId), retestedPause)
+    assert.deepEqual(await readReplay(), replayProof)
+
+    const alternateInput = { ...retest, plans: { left: planKey(sameArm), right: planKey(notedReplay) } }
     const alternate = await retestPreview(alternateInput)
     const oneArm = await retestOpen({ ...alternateInput, token: alternate.token, launchId: launchId('5'), arm: 'left' })
     const renamed = await invoke('plan-save', { ...planKey(sameArm), name: 'Renamed alternate evidence arm' })
@@ -2325,19 +2358,33 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
 
     const renamedBaseline = await invoke('plan-save', { ...planKey(savedBaseline), name: 'Renamed original evidence plan' })
     assert.notEqual(renamedBaseline.revision, savedBaseline.revision)
+    assert.deepEqual(await readNote('right'), planNote(renamedBaseline))
+    await saveNote('right', { revision: savedBaseline.revision, note: 'Stale after a genuine rename' }, 422)
+    const cleared = await saveNote('right', { revision: renamedBaseline.revision, note: '' })
+    assert.deepEqual(await readNote('right'), { ...planNote(renamedBaseline), revision: cleared.revision, note: '' })
+    const rightNoteText = '材料缺少关键证据时暂缓提交，等待台账核验。'
+    await saveNote('right', { revision: cleared.revision, note: rightNoteText })
+    const savedRightNote = await readNote('right')
+    assert.notEqual(savedRightNote.revision, renamedBaseline.revision)
+    assert.deepEqual(savedRightNote, { ...planNote(renamedBaseline), revision: savedRightNote.revision, note: rightNoteText })
+    assert.deepEqual(await planOrigin(savedRightNote), baselineOrigin)
     assert.deepEqual(await readRetest(), completed)
     await host.stop()
     await writeFile(storedRetestPath, JSON.stringify(legacyRetest))
     host = await startHost(env, patch)
     assert.deepEqual(await readRetest(), completed)
+    assert.deepEqual(await readNote('left'), savedLeftNote)
+    assert.deepEqual(await readNote('right'), savedRightNote)
 
     const draft = { presetId: 'standard', equipmentIds: [] }
     const forgery = { evidenceOrigin: { comparisonId: replay.id, arm: 'baseline' }, hasEvidenceOrigin: true }
-    const replaced = await invoke('plan-save', { ...planKey(renamedBaseline), name: renamedBaseline.name, draft, ...forgery })
+    const replaced = await invoke('plan-save', { ...savedRightNote, draft, ...forgery })
     assert.notEqual(replaced.presetId, savedBaseline.presetId)
     assertPublicOrigin(replaced, false)
     await planOrigin(savedBaseline, 422)
     await planOrigin(replaced, 422)
+    await readNote('right', 422)
+    await saveNote('right', { revision: replaced.revision, note: 'A replacement is a different recipe' }, 422)
     const { evidenceRetestOutcome, ...withoutOrigin } = await readRetest()
     assert.equal(evidenceRetestOutcome, undefined)
     const { evidenceRetestOutcome: expectedOutcome, ...completedRounds } = completed
@@ -2346,15 +2393,23 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     assertPublicOrigin(ordinary, false)
     await planOrigin(ordinary, 422)
     assert.deepEqual(await retestOptions(ordinary), { alternatives: [], workspaceIds: [] })
-    assert.deepEqual(await planOrigin(savedReplay), replayOrigin)
+    assert.deepEqual(await planOrigin(notedReplay), replayOrigin)
     const retainedOrigins = new Set([savedReplay.id, renamed.id, otherPair.id])
     for (const plan of (await planState()).plans) assertPublicOrigin(plan, retainedOrigins.has(plan.id))
     await host.stop()
     await writeFile(storedRetestPath, JSON.stringify(storedRetest))
     host = await startHost(env, patch)
-    assert.deepEqual((await readRetest()).evidenceRetestOutcome, expectedOutcome)
-    assert.deepEqual(await readRetest(), completed)
+    assert.deepEqual(await readNote('left'), savedLeftNote)
+    await readNote('right', 422)
+    const persistedRetest = await readRetest()
+    assert.equal(persistedRetest.evidenceRetestOutcome.arms[0].canEditPlanNote, true)
+    assert.equal(persistedRetest.evidenceRetestOutcome.arms[1].canEditPlanNote, undefined)
+    const { id, original: formerResult, retest: newerResult } = expectedOutcome.arms[1]
+    assert.deepEqual(persistedRetest, { ...completed,
+      evidenceRetestOutcome: { ...expectedOutcome, arms: [expectedOutcome.arms[0], { id, original: formerResult, retest: newerResult }] } })
     assert.deepEqual(await readReplay(), replayProof)
+    assert.deepEqual(await history(left.sessionId), retestedDelivery)
+    assert.deepEqual(await history(right.sessionId), retestedPause)
   } finally {
     await host?.stop()
     await rm(directory, { recursive: true, force: true })
@@ -3476,6 +3531,8 @@ test('saved plan comparisons pin two different native workflows on the same mate
     }
     const complete = await read({ sessionId: right.sessionId })
     assert.equal(complete.evidenceRetestOutcome, undefined)
+    await invoke('evidence-retest-note', { ...filter, arm: 'right' }, 422)
+    await invoke('evidence-retest-note-save', { ...filter, arm: 'right', revision: reviewPlan.revision, note: 'An ordinary comparison' }, 422)
     const delivered = armOf(complete, 'right')
     assert.equal(delivered.status, 'complete')
     assert.deepEqual(delivered.entries.map(item => [item.name, item.state]), [['ask_user_question', 'completed'], ['present', 'completed']])

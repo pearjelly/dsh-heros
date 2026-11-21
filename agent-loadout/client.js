@@ -1490,7 +1490,9 @@ window.__ModuleLoader__.load({
           : h('p', { className: 'moba-lighthouse-note' }, t('本局没有交付文件。')))
     }
 
-    function EvidenceRetestOutcome({ outcome, arms, onViewSource }) {
+    const evidenceRetestNoteLabel = '记下适用情形'
+
+    function EvidenceRetestOutcome({ outcome, arms, onViewSource, onEditNote, savedNoteArm }) {
       const heading = useId()
       return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading },
         h('h3', { id: heading }, t('这次复测有什么变化')),
@@ -1499,11 +1501,78 @@ window.__ModuleLoader__.load({
           return h('section', { key: arm.id, className: 'moba-lighthouse-arm', 'aria-label': label },
             h('h4', null, label),
             h(EvidenceRetestRun, { label: '原实战', run: arm.original }),
-            h(EvidenceRetestRun, { label: '本次复测', run: arm.retest }))
+            h(EvidenceRetestRun, { label: '本次复测', run: arm.retest }),
+            savedNoteArm === arm.id && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t('已保存方案备注。')),
+            arm.canEditPlanNote && h('footer', null,
+              h('button', { type: 'button', className: 'moba-roster-open', 'data-retest-note': arm.id,
+                'aria-label': t(evidenceRetestNoteLabel) + ' · ' + label, 'aria-haspopup': 'dialog',
+                onClick: () => onEditNote(arm.id) }, t(evidenceRetestNoteLabel))))
         })),
         onViewSource && h('div', { className: 'moba-comparison-previous' },
           h('button', { type: 'button', className: 'moba-roster-open', 'data-comparison-previous': '',
             onClick: onViewSource }, h(Glyph, { kind: 'back', size: 15 }), t('查看原实战对照'))))
+    }
+
+    function EvidenceRetestNote({ comparisonId, arm, request, onCancel, onSaved }) {
+      const [plan, setPlan] = useState(null)
+      const [note, setNote] = useState('')
+      const [error, setError] = useState('')
+      const [saving, setSaving] = useState(false)
+      const pending = useRef(null)
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'evidence-retest-note'
+        request(action, { action, comparisonId, arm }, abort.signal)
+          .then(value => {
+            if (abort.signal.aborted) return
+            setNote(value.note)
+            setPlan(value)
+          })
+          .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
+        return () => {
+          abort.abort()
+          pending.current?.abort()
+        }
+      }, [request, comparisonId, arm])
+
+      function close() {
+        if (!pending.current) onCancel()
+      }
+
+      async function save(event) {
+        event.preventDefault()
+        if (!plan || pending.current || note === plan.note) return
+        const abort = pending.current = new AbortController()
+        const action = 'evidence-retest-note-save'
+        setSaving(true)
+        setError('')
+        try {
+          const result = await request(action, { action, comparisonId, arm, revision: plan.revision, note }, abort.signal)
+          if (!abort.signal.aborted) onSaved(result)
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setSaving(false)
+        }
+      }
+
+      return h(InstallDialog, { title: t(evidenceRetestNoteLabel), className: 'moba-lighthouse-comparison', busy: saving,
+        onCancel: close, initialFocus: plan ? '.moba-retest-note-field' : '.moba-retest-note-cancel',
+        onKeyDown: event => closeDialogOnEscape(event, close) },
+        h('form', { className: 'moba-plan-form', onSubmit: save },
+          h('div', { className: 'moba-plan-fields' },
+            !plan && !error && h('p', { className: 'moba-empty', role: 'status' }, t('正在读取方案备注…')),
+            plan && h(Fragment, null,
+              h('p', { className: 'moba-plan-note' }, h('strong', null, plan.name)),
+              h('label', null, t('方案备注'), h('textarea', { className: 'moba-retest-note-field', rows: 4,
+                maxLength: 240, value: note, disabled: saving, onChange: event => setNote(event.target.value) }))),
+            error && h('p', { className: 'moba-alert', role: 'alert' }, error)),
+          h('footer', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-retest-note-cancel', disabled: saving, onClick: close }, t('取消')),
+            h('button', { type: 'submit', className: 'moba-start', disabled: !plan || saving || note === plan.note },
+              t(saving ? '正在保存…' : '保存备注')))))
     }
 
     function previousComparisonIsValid(reference) {
@@ -1704,7 +1773,8 @@ window.__ModuleLoader__.load({
     }
 
     function ComparisonBoard({ kind, request, comparisonId, sessionId, onClose, onVisit, putTask, canViewPrevious, lessonHint, evidenceReplayHint,
-      workspaces = empty, initialWorkspaceId, onUse, onEvidenceSaved, onHistory, onBack, backLabel, onPrevious, focusArm, focusPrevious, testedSourceArm }) {
+      workspaces = empty, initialWorkspaceId, onUse, onEvidenceSaved, onEvidenceNoteSaved, onHistory, onBack, backLabel, onPrevious,
+      focusArm, focusPrevious, testedSourceArm }) {
       const language = useLanguage()
       const config = comparisonKinds[kind]
       const personal = kind !== 'lighthouse'
@@ -1716,6 +1786,8 @@ window.__ModuleLoader__.load({
       const [launch, setLaunch] = useState('')
       const [reuse, setReuse] = useState(null)
       const [rematch, setRematch] = useState(null)
+      const [noteTarget, setNoteTarget] = useState(null)
+      const [savedNoteArm, setSavedNoteArm] = useState('')
       const [lessonTask, setLessonTask] = useState(null)
       const [lessonLaunchOpen, setLessonLaunchOpen] = useState(false)
       const starting = useRef(false)
@@ -1836,6 +1908,17 @@ window.__ModuleLoader__.load({
         retry(value => value + 1)
       }
 
+      function closeRetestNote() {
+        returnFocus.current = `[data-retest-note="${noteTarget.arm}"]`
+        setNoteTarget(null)
+      }
+
+      if (noteTarget) return h(EvidenceRetestNote, { ...noteTarget, request,
+        onCancel: closeRetestNote, onSaved: plan => {
+          setSavedNoteArm(noteTarget.arm)
+          closeRetestNote()
+          void onEvidenceNoteSaved?.(plan)
+        } })
       if (reuse) return h(ComparisonLoadoutReview, { kind, comparisonId: reuse.id, arm: reuse.arm, request,
         onBack: () => {
           const preserve = reuse.evidence ? 'data-evidence-preserve' : reuse.handoff ? 'data-handoff-preserve' : undefined
@@ -1889,7 +1972,8 @@ window.__ModuleLoader__.load({
           evidenceOutcome && h(EvidenceOutcomeSummary, { outcome: evidenceOutcome,
             onPreserve: arm => setReuse({ id: value.id, arm, evidence: true }) }),
           retestOutcome && h(EvidenceRetestOutcome, { outcome: retestOutcome, arms: value.arms,
-            onViewSource: retestSource ? () => onPrevious(retestSource) : undefined }),
+            onViewSource: retestSource ? () => onPrevious(retestSource) : undefined,
+            onEditNote: arm => setNoteTarget({ comparisonId: value.id, arm }), savedNoteArm }),
           h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm =>
             h(ComparisonArm, { key: arm.id, arm, config: comparisonArmConfig(kind, arm.id, evidenceReplay), evidenceReplay,
               testedSource: testedSourceArm === arm.id,
@@ -1966,7 +2050,7 @@ window.__ModuleLoader__.load({
             onClick: () => onOpen(item) }, t(evidence ? '查看取舍记录' : '查看对照'), h(Glyph, { kind: 'arrow', size: 15 }))))
     }
 
-    function ComparisonHistory({ request, workspaces, initialWorkspaceId, onClose, onSource, onVisit, onUse, onEvidenceSaved,
+    function ComparisonHistory({ request, workspaces, initialWorkspaceId, onClose, onSource, onVisit, onUse, onEvidenceSaved, onEvidenceNoteSaved,
       initialKind = 'all', scope }) {
       const language = useLanguage()
       const [query, setQuery] = useState('')
@@ -2043,7 +2127,7 @@ window.__ModuleLoader__.load({
       if (selection) return h(RunComparison, { kind: selection.kind, comparisonId: selection.id, request,
         workspaces, initialWorkspaceId, initialPrevious: selection.previous, lessonHint: selection.lesson,
         evidenceReplayHint: selection.evidenceReplay, onBack: back,
-        backLabel: evidenceHistory ? t('返回证据换装记录') : undefined, onClose, onVisit, onUse, onEvidenceSaved })
+        backLabel: evidenceHistory ? t('返回证据换装记录') : undefined, onClose, onVisit, onUse, onEvidenceSaved, onEvidenceNoteSaved })
 
       return h(InstallDialog, { title: evidenceHistory ? t('证据换装记录') : runHistoryLabel(),
         className: 'moba-lighthouse-comparison moba-comparison-history',
@@ -6095,6 +6179,7 @@ window.__ModuleLoader__.load({
             initialKind: runHistory === evidenceReplayScope ? 'rematch' : runHistory,
             scope: runHistory === evidenceReplayScope ? evidenceReplayScope : undefined,
             onEvidenceSaved: plan => planChanged('create', plan),
+            onEvidenceNoteSaved: plan => planChanged('edit', plan),
             onClose: closeRunHistory, onUse: adoptComparisonLoadout, onSource: sessionId => {
               setRunHistory('')
               openSource(sessionId)

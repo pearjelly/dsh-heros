@@ -4435,19 +4435,53 @@ export async function apply(ctx) {
     return { source, reference }
   }
 
-  async function readEvidenceRetestOutcome(record, arms, signal) {
+  async function verifiedEvidenceRetest(record, arms, signal) {
     if (arms.length !== 2 || arms.some(arm => !verifiedEvidenceArm(arm))) return
     const original = originalRetestPair(record)
     if (!original) return
     const { source, reference } = original
     const { evidenceOutcome } = await readComparisonArms(rematchComparisons, source, signal)
     if (!evidenceOutcome) return
+    return { source, reference, evidenceOutcome }
+  }
+
+  function planForRetestNote(record, reference, arm, plans) {
+    const pinned = record.plans[arm]
+    return plans.find(plan => plan.id === pinned.id && plan.presetId === pinned.presetId && plan.heroId === pinned.heroId &&
+      plan.evidenceOrigin?.comparisonId === reference.comparisonId && plan.evidenceOrigin.arm === reference[arm])
+  }
+
+  async function readEvidenceRetestOutcome(record, arms, signal) {
+    const verified = await verifiedEvidenceRetest(record, arms, signal)
+    if (!verified) return
+    const { source, reference, evidenceOutcome } = verified
+    const plans = buildPlans.list()
     return { source: { kind: 'rematch', comparisonId: source.id, arm: 'rematch', evidenceReplay: true },
       arms: arms.map(arm => {
         const { choices, deliverables } = evidenceOutcome.arms.find(item => item.id === reference[arm.id])
-        return { id: arm.id, original: { choices, deliverables },
-          retest: { choices: comparisonChoices(arm), deliverables: arm.deliverables } }
+        const canEditPlanNote = planForRetestNote(record, reference, arm.id, plans)
+        return { id: arm.id, original: { choices, deliverables }, retest: { choices: comparisonChoices(arm), deliverables: arm.deliverables },
+          ...(canEditPlanNote && { canEditPlanNote: true }) }
       }) }
+  }
+
+  async function evidenceRetestNote({ comparisonId, arm, revision, note }, signal, save = false) {
+    const record = planComparisons.read(comparisonId)
+    const unavailable = '这份方案已变化，无法从本次复测修改适用情形。'
+    if (!record?.evidenceRetest || !planComparisonArms.includes(arm)) throw new Error(unavailable)
+    const { arms } = await readComparisonArms(planComparisons, record, signal)
+    const verified = await verifiedEvidenceRetest(record, arms, signal)
+    let plan = verified && planForRetestNote(record, verified.reference, arm, buildPlans.list())
+    if (!plan) throw new Error(unavailable)
+    signal?.throwIfAborted()
+    if (save) {
+      if (closed) throw new Error('配装服务正在关闭，请重试。')
+      if (typeof note !== 'string') throw new Error('使用说明最多 240 字。')
+      plan = await buildPlans.write({ id: plan.id, revision, name: plan.name, note })
+      updates.notify()
+    }
+    const { id, revision: currentRevision, name, note: currentNote } = plan
+    return { id, revision: currentRevision, name, note: currentNote }
   }
 
   async function readComparison(comparisons, { comparisonId, sessionId, prototype }, english, signal) {
@@ -5757,6 +5791,10 @@ export async function apply(ctx) {
           value = await readPlanEvidenceOrigin(selection, request.signal)
         } else if (selection?.action === 'evidence-retest-options') {
           value = await evidenceRetestOptions(selection, request.signal)
+        } else if (selection?.action === 'evidence-retest-note') {
+          value = await evidenceRetestNote(selection, request.signal)
+        } else if (selection?.action === 'evidence-retest-note-save') {
+          value = await evidenceRetestNote(selection, request.signal, true)
         } else if (selection?.action === 'workspace-materials') {
           value = await workspaceMaterials(selection, request.signal)
         } else if (selection?.action === 'lesson-task-materials') {
