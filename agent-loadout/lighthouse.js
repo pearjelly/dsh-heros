@@ -50,6 +50,16 @@ export function lighthouseWorkspace(directory, registry) {
   return seedWorkspace(lighthouseDirectory(directory), registry, 'Lighthouse Supply Run · 灯塔补给行动')
 }
 
+export async function lighthouseRematchLesson(directory, registry, launchId, english) {
+  if (typeof launchId !== 'string' || !/^[a-f0-9]{32}$/.test(launchId)) throw new Error('开局请求无效，请重试。')
+  const path = join(directory, 'lighthouse-rematch-' + launchId)
+  const workspace = await seedWorkspace(path, registry, 'Lighthouse Rematch · 灯塔换装练习', true)
+  const task = english
+    ? 'Read the North Shore Lighthouse supply card. Summarize where to collect the supplies and what to check. Hand off the original card in this conversation when it is ready.'
+    : '阅读北岸灯塔补给卡，简要说明领取地点和需要核对的事项。准备好后，在当前对话交付原始补给卡。'
+  return { workspace, material: supplyCard, task }
+}
+
 export const lighthouseArms = ['recon', 'delivery']
 export const lighthouseComparisonTask = english => english
   ? '[Lighthouse comparison]\nFind the North Shore Lighthouse supply card in this workspace. Verify where it is. If you can attach the card in this conversation, deliver the original file. If you can only bring back its path, use a question card to let me choose “Keep the path for now” or “Keep looking for material we can deliver”. Report what you brought back and anything I still need to confirm.'

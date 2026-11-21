@@ -18,7 +18,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -49,6 +49,7 @@ const validOpeningId = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id)
 const teamworkRecord = 'plugin:dsh-agent-loadout/teamwork'
 const planTaskRecord = 'plugin:dsh-agent-loadout/plan-task'
 const planTaskSessionPrefix = 'session-a076'
+const lighthouseLesson = 'lighthouse-rematch'
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
 const equipmentById = new Map(equipment.map(item => [item.id, item]))
@@ -438,6 +439,7 @@ export async function apply(ctx) {
   const savedIdsByCurrentBase = new Map()
   const pending = new Map()
   const openingMatches = new Map()
+  const openingLighthouseLessons = new Map()
   const teammateLaunches = new Map()
   const teamLaunchAdmissions = new Map()
   const warnings = []
@@ -3585,7 +3587,8 @@ export async function apply(ctx) {
     const view = { workspaceId, workspaceTitle: workspace.title ?? workspaceTitle, material, task,
       baseline: { sessionId: baseline.sessionId, heroName, planName: baseline.planName, ...(record.change && { change: record.change }) } }
     const brief = record.brief ?? task.split('\n').slice(2, -1).join('\n').trim()
-    return { ecosystem, preset, draft, candidate, baseline, view, fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
+    return { ecosystem, preset, draft, candidate, baseline, view, lesson: record.lesson,
+      fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
   }
 
   function rematchGear({ ecosystem, preset, draft, candidate }) {
@@ -3620,7 +3623,8 @@ export async function apply(ctx) {
       return [{ id: item.id, name: item.name, kind: item.kind ?? 'featured', summary: item.summary, sources }]
     }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id))
     signal?.throwIfAborted()
-    return { ...view, equipped, available }
+    return { ...view, equipped, available,
+      ...(checked.lesson === lighthouseLesson && available.some(item => item.id === 'review') && { suggestedGearId: 'review' }) }
   }
 
   function requestedRematch(selection) {
@@ -3764,7 +3768,8 @@ export async function apply(ctx) {
 
   async function readComparisonArms(comparisons, record, signal) {
     const previous = previousComparison(record)
-    const arms = comparisons.arms.map(arm => readComparisonArm(comparisons, record, arm, signal))
+    const sides = record.lesson === lighthouseLesson ? ['direct'] : comparisons.arms
+    const arms = sides.map(arm => readComparisonArm(comparisons, record, arm, signal))
     if (record.baseline) arms.unshift(readRematchBaseline(record, previous, signal))
     return { arms: await Promise.all(arms), ...(previous && { previous: previous.view }) }
   }
@@ -3807,12 +3812,13 @@ export async function apply(ctx) {
         const workspaceTitle = registry?.get(workspaceId)?.title ?? record.workspaceTitle
         const title = category === 'lighthouse' ? '灯塔补给行动'
           : (record.brief ?? task.split('\n').slice(2, -1).join(' ')).trim().slice(0, 120) || headings[category].split(' ')[0]
-        return { id, kind: category, createdAt, title, material, workspaceTitle, store, record, change: record.change }
+        return { id, kind: category, createdAt, title, material, workspaceTitle, store, record, change: record.change, lesson: record.lesson }
       }).filter(item => {
         if (older && comparisonHistoryOrder(item, older) <= 0) return false
         const workspaceName = item.workspaceTitle === 'default-workspace' ? 'default-workspace 默认工作区 Default workspace' : item.workspaceTitle
         const planLabels = item.record.plans && Object.values(item.record.plans).flatMap(({ planName, heroName }) => [planName, heroName])
         const searchable = [headings[item.kind], workspaceName, item.material, item.record.task, ...(planLabels ?? []),
+          item.lesson === lighthouseLesson ? '灯塔换装练习 Lighthouse rematch lesson' : undefined,
           item.record.baseline?.planName, item.record.baseline?.heroName, item.change?.added?.name, item.change?.removed?.name]
           .join('\n').normalize('NFKC').toLowerCase()
         return words.every(word => searchable.includes(word))
@@ -3903,7 +3909,7 @@ export async function apply(ctx) {
       record = comparisons.read(comparisonId)
       if (!record) throw new Error('找不到这组同题对照。')
     } else if (prototype !== true) {
-      record = comparisons.latest()
+      record = comparisons === workspaceComparisons ? comparisons.latest(item => item.lesson !== lighthouseLesson) : comparisons.latest()
     }
     if (!record) return { ...(comparisons === workspaceComparisons && { defaultTask: workspaceComparisonDraft(english) }),
       ...(comparisons === lighthouseComparisons && { task: lighthouseComparisonTask(english) }),
@@ -3915,7 +3921,7 @@ export async function apply(ctx) {
       material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
     ])
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
-      ...(record.change && { change: record.change }) }
+      ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }) }
   }
 
   async function createWorkspaceComparison(comparisons, registry, selection, english, signal) {
@@ -3939,6 +3945,30 @@ export async function apply(ctx) {
     return record
   }
 
+  async function openLighthouseLesson({ launchId }, english, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    if (!validOpeningId(launchId)) throw new Error('开局请求无效，请重试。')
+    const registry = ctx.get('workspaceRegistry')
+    if (!registry?.create || !ctx.get('sessionController')?.create || !ctx.get('sessionQuery')) {
+      throw new Error('灯塔练习工作区不可用。')
+    }
+    if (openingLighthouseLessons.has(launchId)) return openingLighthouseLessons.get(launchId)
+    const key = lighthouseLesson + ':' + launchId
+    const start = async () => {
+      const record = workspaceComparisons.readLaunch(key) ?? await workspaceComparisons.create(key, async () => {
+        const { workspace, material, task } = await lighthouseRematchLesson(directory, registry, launchId, english)
+        const fields = workspaceComparisonTask({ material, task }, english)
+        const digest = await digestWorkspaceMaterial(workspace.path, material, signal)
+        signal?.throwIfAborted()
+        return { ...fields, workspaceId: workspace.id, workspaceTitle: workspace.title, cwd: workspace.path, digest, lesson: lighthouseLesson }
+      })
+      return openComparisonArm(workspaceComparisons, { comparisonId: record.id, arm: 'direct' }, english, signal)
+    }
+    const work = start().finally(() => openingLighthouseLessons.delete(launchId))
+    openingLighthouseLessons.set(launchId, work)
+    return work
+  }
+
   async function openComparisonArm(comparisons, selection, english, signal) {
     const { comparisonId, arm, launchId } = selection
     if (closed) throw new Error('配装服务正在关闭，请重试。')
@@ -3956,6 +3986,7 @@ export async function apply(ctx) {
     else if (comparisons === workspaceComparisons) comparison = await createWorkspaceComparison(comparisons, registry, selection, english, signal)
     else comparison = await comparisons.create(launchId, () => ({ task: lighthouseComparisonTask(english) }))
     if (!comparison) throw new Error('找不到这组同题对照。')
+    if (comparison.lesson === lighthouseLesson && arm !== 'direct') throw new Error('灯塔换装练习从直接交付开局。')
     const { id, task } = comparison
     const { sessionId, requestId } = comparisons.identity(id, arm)
     const response = { id, task, sessionId, requestId }
@@ -5055,6 +5086,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-combo-preview') value = await previewQuestCombo(selection)
         else if (selection?.action === 'growth-open') value = await startWithQuest(selection, request.signal)
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-rematch-open') value = await openLighthouseLesson(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-comparison') value = await readComparison(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'lighthouse-comparison-open') value = await openComparisonArm(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'workspace-comparison') value = await readComparison(workspaceComparisons, selection, english, request.signal)

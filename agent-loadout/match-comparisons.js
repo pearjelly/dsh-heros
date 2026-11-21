@@ -63,9 +63,11 @@ export async function openMatchComparisons(directory, name, arms, saveEntry, war
     }
   }
 
+  // Native session IDs share a home even when the comparison lives in one profile.
+  const launchRecordId = launchId => comparisonHash(name, recordDirectory, launchId)
+
   async function create(launchId, createFields) {
-    // Native session IDs share a home even when the comparison lives in one profile.
-    const id = comparisonHash(name, recordDirectory, launchId)
+    const id = launchRecordId(launchId)
     if (records.has(id)) return records.get(id)
     try {
       const fields = await createFields()
@@ -77,7 +79,18 @@ export async function openMatchComparisons(directory, name, arms, saveEntry, war
   }
 
   const armDirectory = id => join(recordDirectory, id)
-  return { arms, identity, create, armDirectory, read: id => records.get(id), member: id => members.get(id), latest: () => latest,
+  function latestMatching(predicate) {
+    if (!latest || !predicate || predicate(latest)) return latest
+    let chosen
+    for (const record of records.values()) {
+      if (predicate(record) && (!chosen || chosen.createdAt < record.createdAt ||
+        chosen.createdAt === record.createdAt && chosen.id < record.id)) chosen = record
+    }
+    return chosen
+  }
+
+  return { arms, identity, create, armDirectory, read: id => records.get(id), readLaunch: id => records.get(launchRecordId(id)),
+    member: id => members.get(id), latest: latestMatching,
     list: () => records.values(),
     readArm: (id, arm) => readJson(join(armDirectory(id), arm + '.json')),
     writeArm: (id, arm, info) => saveEntry(armDirectory(id), arm, info) }
