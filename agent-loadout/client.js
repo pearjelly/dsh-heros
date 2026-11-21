@@ -1306,27 +1306,43 @@ window.__ModuleLoader__.load({
       const [result, setResult] = useState(null)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
+      const [showInvitation, setShowInvitation] = useState(false)
       const field = useRef(null)
+      const invitationField = useRef(null)
       const action = heroTrial ? 'hero-trial-challenge-share' : 'lighthouse-challenge-share'
+      const invitation = heroTrial && result?.code &&
+        t('来玩一局深度荣耀的灯塔英雄挑战。打开大厅，点「加入灯塔挑战」，粘贴这整段并核对，选你的首发英雄。') + '\n\n' + result.code
       useEffect(() => {
         const abort = new AbortController()
         setResult(null)
         setError('')
         setNotice('')
+        setShowInvitation(false)
         request(action, { action, comparisonId }, abort.signal, language)
           .then(value => { if (!abort.signal.aborted) setResult(value) })
           .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
         return () => abort.abort()
       }, [action, comparisonId, request, language])
 
-      async function copy() {
+      useEffect(() => {
+        if (showInvitation) {
+          invitationField.current?.focus()
+          invitationField.current?.select()
+        }
+      }, [showInvitation])
+
+      async function copy(includeInvitation = false) {
+        const value = includeInvitation ? invitation : result?.code
+        if (!value) return
         try {
-          await navigator.clipboard.writeText(result.code)
-          setNotice(t('挑战码已复制。'))
+          await navigator.clipboard.writeText(value)
+          setNotice(t(includeInvitation ? '挑战邀请已复制。' : '挑战码已复制。'))
         } catch {
-          field.current?.focus()
-          field.current?.select()
-          setNotice(t('挑战码已选中，可以手动复制。'))
+          if (includeInvitation) setShowInvitation(true)
+          const target = includeInvitation ? invitationField : field
+          target.current?.focus()
+          target.current?.select()
+          setNotice(t(includeInvitation ? '挑战邀请已选中，可以手动复制。' : '挑战码已选中，可以手动复制。'))
         }
       }
 
@@ -1341,15 +1357,29 @@ window.__ModuleLoader__.load({
               h('textarea', { className: 'moba-share-code', ref: field, readOnly: true, value: result.code, rows: 3,
                 spellCheck: false, onFocus: event => event.currentTarget.select() }))
               : h('p', { className: 'moba-empty', role: 'status' }, t('正在核对挑战要求…')),
+          showInvitation && invitation && h('label', null, t('挑战邀请'),
+            h('textarea', { className: 'moba-share-code', ref: invitationField, readOnly: true, value: invitation, rows: 5,
+              spellCheck: false, onFocus: event => event.currentTarget.select() })),
           notice && h('p', { className: 'moba-empty', role: 'status' }, notice)),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
           h('button', { type: 'button', className: 'moba-roster-open moba-challenge-back', onClick: onBack }, t('返回')),
-          result?.code && h('button', { type: 'button', className: 'moba-start', onClick: copy }, t('复制挑战码'))))
+          result?.code && h('button', { type: 'button', className: invitation ? 'moba-roster-open' : 'moba-start', onClick: () => copy() }, t('复制挑战码')),
+          invitation && h('button', { type: 'button', className: 'moba-start', onClick: () => copy(true) }, t('复制挑战邀请'))))
+    }
+
+    function pastedLighthouseChallenge(text) {
+      if (text.length > lighthouseInvitationLimit) return { problem: '这段消息太长，请只粘贴挑战邀请或挑战码。' }
+      let code
+      for (const [candidate] of text.matchAll(/(?<![A-Za-z0-9_.-])DSHC[12]\.[A-Za-z0-9_-]+/g)) {
+        if (code && code !== candidate) return { problem: '找到多个不同的挑战码，请只保留想玩的那一个。' }
+        code = candidate
+      }
+      return code ? { code } : { problem: '没有找到灯塔挑战码。请粘贴邀请或挑战码。' }
     }
 
     function LighthouseChallengeJoin({ request, onCancel, onOpen, firstHeroes }) {
       const language = useLanguage()
-      const [code, setCode] = useState('')
+      const [input, setInput] = useState('')
       const [checked, setChecked] = useState(null)
       const [openingChoice, setOpeningChoice] = useState('')
       const [busy, setBusy] = useState('')
@@ -1358,8 +1388,8 @@ window.__ModuleLoader__.load({
       const launchIds = useRef(new Map())
       const heading = useRef(null)
       const field = useRef(null)
-      const trimmed = code.trim()
-      const preview = checked?.code === trimmed && checked.language === language ? checked.value : undefined
+      const { code, problem } = useMemo(() => pastedLighthouseChallenge(input), [input])
+      const preview = code && checked?.code === code && checked.language === language ? checked.value : undefined
       const heroTrial = preview?.kind === 'hero-trial'
       const canOpen = !preview?.blocked && preview?.token
       const canReviewLocal = !heroTrial && preview?.blocked && preview.canUseLocalLoadout === true
@@ -1370,7 +1400,12 @@ window.__ModuleLoader__.load({
       useEffect(() => { if (preview) heading.current?.focus() }, [preview])
 
       async function check(useLocal = false) {
-        if (!trimmed || pending.current || (useLocal && !canReviewLocal)) return
+        if (pending.current || (useLocal && !canReviewLocal)) return
+        if (!code) {
+          setError(t(problem))
+          field.current?.focus()
+          return
+        }
         const abort = new AbortController()
         pending.current = abort
         setBusy('check')
@@ -1378,8 +1413,8 @@ window.__ModuleLoader__.load({
         if (!useLocal) setChecked(null)
         try {
           const action = 'lighthouse-challenge-preview'
-          const value = await request(action, { action, code: trimmed, ...(useLocal && { useLocal: true }) }, abort.signal, language)
-          if (!abort.signal.aborted) setChecked({ value, code: trimmed, language })
+          const value = await request(action, { action, code, ...(useLocal && { useLocal: true }) }, abort.signal, language)
+          if (!abort.signal.aborted) setChecked({ value, code, language })
         } catch (reason) {
           if (!abort.signal.aborted) setError(reason.message)
         } finally {
@@ -1396,10 +1431,10 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           const action = 'lighthouse-challenge-open'
-          const key = JSON.stringify(heroTrial ? [trimmed, preview.token, arm] : [trimmed, preview.token, localLoadout, openingChoice, language])
+          const key = JSON.stringify(heroTrial ? [code, preview.token, arm] : [code, preview.token, localLoadout, openingChoice, language])
           if (!launchIds.current.has(key)) launchIds.current.set(key, Array.from(crypto.getRandomValues(new Uint8Array(16)),
             byte => byte.toString(16).padStart(2, '0')).join(''))
-          const result = await request(action, { action, code: trimmed, token: preview.token, launchId: launchIds.current.get(key),
+          const result = await request(action, { action, code, token: preview.token, launchId: launchIds.current.get(key),
             ...(heroTrial ? { arm } : { ...(localLoadout && { useLocal: true }), ...(openingChoice && { openingChoice }) }) }, abort.signal, language)
           if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
         } catch (reason) {
@@ -1419,10 +1454,10 @@ window.__ModuleLoader__.load({
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onCancel() }) },
         h('form', { onSubmit: event => { event.preventDefault(); void check() } },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
-            h('label', null, t('挑战码'),
-              h('textarea', { className: 'moba-share-code', ref: field, required: true, value: code, rows: 3, maxLength: lighthouseChallengeLimit,
+            h('label', null, t('挑战邀请或挑战码'),
+              h('textarea', { className: 'moba-share-code', ref: field, required: true, value: input, rows: 3, maxLength: lighthouseInvitationLimit + 1,
                 readOnly: Boolean(busy), spellCheck: false, autoComplete: 'off', autoCapitalize: 'off',
-                onChange: event => { setCode(event.target.value); setChecked(null); setError(''); setOpeningChoice('') } })),
+                onChange: event => { setInput(event.target.value); setChecked(null); setError(''); setOpeningChoice('') } })),
             error && h('p', { className: 'moba-alert', role: 'alert' }, error),
             busy === 'check' && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对挑战要求…')),
             preview && h('div', { className: 'moba-share-review' },
@@ -1449,7 +1484,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(busy), onClick: onCancel }, t('返回')),
             h('button', { type: 'submit', className: canOpen || canReviewLocal ? 'moba-roster-open' : 'moba-start',
-              disabled: Boolean(busy) || !trimmed }, t('核对挑战码')),
+              disabled: Boolean(busy) || !input.trim() }, t('核对挑战码')),
             canReviewLocal && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy),
               onClick: () => void check(true) }, t('核对本机标准出装')),
             canOpen && !heroTrial && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy), onClick: () => start() },
@@ -4672,6 +4707,7 @@ window.__ModuleLoader__.load({
 
     const planShareLimit = 16 * 1024
     const lighthouseChallengeLimit = Math.ceil(planShareLimit * 4 / 3) + 100
+    const lighthouseInvitationLimit = lighthouseChallengeLimit + 2048
     const planShareStates = { ready: '已核对', missing: '本机缺失', different: '与分享要求不同', unavailable: '不可用' }
 
     function PlanShareRows({ title, items }) {

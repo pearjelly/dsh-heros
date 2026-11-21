@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.112.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.113.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -33,8 +33,8 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 
 ### Share the hero trial
 
-1. Once both stock heroes finish and the results pass verification, choose **Share hero trial** on the comparison and copy the code. It identifies the public sample version and task language and carries the handoff need. Your replies, files, and workspaces stay in your profile.
-2. To accept an invitation, choose **Join a Lighthouse challenge** directly in the Armory's Lighthouse section. Paste the code yourself and choose **Check challenge code**. The preview shows the original task in its original language and the handoff need. Choose your own first hero when both stock presets are available, then manually send the task in DSH. The same entry also accepts shared Lighthouse evidence challenges.
+1. Once both stock heroes finish and the results pass verification, choose **Share hero trial**. Copy the code by itself, or choose **Copy challenge invitation** for a short message in your current interface language with the code included. The code identifies the public sample version and task language and carries the handoff need. Your replies, files, and workspaces stay in your profile.
+2. In the Armory's Lighthouse section, choose **Join a Lighthouse challenge** and paste the whole message or a raw code into **Challenge invitation or code**. The plugin extracts one distinct supported code locally. If your paste contains different codes, keep the one you want to check. Choose **Check challenge code**, read the original task and handoff need, then choose your first hero and manually send the task in DSH. The same entry accepts shared Lighthouse evidence challenges.
 
 ### Give Minimal one more tool
 
