@@ -15,13 +15,19 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.78.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.79.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 For the desktop app, use its bundled CLI with `--profile desktop`, then quit and reopen the app. If an earlier copy is installed, remove `dsh-agent-loadout` from the same profile before installing the release. The package keeps that identifier for compatibility.
 
 Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
+
+## Try one gear change
+
+1. On a completed, verified side of a workspace or saved plan comparison, choose **Try one gear change**. Add, remove, or swap one piece of gear and preview the resulting capabilities and sources.
+2. Keep the same material and task. Open a fresh DSH session, review the prepared task, and send it yourself. If the material has changed, start a new comparison to establish a baseline.
+3. Open the two source sessions to check the actual tool calls, recorded choices, and delivered files. Add **Delivery Review** to a direct delivery loadout to see whether the new session asks you to confirm delivery or request changes. Find the rematch again in **Run history**.
 
 ## Compare your saved loadouts
 
@@ -37,7 +43,7 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 
 ## Find a run worth keeping
 
-Open **Run history** in the lobby. Search by task, workspace, or material to find a previous Lighthouse or workspace comparison. Filter for delivered files or recorded choices. Follow either source session to open its attachments and read the original DSH question card.
+Open **Run history** in the lobby. Search by task, workspace, or material to find a previous comparison or rematch. Filter for delivered files or recorded choices. Follow the source sessions to open attachments and read the original DSH question cards.
 
 Choose **Review and reuse loadout** for the route you want to keep. For a review route, you can check the recorded decision before reusing its gear. Choose **Save as plan** and enter a name you can find again.
 

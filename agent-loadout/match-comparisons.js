@@ -116,6 +116,20 @@ export function validPlanComparison(record) {
     }) && record.plans.left.id !== record.plans.right.id
 }
 
+export function validRematchComparison(record) {
+  const { baseline, loadout, edit, change, inputHash, token } = record
+  const label = item => item && typeof item.id === 'string' && typeof item.name === 'string' && Boolean(item.name)
+  const pinned = item => item && [item.presetId, item.heroId, item.heroName].every(value => typeof value === 'string' && Boolean(value)) &&
+    /^[a-f0-9]{24}$/.test(item.identity)
+  return validWorkspaceComparison(record) && pinned(baseline) && pinned(loadout) &&
+    ['workspace', 'plans'].includes(baseline.kind) && comparisonIdValid(baseline.comparisonId) &&
+    (baseline.kind === 'plans' ? planComparisonArms : workspaceComparisonArms).includes(baseline.arm) &&
+    /^session-[a-f0-9]{32}$/.test(baseline.sessionId) && /^[a-f0-9]{64}$/.test(inputHash) && /^[a-f0-9]{64}$/.test(token) &&
+    edit && change && (edit.addId !== undefined || edit.removeId !== undefined) &&
+    (edit.removeId === undefined ? change.removed === undefined : label(change.removed) && change.removed.id === edit.removeId) &&
+    (edit.addId === undefined ? change.added === undefined : label(change.added) && change.added.id === edit.addId)
+}
+
 export async function digestWorkspaceMaterial(cwd, material, signal) {
   const filename = join(cwd, material)
   if (!(await lstat(filename)).isFile()) throw new Error('Not a regular file')

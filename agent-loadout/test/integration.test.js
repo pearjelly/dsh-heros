@@ -2188,6 +2188,185 @@ test('saved plan comparisons pin two different native workflows on the same mate
   }
 })
 
+test('one-gear rematches retain the proved original and require another native turn', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-rematch-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const workspacePath = join(directory, 'workspace')
+  const material = 'materials/workspace-fixture.md'
+  const body = '# Original evidence for a one-gear rematch\n'
+  const task = 'Verify the handoff summary and deliver the original material when ready.'
+  let host
+  try {
+    await mkdir(join(workspacePath, 'materials'), { recursive: true })
+    await writeFile(join(workspacePath, material), body)
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, payload, status) => (await host.request(endpoint, { action, ...payload }, status)).value
+    const workspace = '/api/loadout-fixture-session'
+    const { workspaceId, sessionId } = await host.request(workspace, { presetId: 'standard', workspacePath })
+    const membership = async () => (await host.request(workspace, { inspectWorkspaceId: workspaceId })).sessionIds
+    const plans = async () => (await host.request(endpoint)).value.plans
+    const history = id => host.request('/api/loadout-fixture-history?sessionId=' + id)
+    const send = attempt => host.request(turnEndpoint, { sessionId: attempt.sessionId, requestId: attempt.requestId, text: attempt.task })
+    const armOf = (view, arm) => view.arms.find(item => item.id === arm)
+    const start = await invoke('workspace-comparison-open', { arm: 'direct', launchId: 'a'.repeat(32), workspaceId, material, task })
+    const root = { kind: 'workspace', comparisonId: start.id, arm: 'direct' }
+    const source = () => invoke('workspace-comparison', { comparisonId: start.id })
+    const options = status => invoke('rematch-comparison-options', root, status)
+    const preview = (change, status) => invoke('rematch-comparison-preview', { ...root, change }, status)
+    const change = { addId: 'review' }
+    const open = (token, suffix, status) => invoke('rematch-comparison-open', { ...root, change, token, launchId: suffix.repeat(32) }, status)
+    const read = filter => invoke('rematch-comparison', filter)
+    await options(422)
+    await send(start)
+    const original = await source()
+    const proof = armOf(original, 'direct')
+    assert.equal(proof.status, 'complete')
+    assert.deepEqual(proof.entries.map(item => [item.name, item.state]), [['present', 'completed']])
+    assert.deepEqual(proof.deliverables, [{ name: 'workspace-fixture.md', turn: 1 }])
+    const beforePlans = await plans()
+    const before = new Set(await membership())
+    assert.deepEqual(before, new Set([sessionId, start.sessionId]))
+    const choices = await options()
+    assert.equal(choices.baseline.sessionId, start.sessionId)
+    assert.ok(choices.equipped.some(item => item.id === 'present'))
+    assert.ok(!choices.equipped.some(item => item.id === 'review'))
+    assert.ok(choices.available.some(item => item.id === 'review'))
+    for (const invalid of [{}, { addId: 'unknown-gear' }, { addId: 'present' }, { removeId: 'review' }, { removeId: 'present', addId: 'present' }]) {
+      await preview(invalid, 422)
+    }
+    const sourceTool = choices.available.find(item => item.kind === 'tool' && item.sources?.length &&
+      !choices.equipped.some(equipped => equipped.id === item.id))
+    assert.ok(sourceTool)
+    await preview({ addId: sourceTool.id, sourceId: 'plugin:' + 'f'.repeat(24) }, 422)
+    const removal = await preview({ removeId: 'present' })
+    assert.ok(removal.token)
+    assert.equal(removal.change.removed.id, 'present')
+    assert.equal(removal.change.added, undefined)
+    assert.ok(removal.comparison.lost.some(item => item.id === 'present' || item.name === 'present'))
+    const allowed = await preview(change)
+    assert.ok(allowed.token)
+    assert.equal(allowed.change.added.id, 'review')
+    assert.equal(allowed.change.removed, undefined)
+    assert.ok(allowed.comparison.gained.some(item => item.id === 'review'))
+    const swapped = await preview({ removeId: 'present', addId: 'review' })
+    assert.ok(swapped.token)
+    assert.equal(swapped.change.removed.id, 'present')
+    assert.equal(swapped.change.added.id, 'review')
+    assert.deepEqual(await plans(), beforePlans)
+    assert.deepEqual(new Set(await membership()), before)
+
+    await appendFile(join(workspacePath, material), '\nModified after review preview.\n')
+    await preview(change, 422)
+    await open(allowed.token, 'b', 422)
+    assert.deepEqual(new Set(await membership()), before)
+    await writeFile(join(workspacePath, material), body)
+
+    const refreshed = await preview(change)
+    const [attempt, equal] = await Promise.all([open(refreshed.token, 'b'), open(refreshed.token, 'b')])
+    assert.deepEqual(attempt, equal)
+    assert.equal(attempt.task, start.task)
+    assert.notEqual(attempt.sessionId, start.sessionId)
+    assert.notEqual(attempt.requestId, start.requestId)
+    const current = await read({ comparisonId: attempt.id })
+    assert.equal(armOf(current, 'baseline').sessionId, start.sessionId)
+    assert.deepEqual(armOf(current, 'baseline').deliverables, proof.deliverables)
+    assert.equal(armOf(current, 'rematch').status, 'waiting')
+    const clean = await history(attempt.sessionId)
+    const resolved = await realpath(workspacePath)
+    assert.equal(clean.workspacePath, resolved)
+    assert.equal(clean.workspaceId, workspaceId)
+    assert.equal(clean.inherited, 0)
+    assert.notEqual(clean.presetId, (await history(start.sessionId)).presetId)
+    assert.ok(!clean.events.some(event => ['turn/start', 'user/message'].includes(event.type)))
+    const marker = (await equipmentIn(host, attempt.sessionId)).rematchComparison
+    assert.deepEqual({ id: marker.id, arm: marker.arm, task: marker.task }, { id: attempt.id, arm: 'rematch', task: start.task })
+
+    const questionPath = '/api/loadout-fixture-handoff-question'
+    async function choose(attempt, answer, valid = true) {
+      const turn = send(attempt)
+      turn.catch(() => {})
+      let question
+      try {
+        for (let count = 0; count < 100 && !question; count++) {
+          question = (await host.request(questionPath, { sessionId: attempt.sessionId })).question
+          if (!question) await delay(40)
+        }
+        assert.deepEqual(question?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
+        if (valid) {
+          const waiting = armOf(await read({ comparisonId: attempt.id }), 'rematch')
+          assert.equal(waiting.status, 'waiting-choice')
+          assert.ok(!waiting.deliverables?.length)
+        }
+      } finally {
+        if (question) await host.request(questionPath, { sessionId: attempt.sessionId, choice: answer })
+        await turn
+      }
+      const replay = await history(attempt.sessionId)
+      const message = replay.events.find(item => item.type === 'user/message' && item.data.source.kind === 'user')
+      assert.equal(message.data.content[0].text, start.task)
+      return replay.events.find(item => item.type === 'deliverables/presented')
+    }
+    assert.equal((await choose(attempt, 'Confirm handoff')).data.files[0].path, join(resolved, material))
+    const complete = await read({ sessionId: attempt.sessionId })
+    const plusReview = armOf(complete, 'rematch')
+    assert.equal(plusReview.status, 'complete')
+    assert.deepEqual(plusReview.entries.map(item => [item.name, item.state]), [['ask_user_question', 'completed'], ['present', 'completed']])
+    assert.deepEqual(plusReview.entries[0].choices, ['Confirm handoff'])
+    assert.deepEqual(plusReview.deliverables, proof.deliverables)
+    assert.deepEqual(armOf(await source(), 'direct'), proof)
+
+    const revised = await open(refreshed.token, 'c')
+    assert.equal(await choose(revised, 'Revise draft'), undefined)
+    const notDelivered = armOf(await read({ comparisonId: revised.id }), 'rematch')
+    assert.deepEqual(notDelivered.entries[0].choices, ['Revise draft'])
+    assert.deepEqual(notDelivered.deliverables, [])
+
+    const tampered = await open(refreshed.token, 'd')
+    await appendFile(join(workspacePath, material), '\nModified after the fresh session opened.\n')
+    assert.deepEqual(await open(refreshed.token, 'b'), attempt)
+    assert.ok(await choose(tampered, 'Confirm handoff', false))
+    const stale = await read({ comparisonId: tampered.id })
+    assert.equal(armOf(stale, 'rematch').status, 'unavailable')
+    assert.equal(armOf(stale, 'rematch').reason, 'changed-material')
+    assert.ok(!armOf(stale, 'rematch').deliverables?.length)
+    assert.deepEqual(armOf(stale, 'baseline').deliverables, proof.deliverables)
+    await writeFile(join(workspacePath, material), body)
+    assert.deepEqual(armOf(await read({ comparisonId: tampered.id }), 'rematch'), armOf(stale, 'rematch'))
+
+    const list = () => invoke('comparison-history', { kind: 'rematch', query: 'workspace-fixture.md' })
+    const listed = await list()
+    assert.deepEqual(new Set(listed.items.map(item => item.id)), new Set([attempt.id, revised.id, tampered.id]))
+    const historyCard = listed.items.find(item => item.id === attempt.id)
+    assert.equal(historyCard.kind, 'rematch')
+    assert.equal(armOf(historyCard, 'baseline').sessionId, start.sessionId)
+    assert.deepEqual(armOf(historyCard, 'rematch').choices, ['Confirm handoff'])
+    const reuse = (arm, comparisonId = attempt.id, status) => invoke('comparison-loadout-preview', { kind: 'rematch', comparisonId, arm }, status)
+    const reusedBaseline = await reuse('baseline')
+    assert.equal(reusedBaseline.sessionId, start.sessionId)
+    assert.deepEqual(reusedBaseline.draft.equipmentIds, ['present'])
+    const reusedReview = await reuse('rematch')
+    assert.equal(reusedReview.sessionId, attempt.sessionId)
+    assert.deepEqual(new Set(reusedReview.draft.equipmentIds), new Set(['present', 'review']))
+    await reuse('rematch', tampered.id, 422)
+    await invoke('rematch-comparison-options', { kind: 'rematch', comparisonId: attempt.id, arm: 'rematch' }, 422)
+    assert.deepEqual(await plans(), beforePlans)
+
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual(await read({ comparisonId: attempt.id }), complete)
+    assert.deepEqual(await list(), listed)
+    assert.deepEqual(await open(refreshed.token, 'b'), attempt)
+    assert.deepEqual(armOf(await source(), 'direct'), proof)
+    assert.equal(await readFile(join(workspacePath, material), 'utf8'), body)
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('shared plans resolve in a fresh profile without saving or copying private equipment', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-share-'))
   const root = await realpath(directory)

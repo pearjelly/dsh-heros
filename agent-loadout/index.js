@@ -24,7 +24,7 @@ import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt
 import { matchEvents } from './match-events.js'
 import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } from './match-growth.js'
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
-import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
+import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
 import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
@@ -452,7 +452,10 @@ export async function apply(ctx) {
     () => warnings.push('workspace-comparisons'), validWorkspaceComparison)
   const planComparisons = await openMatchComparisons(directory, 'plan-comparison', planComparisonArms, saveEntry,
     () => warnings.push('plan-comparisons'), validPlanComparison)
-  const comparisonStores = { lighthouse: lighthouseComparisons, workspace: workspaceComparisons, plans: planComparisons }
+  const rematchComparisons = await openMatchComparisons(directory, 'rematch-comparison', ['rematch'], saveEntry,
+    () => warnings.push('rematch-comparisons'), validRematchComparison)
+  const comparisonStores = { lighthouse: lighthouseComparisons, workspace: workspaceComparisons, plans: planComparisons, rematch: rematchComparisons }
+  const materialComparisonStores = [workspaceComparisons, planComparisons, rematchComparisons]
   const workspaceMaterials = workspaceMaterialPicker(() => ctx.get('workspaceRegistry'))
   // Native session history is shared by profiles under the same DSH home.
   const receipts = matchReceipts(join(ctx.profileContext.home, 'agent-loadout', 'match-actions'))
@@ -1079,17 +1082,22 @@ export async function apply(ctx) {
     return candidate
   }
 
+  function loadoutIdentity(draft, candidate, ecosystem) {
+    const sources = equippedToolBindings(candidate.record).filter(item => item.profileSourceId).map(item => {
+      const entry = ecosystem.profileSources.get(item.profileSourceId)?.entry
+      return [item.profileSourceId, entry?.options?.config ?? null]
+    })
+    const identity = jsonFingerprint([draft, candidate.record?.definition.plugins ?? ecosystem.definitions.get(draft.presetId), sources])
+    if (!identity) throw new Error('无法核对当前出装的配置。')
+    return identity
+  }
+
   async function verifySavedPlan(saved, ecosystem) {
     const original = records.get(saved.presetId)
     if (!original && saved.presetId !== saved.heroId) throw new Error('方案的英雄或阵容当前不可用。')
     const draft = recordedLoadoutDraft(original, saved.heroId, ecosystem)
     const candidate = await verifyRecordedLoadout(saved.presetId, draft, ecosystem)
-    const sources = equippedToolBindings(candidate.record).filter(item => item.profileSourceId).map(item => {
-      const entry = ecosystem.profileSources.get(item.profileSourceId)?.entry
-      return [item.profileSourceId, entry?.options?.config ?? null]
-    })
-    const identity = jsonFingerprint([draft, candidate.record?.definition.plugins ?? ecosystem.definitions.get(saved.heroId), sources])
-    if (!identity) throw new Error('无法核对当前出装的配置。')
+    const identity = loadoutIdentity(draft, candidate, ecosystem)
     return { draft, candidate, identity }
   }
 
@@ -3468,14 +3476,18 @@ export async function apply(ctx) {
     return plan ? { planName: plan.planName, heroName: plan.heroName } : {}
   }
 
-  async function verifiedPlanComparisonArm(saved, ecosystem) {
-    const { draft, candidate, identity } = await verifySavedPlan(saved, ecosystem)
-    const capabilities = summarizeCapabilities(ecosystem, saved.heroId, candidate)
+  function comparisonLoadoutIdentity(draft, candidate, ecosystem, identity = loadoutIdentity(draft, candidate, ecosystem)) {
+    const capabilities = summarizeCapabilities(ecosystem, draft.presetId, candidate)
     const sources = [...capabilities.keys()].sort().map(id => {
       const { sourceId, timing } = capabilities.get(id)
       return [id, sourceId ?? null, timing ?? null]
     })
-    return { draft, candidate, identity: jsonFingerprint([identity, sources, candidate.record?.realms ?? []]) }
+    return jsonFingerprint([identity, sources, candidate.record?.realms ?? []])
+  }
+
+  async function verifiedPlanComparisonArm(saved, ecosystem) {
+    const { draft, candidate, identity } = await verifySavedPlan(saved, ecosystem)
+    return { draft, candidate, identity: comparisonLoadoutIdentity(draft, candidate, ecosystem, identity) }
   }
 
   async function checkPlanComparison(input, signal) {
@@ -3541,26 +3553,207 @@ export async function apply(ctx) {
     return prepare(draft, candidate)
   }
 
+  function rematchReference({ kind, comparisonId, arm }) {
+    const comparisons = kind === 'workspace' || kind === 'plans' ? comparisonStores[kind] : undefined
+    const record = comparisons?.read(comparisonId)
+    if (!record || !comparisons.arms.includes(arm)) throw new Error('请选择一局已核验的实战作为原局。')
+    return { comparisons, record, arm }
+  }
+
+  async function checkedRematchBaseline(selection, signal) {
+    const { comparisons, record, arm } = rematchReference(selection)
+    const [observed, saved] = await Promise.all([readComparisonArm(comparisons, record, arm, signal), comparisons.readArm(record.id, arm)])
+    if (!saved?.opened || !observed.canReuse) throw new Error('请选择一局已核验的实战作为原局。')
+    const { workspaceId, cwd, digest, material, task, workspaceTitle } = record
+    const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
+    if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
+    const materialState = await workspaceMaterialState(record, signal)
+    if (materialState !== 'verified') throw new Error(materialState === 'changed' ? '材料已变化，请用现在的文件开始新的对照。'
+      : '无法读取所选材料，请核对工作区内的文件路径。')
+    const pinned = record.plans?.[arm]
+    const heroId = pinned?.heroId ?? records.get(saved.presetId)?.baseId ?? saved.presetId
+    const ecosystem = await discover()
+    const preset = ecosystem.presets.find(item => item.id === heroId && !item.broken)
+    if (!preset) throw new Error('当前英雄的基础阵容不可用。')
+    const { draft, candidate, identity } = await verifiedPlanComparisonArm({ presetId: saved.presetId, heroId }, ecosystem)
+    if (!identity || (pinned && (identity !== pinned.identity || pinned.presetId !== saved.presetId))) {
+      throw new Error('本机配置已变化，无法核对这局的原出装。')
+    }
+    const heroName = pinned?.heroName ?? matchHero(heroId, records.get(saved.presetId)).name
+    const baseline = { kind: selection.kind, comparisonId: record.id, arm, sessionId: observed.sessionId,
+      presetId: saved.presetId, heroId, heroName, identity, ...(pinned && { planName: pinned.planName }) }
+    const view = { workspaceId, workspaceTitle: workspace.title ?? workspaceTitle, material, task,
+      baseline: { sessionId: baseline.sessionId, heroName, planName: baseline.planName } }
+    const brief = record.brief ?? task.split('\n').slice(2, -1).join('\n').trim()
+    return { ecosystem, preset, draft, candidate, baseline, view, fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
+  }
+
+  function rematchGear({ ecosystem, preset, draft, candidate }) {
+    const builtIn = presetEquipment(ecosystem, preset.id)
+    const removed = historicalRemovalIds(candidate)
+    const equipped = draft.equipmentIds.map(id => {
+      const item = equipmentById.get(id) ?? ecosystem.equipment.get(id)
+      return { id, name: candidate.record?.equipmentLabels?.[id] ?? item?.name ?? id, sourceId: draft.equipmentSources[id],
+        sourceName: candidate.record?.equipmentSourceLabels?.[id] }
+    })
+    for (const [id, gear] of Object.entries(builtIn)) {
+      if (!gear.locked && !removed.has(id) && gear.linked.every(linked => removed.has(linked)) && !draft.equipmentIds.includes(id)) {
+        equipped.push({ id, name: gear.name, included: true })
+      }
+    }
+    return { builtIn, removed, equipped }
+  }
+
+  async function rematchOptions(selection, signal) {
+    const checked = await checkedRematchBaseline(selection, signal)
+    const { ecosystem, preset, view } = checked
+    const { removed, equipped } = rematchGear(checked)
+    const cards = [...equipment, ...visibleEquipment(ecosystem).values()]
+    const available = cards.flatMap(item => {
+      if (!validEquipmentIds([item.id])) return []
+      const status = item.kind ? statusForEcosystem(item, preset, ecosystem, undefined, removed)
+        : featuredStatus(item, preset, ecosystem, legacy.moduleName, removed)
+      const options = status.sourceChoices ?? [status]
+      const sources = options.filter(option => option.state === 'available' && option.sourceId)
+        .map(option => ({ id: option.sourceId, name: option.sourceName }))
+      if (item.kind === 'tool' ? !sources.length : status.state !== 'available') return []
+      return [{ id: item.id, name: item.name, kind: item.kind ?? 'featured', summary: item.summary, sources }]
+    }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id))
+    signal?.throwIfAborted()
+    return { ...view, equipped, available }
+  }
+
+  function requestedRematch(selection) {
+    const { kind, comparisonId, arm } = selection
+    const { removeId, addId, sourceId } = selection.change ?? {}
+    if ((removeId === undefined && addId === undefined) || (removeId !== undefined && !validEquipmentIds([removeId])) ||
+      (addId !== undefined && !validEquipmentIds([addId])) ||
+      (sourceId !== undefined && (!addId || !validEquipmentSources({ [addId]: sourceId }, [addId])))) {
+      throw new Error('请选择一项装备变更。')
+    }
+    const change = { ...(removeId !== undefined && { removeId }), ...(addId !== undefined && { addId }),
+      ...(sourceId !== undefined && { sourceId }) }
+    const input = { kind, comparisonId, arm, change }
+    return { ...input, inputHash: createHash('sha256').update(JSON.stringify(input)).digest('hex') }
+  }
+
+  async function checkRematch(input, signal) {
+    const checked = await checkedRematchBaseline(input, signal)
+    const { ecosystem, baseline, fields, view, candidate: before } = checked
+    const { removeId, addId, sourceId } = input.change
+    const { removed, equipped } = rematchGear(checked)
+    const removedGear = equipped.find(item => item.id === removeId)
+    if (removeId !== undefined && !removedGear) throw new Error('原局没有可单独卸下的这件装备。')
+    if (addId !== undefined && !equipmentById.has(addId) && !visibleEquipment(ecosystem).has(addId)) {
+      throw new Error('当前阵容无法提供这件装备。')
+    }
+    const equipmentIds = checked.draft.equipmentIds.filter(id => id !== removeId)
+    const equipmentSources = { ...checked.draft.equipmentSources }
+    if (removeId) delete equipmentSources[removeId]
+    if (addId !== undefined) {
+      if (equipmentIds.includes(addId)) throw new Error('请选择一项装备变更。')
+      equipmentIds.push(addId)
+      if (sourceId) equipmentSources[addId] = sourceId
+    }
+    const removedEquipmentIds = [...checked.draft.removedEquipmentIds, ...(removedGear?.included ? [removeId] : [])]
+    const draft = { presetId: baseline.heroId, equipmentIds, equipmentSources, removedEquipmentIds }
+    const candidate = await plan(draft, ecosystem)
+    if (candidate.id === before.id) throw new Error('请选择一项装备变更。')
+    const afterRemovals = historicalRemovalIds(candidate)
+    if ([...afterRemovals].some(id => id !== removeId && !removed.has(id))) {
+      throw new Error('这次变更还会卸下其他装备。请选择一件可单独调整的装备。')
+    }
+    if (sourceId && candidate.record?.equipmentSources?.[addId] !== sourceId) {
+      throw new Error('当前阵容无法提供这件装备的原来源。')
+    }
+    if (removedGear?.included && !afterRemovals.has(removeId)) throw new Error('原局没有可单独卸下的这件装备。')
+    const assembled = recordedLoadoutDraft(candidate.record, baseline.heroId, ecosystem)
+    if (checked.draft.equipmentIds.some(id => id !== removeId &&
+      (!assembled.equipmentIds.includes(id) || checked.draft.equipmentSources[id] !== assembled.equipmentSources[id]))) {
+      throw new Error('这次变更还会影响其他已装备项目或来源。')
+    }
+    const identity = comparisonLoadoutIdentity(assembled, candidate, ecosystem)
+    if (!identity) throw new Error('无法核对当前出装的配置。')
+    const loadout = { presetId: candidate.id, heroId: baseline.heroId, heroName: baseline.heroName, identity }
+    const change = { ...(removedGear && { removed: { id: removedGear.id, name: removedGear.name, sourceName: removedGear.sourceName } }),
+      ...(addId && { added: { id: addId, name: candidate.record.equipmentLabels[addId], sourceName: candidate.record.equipmentSourceLabels?.[addId] } }) }
+    const { inputHash } = input
+    const token = createHash('sha256').update(JSON.stringify([inputHash, fields.cwd, fields.digest, baseline, loadout])).digest('hex')
+    signal?.throwIfAborted()
+    return { view: { ...view, change, token }, record: { ...fields, baseline, loadout, change, edit: input.change, inputHash, token },
+      draft, before, candidate, ecosystem, againstDraft: checked.draft }
+  }
+
+  async function previewRematch(selection, signal) {
+    const { view, draft, before, candidate, againstDraft, ecosystem } = await checkRematch(requestedRematch(selection), signal)
+    const comparison = await compare({ ...draft, againstDraft }, ecosystem, candidate, before)
+    signal?.throwIfAborted()
+    return { ...view, comparison }
+  }
+
+  async function createRematch(selection, signal) {
+    const input = requestedRematch(selection)
+    const { launchId, token } = selection
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw new Error('请先核对这次装备变更。')
+    const mismatch = '材料、任务或出装已变化，请重新核对。'
+    const record = await rematchComparisons.create(launchId, async () => {
+      const checked = await checkRematch(input, signal)
+      if (checked.record.token !== token) throw new Error(mismatch)
+      return checked.record
+    })
+    if (record.inputHash !== input.inputHash || record.token !== token) throw new Error(mismatch)
+    return record
+  }
+
+  async function prepareRematch(comparison, signal) {
+    const { kind, comparisonId, arm } = comparison.baseline
+    const selection = { kind, comparisonId, arm, change: comparison.edit }
+    const checked = await checkRematch(requestedRematch(selection), signal)
+    if (checked.record.token !== comparison.token) throw new Error('材料、任务或出装已变化，请重新核对。')
+    return prepare(checked.draft, checked.candidate)
+  }
+
   async function readComparisonArm(comparisons, comparison, arm, signal) {
     const { sessionId } = comparisons.identity(comparison.id, arm)
-    const labels = planComparisonLabels(comparison, arm)
+    const labels = comparison.loadout ? { heroName: comparison.loadout.heroName } : planComparisonLabels(comparison, arm)
     let saved
     let source
     try {
       saved = await comparisons.readArm(comparison.id, arm)
       const workspace = saved && ctx.get('workspaceRegistry')?.get(saved.workspaceId)
-      if (!saved?.opened && (comparison.plans || !workspace?.sessionIds.includes(sessionId))) {
+      if (!saved?.opened && (comparison.plans || comparison.loadout || !workspace?.sessionIds.includes(sessionId))) {
         return { id: arm, ...labels, status: 'unopened' }
       }
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material }, receipts)
-      return { id: arm, ...labels, sessionId, ...result, canReuse: reusableComparisonArm(arm, result) }
+      const canReuse = reusableComparisonArm(arm, result)
+      const canRematch = canReuse && (comparisons === workspaceComparisons || comparisons === planComparisons)
+      return { id: arm, ...labels, sessionId, ...result, canReuse, ...(canRematch && { canRematch }) }
     } catch {
       signal?.throwIfAborted()
       return { id: arm, ...labels, ...(saved?.opened && { sessionId }), status: 'unavailable', reason: 'session-unavailable' }
     } finally {
       source?.[Symbol.dispose]()
     }
+  }
+
+  async function readRematchBaseline(comparison, signal) {
+    const { kind, comparisonId, arm, sessionId, heroName, planName } = comparison.baseline
+    const comparisons = comparisonStores[kind]
+    const original = comparisons.read(comparisonId)
+    const id = 'baseline'
+    const missing = { id, sessionId, heroName, planName, status: 'unavailable', reason: 'session-unavailable' }
+    if (!original || original.cwd !== comparison.cwd || original.digest !== comparison.digest || original.task !== comparison.task ||
+      original.workspaceId !== comparison.workspaceId || original.material !== comparison.material) return missing
+    const result = await readComparisonArm(comparisons, original, arm, signal)
+    if (sessionId !== result.sessionId) return missing
+    return { ...result, id, heroName, planName, canRematch: false }
+  }
+
+  function readComparisonArms(comparisons, record, signal) {
+    const arms = comparisons.arms.map(arm => readComparisonArm(comparisons, record, arm, signal))
+    if (record.baseline) arms.unshift(readRematchBaseline(record, signal))
+    return Promise.all(arms)
   }
 
   function comparisonChoices({ entries = [] }) {
@@ -3571,7 +3764,9 @@ export async function apply(ctx) {
     if (result.status !== 'complete') return false
     if (arm === 'review') return comparisonChoices(result).length > 0
     if (arm === 'recon') return result.entries.some(entry => entry.name === 'glob' && entry.state === 'completed')
-    if (planComparisonArms.includes(arm)) return result.deliverables.length > 0 || result.entries.some(entry => entry.state === 'completed')
+    if (arm === 'rematch' || planComparisonArms.includes(arm)) {
+      return result.deliverables.length > 0 || result.entries.some(entry => entry.state === 'completed')
+    }
     return result.deliverables.length > 0
   }
 
@@ -3584,7 +3779,7 @@ export async function apply(ctx) {
       !['all', 'delivered', 'decisions'].includes(outcome)) throw new Error('实战记录筛选无效，请重新选择。')
     let older
     if (before !== undefined) {
-      const fields = typeof before === 'string' && /^(\d{1,16}):(workspace|lighthouse|plans):([a-f0-9]{32})$/.exec(before)
+      const fields = typeof before === 'string' && /^(\d{1,16}):(workspace|lighthouse|plans|rematch):([a-f0-9]{32})$/.exec(before)
       if (!fields || !Number.isSafeInteger(Number(fields[1]))) throw new Error('找不到这页实战记录。')
       older = { createdAt: Number(fields[1]), kind: fields[2], id: fields[3] }
     }
@@ -3592,19 +3787,20 @@ export async function apply(ctx) {
     const registry = ctx.get('workspaceRegistry')
     const groups = Object.entries(comparisonStores)
     const headings = { lighthouse: '灯塔补给行动 Lighthouse Supply Run', workspace: '实战同题对照 Workspace comparison',
-      plans: '方案同题对照 Saved plan comparison' }
+      plans: '方案同题对照 Saved plan comparison', rematch: '单件换装对照 换装复赛 One-gear rematch Gear rematch' }
     const matches = groups.filter(([category]) => kind === 'all' || kind === category).flatMap(([category, store]) =>
       Array.from(store.list(), record => {
         const { createdAt, id, task, material, workspaceId } = record
         const workspaceTitle = registry?.get(workspaceId)?.title ?? record.workspaceTitle
         const title = category === 'lighthouse' ? '灯塔补给行动'
           : (record.brief ?? task.split('\n').slice(2, -1).join(' ')).trim().slice(0, 120) || headings[category].split(' ')[0]
-        return { id, kind: category, createdAt, title, material, workspaceTitle, store, record }
+        return { id, kind: category, createdAt, title, material, workspaceTitle, store, record, change: record.change }
       }).filter(item => {
         if (older && comparisonHistoryOrder(item, older) <= 0) return false
         const workspaceName = item.workspaceTitle === 'default-workspace' ? 'default-workspace 默认工作区 Default workspace' : item.workspaceTitle
         const planLabels = item.record.plans && Object.values(item.record.plans).flatMap(({ planName, heroName }) => [planName, heroName])
-        const searchable = [headings[item.kind], workspaceName, item.material, item.record.task, ...(planLabels ?? [])]
+        const searchable = [headings[item.kind], workspaceName, item.material, item.record.task, ...(planLabels ?? []),
+          item.record.baseline?.planName, item.record.baseline?.heroName, item.change?.added?.name, item.change?.removed?.name]
           .join('\n').normalize('NFKC').toLowerCase()
         return words.every(word => searchable.includes(word))
       })).sort(comparisonHistoryOrder)
@@ -3617,13 +3813,13 @@ export async function apply(ctx) {
       signal?.throwIfAborted()
       const group = matches.slice(inspected, inspected + Math.min(6, pageSize - items.length, scanLimit - inspected))
       const cards = await Promise.all(group.map(async ({ store, record, ...item }) => {
-        const arms = await Promise.all(store.arms.map(async id => {
-          const arm = await readComparisonArm(store, record, id, signal)
-          const { status, sessionId, turn, deliverables, reason, continuationReason, canReuse, planName, heroName } = arm
+        const observed = await readComparisonArms(store, record, signal)
+        const arms = observed.map(arm => {
+          const { id, status, sessionId, turn, deliverables, reason, continuationReason, canReuse, canRematch, planName, heroName } = arm
           const choices = comparisonChoices(arm)
           return { id, status, sessionId, turn, deliverables, choices, reason, continuationReason, planName, heroName, canReuse: Boolean(canReuse),
-            pending: Boolean(arm.pendingQuestions?.length) }
-        }))
+            ...(canRematch && { canRematch }), pending: Boolean(arm.pendingQuestions?.length) }
+        })
         return { ...item, arms }
       }))
       inspected += cards.length
@@ -3637,12 +3833,17 @@ export async function apply(ctx) {
   async function comparisonLoadout({ kind, comparisonId, arm }, signal) {
     const store = Object.hasOwn(comparisonStores, kind) ? comparisonStores[kind] : undefined
     const record = store?.read(comparisonId)
+    if (record?.baseline && arm === 'baseline') {
+      const observed = await readRematchBaseline(record, signal)
+      if (!observed.canReuse) throw new Error('这局还没有可复用出装的实战记录。')
+      return comparisonLoadout(record.baseline, signal)
+    }
     if (!record || !store.arms.includes(arm)) throw new Error('找不到这局实战对照。')
     const observed = await readComparisonArm(store, record, arm, signal)
     if (!observed.canReuse) throw new Error('这局还没有可复用出装的实战记录。')
     const saved = await store.readArm(comparisonId, arm)
     const original = records.get(saved?.presetId)
-    const pinned = record.plans?.[arm]
+    const pinned = record.plans?.[arm] ?? record.loadout
     const heroId = pinned?.heroId ?? original?.baseId ?? 'standard'
     const [ecosystem, uploaded] = await Promise.all([discover(), appearance.index()])
     const art = packageArt(uploaded, ecosystem)
@@ -3695,10 +3896,11 @@ export async function apply(ctx) {
     const { id, task, workspaceId, material } = record
     const workspace = material && ctx.get('workspaceRegistry')?.get(workspaceId)
     const [arms, materialState] = await Promise.all([
-      Promise.all(comparisons.arms.map(arm => readComparisonArm(comparisons, record, arm, signal))),
+      readComparisonArms(comparisons, record, signal),
       material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
     ])
-    return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, arms }
+    return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, arms,
+      ...(record.change && { change: record.change }) }
   }
 
   async function createWorkspaceComparison(comparisons, registry, selection, english, signal) {
@@ -3735,6 +3937,7 @@ export async function apply(ctx) {
     let comparison
     if (comparisonId !== undefined) comparison = comparisons.read(comparisonId)
     else if (comparisons === planComparisons) comparison = await createPlanComparison(selection, english, signal)
+    else if (comparisons === rematchComparisons) comparison = await createRematch(selection.baselineSelection, signal)
     else if (comparisons === workspaceComparisons) comparison = await createWorkspaceComparison(comparisons, registry, selection, english, signal)
     else comparison = await comparisons.create(launchId, () => ({ task: lighthouseComparisonTask(english) }))
     if (!comparison) throw new Error('找不到这组同题对照。')
@@ -3752,12 +3955,14 @@ export async function apply(ctx) {
       if (comparison.material) {
         if (workspace?.path !== comparison.cwd) throw new Error('请选择一个现有的工作区。')
         // Check again after resolving the plan. A file can change while its tools are being checked.
-        const prepared = pinned && await preparePlanComparison(comparison, arm)
+        let prepared
+        if (pinned) prepared = await preparePlanComparison(comparison, arm)
+        else if (comparison.loadout) prepared = await prepareRematch(comparison, signal)
         const state = await workspaceMaterialState(comparison, signal)
         if (state !== 'verified') throw new Error(state === 'changed' ? '材料已变化，请用现在的文件开始新的对照。'
           : '无法读取所选材料，请核对工作区内的文件路径。')
         if (prepared) {
-          buildPlans.read(pinned.id, pinned.revision)
+          if (pinned) buildPlans.read(pinned.id, pinned.revision)
           workspace = registry.get(comparison.workspaceId)
           if (workspace?.path !== comparison.cwd) throw new Error('请选择一个现有的工作区。')
           const current = { workspaceId: workspace.id, cwd: workspace.path, presetId: prepared.presetId }
@@ -4685,6 +4890,8 @@ export async function apply(ctx) {
       if (planComparison) {
         value.planComparison = { ...planComparison, ...planComparisonLabels(planComparisons.read(planComparison.id), planComparison.arm) }
       }
+      const rematch = rematchComparisons.member(sessionId)
+      if (rematch) value.rematchComparison = { ...rematch, heroName: rematchComparisons.read(rematch.id).loadout.heroName }
       if (savedTask?.launch && !savedTask.started) {
         const { planName, material, task } = savedTask.launch
         value.planTask = { planName, material, task }
@@ -4722,9 +4929,9 @@ export async function apply(ctx) {
     return await admission.ready && !signal.aborted ? next() : { kind: 'reject' }
   }, { global: true })
   ctx.on('agent/pre-step', async ({ agent, turn, messages, signal }, next) => {
-    const comparisonStore = planComparisons.member(agent.id) ? planComparisons : workspaceComparisons
+    const comparisonStore = materialComparisonStores.find(store => store.member(agent.id))
+    if (!comparisonStore) return next()
     const member = comparisonStore.member(agent.id)
-    if (!member) return next()
     const submissions = messages.filter(message => message.source?.kind === 'user')
     const item = turn === 1 && submissions.length === 1 ? submissions[0] : undefined
     const task = item?.content.length === 1 && item.content[0]?.type === 'text' && item.content[0].text === member.task
@@ -4840,6 +5047,13 @@ export async function apply(ctx) {
         else if (selection?.action === 'plan-comparison') value = await readComparison(planComparisons, selection, english, request.signal)
         else if (selection?.action === 'plan-comparison-preview') value = await previewPlanComparison(selection, english, request.signal)
         else if (selection?.action === 'plan-comparison-open') value = await openComparisonArm(planComparisons, selection, english, request.signal)
+        else if (selection?.action === 'rematch-comparison-options') value = await rematchOptions(selection, request.signal)
+        else if (selection?.action === 'rematch-comparison-preview') value = await previewRematch(selection, request.signal)
+        else if (selection?.action === 'rematch-comparison-open') {
+          value = await openComparisonArm(rematchComparisons, { arm: 'rematch', launchId: selection.launchId,
+            baselineSelection: selection }, english, request.signal)
+        }
+        else if (selection?.action === 'rematch-comparison') value = await readComparison(rematchComparisons, selection, english, request.signal)
         else if (selection?.action === 'comparison-history') value = await comparisonHistory(selection, request.signal)
         else if (selection?.action === 'comparison-loadout-preview') value = await comparisonLoadout(selection, request.signal)
         else if (selection?.action === 'field-playbook-preview') value = await previewFieldPlaybook(selection)
