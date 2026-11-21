@@ -6329,7 +6329,8 @@ window.__ModuleLoader__.load({
       const starterLessonButton = useRef(null)
       const evidenceButton = useRef(null)
       const starterEvidenceButton = useRef(null)
-      const [challengeOpen, setChallengeOpen] = useState(false)
+      const [challengeTrigger, setChallengeTrigger] = useState(null)
+      const challengeButton = useRef(null)
       const starterChallengeButton = useRef(null)
       const [lighthouseCompareOpen, setLighthouseCompareOpen] = useState(false)
       const lighthouseCompareButton = useRef(null)
@@ -7014,6 +7015,9 @@ window.__ModuleLoader__.load({
               h('span', { className: 'moba-starter-entry-action' }, t('选择路线'), h(Glyph, { kind: 'arrow', size: 18 }))),
             h('div', { className: 'moba-lighthouse-entry-actions' },
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
+                ref: challengeButton, 'aria-haspopup': 'dialog', onClick: () => setChallengeTrigger(challengeButton) },
+              h(Glyph, { kind: 'arrow', size: 17 }), t('加入灯塔挑战')),
+              h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: lighthouseCompareButton, 'aria-haspopup': 'dialog', onClick: () => setLighthouseCompareOpen(true) },
               h(Glyph, { kind: 'swap', size: 17 }), t('同题对照')),
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
@@ -7034,7 +7038,7 @@ window.__ModuleLoader__.load({
             onCompare: () => { setStarterOpen(false); setLighthouseCompareOpen(true) },
             onLesson: lesson => setLessonOpen({ lesson, trigger: lesson === lighthouseEvidenceLesson ? starterEvidenceButton : starterLessonButton }),
             lessonButton: starterLessonButton, evidenceButton: starterEvidenceButton,
-            challengeButton: starterChallengeButton, onJoinChallenge: () => setChallengeOpen(true),
+            challengeButton: starterChallengeButton, onJoinChallenge: () => setChallengeTrigger(starterChallengeButton),
             onOpen: sessionId => { cue('lock'); setStarterOpen(false); openSource(sessionId) } }),
           lessonOpen && h(LighthouseLessonLaunch, { request, lesson: lessonOpen.lesson, onCancel: () => {
             const { trigger } = lessonOpen
@@ -7046,12 +7050,12 @@ window.__ModuleLoader__.load({
             setStarterOpen(false)
             openDraftSession(sessionId, task)
           } }),
-          challengeOpen && h(LighthouseChallengeJoin, { request, firstHeroes: trialHeroes.length === 2 ? trialHeroes : undefined, onCancel: () => {
-            setChallengeOpen(false)
-            requestAnimationFrame(() => starterChallengeButton.current?.focus())
+          challengeTrigger && h(LighthouseChallengeJoin, { request, firstHeroes: trialHeroes.length === 2 ? trialHeroes : undefined, onCancel: () => {
+            setChallengeTrigger(null)
+            requestAnimationFrame(() => challengeTrigger.current?.focus())
           }, onOpen: (sessionId, task) => {
             cue('lock')
-            setChallengeOpen(false)
+            setChallengeTrigger(null)
             setStarterOpen(false)
             openDraftSession(sessionId, task)
           } }),
@@ -10028,7 +10032,7 @@ window.__ModuleLoader__.load({
       .moba-hero-trial-entry > svg { color: var(--gold); }
       .moba-hero-trial-emblems { display: flex; gap: 3px; }
       .moba-hero-trial-emblems .moba-starter-hero { width: clamp(30px, 9cqi, 42px); }
-      .moba-lighthouse-entry-actions { display: grid; grid-template-columns: repeat(3, auto); gap: 7px; }
+      .moba-lighthouse-entry-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
       .moba-lighthouse-entry .moba-lighthouse-entry-button { align-self: stretch; border-color: #607d78; background: #192c33;
         max-inline-size: 12em; text-align: start; }
       .moba-lighthouse-entry-button svg { flex: none; }

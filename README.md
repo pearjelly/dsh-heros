@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.111.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.112.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -34,7 +34,7 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 ### Share the hero trial
 
 1. Once both stock heroes finish and the results pass verification, choose **Share hero trial** on the comparison and copy the code. It identifies the public sample version and task language and carries the handoff need. Your replies, files, and workspaces stay in your profile.
-2. To accept an invitation, choose **Join a Lighthouse challenge** from the Armory's Lighthouse entry, paste the code, and choose **Check challenge code**. The preview shows the original task in its original language and the handoff need. Choose your own first hero when both stock presets are available, then manually send the task in DSH. You can still use this entry for shared Lighthouse evidence challenges.
+2. To accept an invitation, choose **Join a Lighthouse challenge** directly in the Armory's Lighthouse section. Paste the code yourself and choose **Check challenge code**. The preview shows the original task in its original language and the handoff need. Choose your own first hero when both stock presets are available, then manually send the task in DSH. The same entry also accepts shared Lighthouse evidence challenges.
 
 ### Give Minimal one more tool
 
@@ -60,7 +60,7 @@ After **Minimal + Deliverable Preview** delivers the original sample card and pa
 ## Share a Lighthouse challenge
 
 1. Complete the public **Missing key evidence** exercise and open **View evidence run**. After the run passes verification, choose **Share a Lighthouse challenge** and copy the code. The code carries the packaged sample version and a portable recipe for the standard loadout. Your choices, results, and files stay in your own profile.
-2. To play a shared challenge, choose **Join a Lighthouse challenge** from the Lighthouse entry in the Armory and paste the code. After checking the sample and equipment sources, you can record your own optional opening choice and open a fresh session. Manually send the task and decide on the native DSH question card.
+2. To play a shared challenge, choose **Join a Lighthouse challenge** in the Armory's Lighthouse section. You can also reach it from **Lighthouse Supply Run**. Paste the code yourself and choose **Check challenge code**. After checking the sample and equipment sources, you can record your own optional opening choice and open a fresh session. Manually send the task and decide on the native DSH question card.
 3. If the sample and stock loadout match and only the source package versions differ, choose **Review the local Standard loadout**. Check the original DSH version alongside the gear and sources this session will actually use. You can then record an opening choice and manually send the task in a new DSH session. A missing stock source or a different loadout blocks this option, while exact matches continue to open from the original check.
 
 ### Replay a public challenge with one gear change
