@@ -1773,6 +1773,10 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     const played = await choose(opened, 'Confirm handoff')
     const message = played.events.find(item => item.type === 'user/message' && item.data.source.kind === 'user')
     assert.equal(message.data.content[0].text, checkedAgain.task)
+    const admission = played.events.find(item => item.type === 'plugin:dsh-agent-loadout/comparison-material' &&
+      item.ignorable && item.seq < message.seq)
+    assert.equal(admission?.data.state, 'verified')
+    assert.equal(admission?.data.requestId, message.data.source.rpcId ?? null)
     assert.deepEqual(played.events.filter(item => item.type === 'tool/call').map(item => item.data.name), ['ask_user_question', 'present'])
     const attachment = played.events.find(item => item.type === 'deliverables/presented')
     assert.equal(attachment.data.files[0].path, join(await realpath(personal), material))
@@ -1816,6 +1820,7 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     assert.equal(freshRun.presetId, played.presetId)
     assert.ok(!freshRun.events.some(item => item.type === 'deliverables/presented'))
     assert.equal(await result(fresh.sessionId), null)
+    assert.ok(!freshRun.events.some(item => item.type === 'plugin:dsh-agent-loadout/comparison-material'))
 
     const revise = await invoke('lesson-task-open', { ...fields, token: checkedAgain.token, launchId: '9'.repeat(32) })
     await choose(revise, 'Revise draft')
@@ -1828,6 +1833,14 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     const rejected = await result(edited.sessionId, true)
     assert.equal(rejected.reason, 'changed-task')
     assert.equal(rejected.draft, undefined)
+    assert.ok(!(await history(edited.sessionId)).events.some(item => item.type === 'plugin:dsh-agent-loadout/comparison-material'))
+
+    const changed = await invoke('lesson-task-open', { ...fields, token: checkedAgain.token, launchId: '7'.repeat(32) })
+    await appendFile(join(personal, material), '\nEdited before sending the independently opened session.\n')
+    const changedRun = await choose(changed, 'Confirm handoff')
+    assert.ok(changedRun.events.some(item => item.type === 'plugin:dsh-agent-loadout/comparison-material' && item.data.state === 'changed'))
+    assert.ok(changedRun.events.some(item => item.type === 'deliverables/presented'))
+    await writeFile(join(personal, material), body)
 
     await send({ sessionId: opened.sessionId, task: 'Read another unrelated note after the handoff.' })
     const subsequent = (await invoke('match-settlements-page', { sessionId: opened.sessionId })).receipts

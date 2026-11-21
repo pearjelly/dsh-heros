@@ -1233,8 +1233,9 @@ export async function apply(ctx) {
       }
       if (verify) verifyLive({ presetId, sessionId })
       const { planName, material, task, source } = checked.view
+      const target = source && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity }
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
-        ...(source && { source }) })
+        ...(source && { source, target }) })
       updates.notify(sessionId)
       return reply
     }
@@ -3680,7 +3681,25 @@ export async function apply(ctx) {
     const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task, source }
     const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, proof])).digest('hex')
     signal?.throwIfAborted()
-    return { view, cwd, digest, draft, candidate, ecosystem, token }
+    return { view, cwd, digest, draft, candidate, ecosystem, token, identity: loadoutIdentity(draft, candidate, ecosystem) }
+  }
+
+  function personalTaskTarget(launch, header) {
+    const { source, target, material, task } = launch ?? {}
+    if (!source || !target || target.presetId !== header.agentPreset || !/^[a-f0-9]{24}$/.test(target.identity)) return
+    const current = { ...target, cwd: header.cwd, material, task }
+    if (validWorkspaceComparison(current)) return current
+  }
+
+  async function personalTaskMaterialState({ workspaceId, cwd, material, digest }, signal) {
+    try {
+      const { workspace, digest: current } = await readPersonalTaskMaterial(workspaceId, material, signal)
+      if (workspace.path !== cwd) return 'unavailable'
+      return current === digest ? 'verified' : 'changed'
+    } catch {
+      signal?.throwIfAborted()
+      return 'unavailable'
+    }
   }
 
   async function checkedRematchBaseline(selection, signal) {
@@ -5158,16 +5177,24 @@ export async function apply(ctx) {
   }, { global: true })
   ctx.on('agent/pre-step', async ({ agent, turn, messages, signal }, next) => {
     const comparisonStore = materialComparisonStores.find(store => store.member(agent.id))
-    if (!comparisonStore) return next()
-    const member = comparisonStore.member(agent.id)
+    if (!comparisonStore && !agent.id.startsWith(planTaskSessionPrefix)) return next()
     const submissions = messages.filter(message => message.source?.kind === 'user')
     const item = turn === 1 && submissions.length === 1 ? submissions[0] : undefined
-    const task = item?.content.length === 1 && item.content[0]?.type === 'text' && item.content[0].text === member.task
     const replies = messages.filter(message => message.source?.kind === 'user-question-reply').map(message => message.source.callId)
+    if (!item && !replies.length) return next()
+    const member = comparisonStore?.member(agent.id)
+    let target
+    if (!member) {
+      const { header, inheritedEventCount } = agent.session
+      const { launch } = planTaskDetails({ header, inheritedEventCount, events: agent.session.snapshotEvents() })
+      target = personalTaskTarget(launch, header)
+      if (!target) return next()
+    }
+    const task = item?.content.length === 1 && item.content[0]?.type === 'text' && item.content[0].text === (member ?? target).task
     if (task || replies.length) {
-      const comparison = comparisonStore.read(member.id)
       try {
-        const state = await workspaceMaterialState(comparison, signal)
+        const state = member ? await workspaceMaterialState(comparisonStore.read(member.id), signal)
+          : await personalTaskMaterialState(target, signal)
         if (!signal.aborted) appendPluginRecord(agent.session, materialProofRecord, {
           turn, state, ...(task && { requestId: item.source.rpcId ?? null }), ...(replies.length && { replies }),
         })
