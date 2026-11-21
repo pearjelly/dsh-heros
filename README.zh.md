@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.106.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.107.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -24,6 +24,12 @@ dsh web
 从插件社区过来时，用上方命令安装当前版本。带版本的地址使用独立的 pnpm 缓存条目，`-w` 允许 CLI 把插件装到 Profile 工作区根目录。
 
 从 DSH 侧栏打开 **深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
+
+## 用同一题试玩两位英雄
+
+1. 在 **英雄图鉴** 打开 **标准模式** 或 **极简模式**，点 **英雄同题试玩**。试玩需要当前 Profile 已启用这两个受支持的原装预设。
+2. 先选 **可打开的原件** 或 **可核对的文字摘要**，再点 **开始同题试玩**。分别打开两局 DSH 会话，在各自的会话手动发送同一道题。两局各用一份相同的内置补给卡。
+3. 点 **查看试玩对照**，对照接班人的需要，核对两局实际回复和附件。可以打开任一局的原会话，查看完整回复和实际交付的文件。
 
 ## 玩一局灯塔证据取舍
 

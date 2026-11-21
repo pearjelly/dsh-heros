@@ -86,6 +86,20 @@ export function lighthouseEvidenceReplayWorkspace(directory, registry, id) {
 }
 
 export const lighthouseArms = ['recon', 'delivery']
+export const lighthouseHeroArms = ['standard', 'minimal']
+export const lighthouseHeroNeeds = ['original', 'summary']
+export const lighthouseHeroTrialFolder = 'lighthouse-hero-trial'
+export const lighthouseHeroMaterial = supplyCard
+export const lighthouseHeroContents = cards[supplyCard]
+
+export const lighthouseHeroTask = english => english
+  ? '[Hero handoff trial]\nRead 02-lighthouse.md in this workspace. Write a short handoff in this conversation with the pickup location, the listed supplies, and the source filename. If the native present tool is available, attach the original card. Leave the workspace files unchanged.'
+  : '【英雄同题试玩】\n阅读当前工作区的 02-lighthouse.md。在对话里写一段简短的交接说明，包含领取地点、卡上列出的物资和来源文件名。如果原生 present 工具可用，把原卡附到当前对话。请保持工作区文件原样。'
+
+export function lighthouseHeroWorkspace(directory, arm, registry) {
+  const title = arm === 'standard' ? 'Lighthouse handoff · 标准模式 Standard' : 'Lighthouse handoff · 极简模式 Minimal'
+  return seedWorkspace(join(directory, arm), registry, title, true)
+}
 
 export function lighthousePracticeContains(profileDataRoot, candidateCanonicalPath) {
   const path = relative(profileDataRoot, candidateCanonicalPath)
@@ -93,7 +107,8 @@ export function lighthousePracticeContains(profileDataRoot, candidateCanonicalPa
   const [folder, id, arm] = path.split(sep)
   return folder === 'lighthouse-supply-run' ||
     [rematchPrefix, evidencePrefix, evidenceReplayPrefix].some(prefix => folder.startsWith(prefix) && openingId.test(folder.slice(prefix.length))) ||
-    (folder === 'lighthouse-comparisons' && openingId.test(id) && lighthouseArms.includes(arm))
+    (folder === 'lighthouse-comparisons' && openingId.test(id) && lighthouseArms.includes(arm)) ||
+    (folder === lighthouseHeroTrialFolder + 's' && openingId.test(id) && lighthouseHeroArms.includes(arm))
 }
 
 export const lighthouseComparisonTask = english => english

@@ -478,6 +478,30 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     ...(followUps.continuationReason && { continuationReason: followUps.continuationReason }), ...(includeWindows && { windows }) }
 }
 
+export function observedHeroHandoff(events, turn, cwd, material, contents) {
+  const body = events.filter(event => event.data?.turn === turn)
+  const calls = new Map(body.filter(event => event.type === 'tool/call').map(event => [event.data.callId, event.data.name]))
+  const results = body.filter(event => event.type === 'tool/result' && event.surfaceOp === 'append' && !event.data.message.isError)
+  const fullCard = contents.trimEnd().split('\n').filter(Boolean)
+  const read = results.find(({ data }) => {
+    const tool = calls.get(data.message.toolCallId)
+    if (tool !== 'read' && tool !== 'bash') return false
+    if (tool === 'read' && data.meta?.path && resolve(cwd, data.meta.path) !== resolve(cwd, material)) return false
+    const text = data.message.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
+    return fullCard.every(line => text.includes(line))
+  })
+  const presented = new Set(results.filter(({ data }) => calls.get(data.message.toolCallId) === 'present')
+    .map(({ data }) => data.message.toolCallId))
+  const originalAttached = body.some(event => event.type === 'deliverables/presented' && presented.has(event.data.callId) &&
+    event.data.files.some(file => typeof file.path === 'string' && resolve(cwd, file.path) === resolve(cwd, material)))
+  const summary = body.filter(event => event.type === 'assistant/message' && event.surfaceOp === 'append' &&
+    (!read || event.seq > read.seq) &&
+    event.data.message.source.kind === 'model').flatMap(({ data }) =>
+    data.message.content.filter(part => part.type === 'text' && part.text.trim()).map(part => part.text.trim()))
+    .at(-1)?.slice(0, 1800)
+  return { materialRead: Boolean(read), originalAttached, ...(summary && { summary }) }
+}
+
 export async function matchReport(source, before, receipts) {
   const events = source.events
   if (before !== undefined && (!Number.isSafeInteger(before) ||

@@ -18,7 +18,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -26,7 +26,7 @@ import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } 
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
-import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, panelActivityRecord, toolSourceRecord } from './match-report.js'
+import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
 import { planReviewActivities } from './plan-reviews.js'
@@ -52,6 +52,8 @@ const planTaskSessionPrefix = 'session-a076'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
 const evidenceOpeningChoices = ['gather', 'qualify', 'pause']
+const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).digest('hex')
+const heroTrialUnavailable = '本机的标准模式与极简模式暂时无法进行这场试玩。'
 const isEvidenceLessonSource = ({ kind, arm }) => kind === 'workspace' && arm === 'evidence'
 const isPublicEvidenceReplaySource = ({ kind, arm, publicEvidenceReplay }) =>
   kind === 'rematch' && arm === 'rematch' && publicEvidenceReplay === true
@@ -465,6 +467,9 @@ export async function apply(ctx) {
   const buildPlans = await openBuildPlans(join(directory, 'plans'), saveEntry, warnings)
   const lighthouseComparisons = await openMatchComparisons(directory, 'lighthouse-comparison', lighthouseArms, saveEntry,
     () => warnings.push('lighthouse-comparisons'))
+  const heroTrials = await openMatchComparisons(directory, lighthouseHeroTrialFolder, lighthouseHeroArms, saveEntry,
+    () => warnings.push('lighthouse-hero-trials'), record => lighthouseHeroNeeds.includes(record.need) &&
+      [lighthouseHeroTask(false), lighthouseHeroTask(true)].includes(record.task))
   const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', [...workspaceComparisonArms, 'evidence'], saveEntry,
     () => warnings.push('workspace-comparisons'),
     record => validWorkspaceComparison(record) && validEvidenceOpeningChoice(record.lesson, record.scenario, record.openingChoice) &&
@@ -836,6 +841,7 @@ export async function apply(ctx) {
       roles,
       standingClaims,
       lighthouseWorkspaceId: sampleWorkspace?.id,
+      heroTrialAvailable: await heroTrialAvailable(ecosystem),
       equipment: [
         ...equipment.map(item => withRank({ ...publicEquipment(item), kind: 'featured', roles: classes.byId.get(item.id),
           art: art('gear', item.id) }, growth.gearRank(item.id))),
@@ -1290,11 +1296,32 @@ export async function apply(ctx) {
     return work
   }
 
-  async function shareEnvironment() {
+  async function shareEnvironment(currentEcosystem) {
     const [ecosystem, boot] = await Promise.all([
-      discover(), runtimeModule(ctx, '@deepseek-ai/dsh-app-boot'),
+      currentEcosystem ?? discover(), runtimeModule(ctx, '@deepseek-ai/dsh-app-boot'),
     ])
     return { ecosystem, sources: buildShareSources(ctx, ecosystem, boot), runtime: boot.getDshRuntimeVersion() }
+  }
+
+  function heroTrialToolFit(arm, names) {
+    return arm === 'standard' ? names.has('read') && names.has('present')
+      : names.has('bash') && !names.has('present') && !names.has('read')
+  }
+
+  async function heroTrialAvailable(currentEcosystem) {
+    if (!toolRuntime || !ctx.get('sessionController')?.resolveAgent || !ctx.get('workspaceRegistry')?.create) return false
+    try {
+      const { ecosystem, sources } = await shareEnvironment(currentEcosystem)
+      return lighthouseHeroArms.every(arm => {
+        const preset = ecosystem.presets.find(item => item.id === arm)
+        if (!preset || preset.broken || sources.hero(arm)?.owner.package !== '@deepseek-ai/dsh-web-app') return false
+        const tools = [...summarizeCapabilities(ecosystem, arm, {}).values()]
+          .filter(item => item.kind === 'tool').map(item => item.name)
+        return heroTrialToolFit(arm, new Set(tools))
+      })
+    } catch {
+      return false
+    }
   }
 
   function shareRefLabel(source) {
@@ -4757,11 +4784,61 @@ export async function apply(ctx) {
     return openComparisonArm(workspaceComparisons, { comparisonId: record.id, arm: evidence ? 'evidence' : 'direct' }, english, signal, requiredPresetId)
   }
 
+  async function createHeroTrial({ launchId, need }, english, signal) {
+    if (!validOpeningId(launchId) || !lighthouseHeroNeeds.includes(need)) throw new Error('请选择这次交接需要什么。')
+    const record = await heroTrials.create(launchId, async () => {
+      if (!await heroTrialAvailable()) throw new Error(heroTrialUnavailable)
+      signal?.throwIfAborted()
+      return { need, task: lighthouseHeroTask(english) }
+    })
+    if (record.need !== need) throw new Error('本次试玩的交接要求已变化，请重新开始。')
+    return readHeroTrial(record, signal)
+  }
+
+  async function readHeroTrialArm(record, arm, signal) {
+    const opening = { id: arm, status: 'unopened' }
+    const { sessionId } = heroTrials.identity(record.id, arm)
+    const unavailable = { id: arm, sessionId, status: 'unavailable', reason: 'session-unavailable' }
+    let source
+    try {
+      const saved = await heroTrials.readArm(record.id, arm)
+      if (!saved?.opened) return opening
+      if (saved.presetId !== arm || saved.digest !== heroTrialDigest ||
+        ctx.get('workspaceRegistry')?.get(saved.workspaceId)?.path !== saved.cwd) return unavailable
+      const material = lighthouseHeroMaterial
+      source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: 'all', signal })
+      const [result, currentMaterialState] = await Promise.all([
+        comparisonEvidence(source, { ...saved, task: record.task, material, exactMessages: true, verifyMaterialDelivery: true }, receipts),
+        workspaceMaterialState({ ...saved, material }, signal),
+      ])
+      const materialState = result.materialState === 'verified' ? currentMaterialState : (result.materialState ?? currentMaterialState)
+      const details = { id: arm, sessionId, workspaceId: saved.workspaceId, ...result, materialState }
+      if (result.status !== 'complete' || result.continuationReason) return details
+      const proof = observedHeroHandoff(source.events, result.turn, saved.cwd, material, lighthouseHeroContents)
+      const meetsNeed = materialState === 'verified' && proof.materialRead && Boolean(proof.summary) &&
+        (record.need === 'summary' || proof.originalAttached)
+      return { ...details, ...proof, meetsNeed }
+    } catch {
+      signal?.throwIfAborted()
+      return unavailable
+    } finally {
+      source?.[Symbol.dispose]()
+    }
+  }
+
+  async function readHeroTrial(record, signal) {
+    if (!record) return { arms: lighthouseHeroArms.map(id => ({ id, status: 'unopened' })) }
+    const { id, need, task } = record
+    return { id, need, task, material: lighthouseHeroMaterial,
+      arms: await Promise.all(lighthouseHeroArms.map(arm => readHeroTrialArm(record, arm, signal))) }
+  }
+
   async function openComparisonArm(comparisons, selection, english, signal, requiredPresetId) {
     const { comparisonId, arm, launchId } = selection
+    const heroTrial = comparisons === heroTrials
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     if (!comparisons.arms.includes(arm) || (comparisonId === undefined
-      ? !validOpeningId(launchId) || (comparisons === workspaceComparisons && !workspaceComparisonArms.includes(arm))
+      ? heroTrial || !validOpeningId(launchId) || (comparisons === workspaceComparisons && !workspaceComparisonArms.includes(arm))
       : !comparisonIdValid(comparisonId))) {
       throw new Error('开局请求无效，请重试。')
     }
@@ -4791,10 +4868,20 @@ export async function apply(ctx) {
     const open = async () => {
       let saved = await comparisons.readArm(id, arm)
       if (requiredPresetId && saved && saved.presetId !== requiredPresetId) throw new Error(challengeChanged)
-      if (saved?.opened) return response
+      if (saved?.opened) return heroTrial ? { ...response, workspaceId: saved.workspaceId } : response
       const pinned = comparison.plans?.[arm]
       let workspace = comparison.workspaceId && registry.get(comparison.workspaceId)
       let verify
+      if (heroTrial) {
+        if (!await heroTrialAvailable()) throw new Error(heroTrialUnavailable)
+        workspace = await lighthouseHeroWorkspace(comparisons.armDirectory(id), arm, registry)
+        const contentDigest = await digestWorkspaceMaterial(workspace.path, lighthouseHeroMaterial, signal)
+        if (contentDigest !== heroTrialDigest) throw new Error('示例材料已修改，请另开一组同题对照。')
+        const current = { workspaceId: workspace.id, cwd: workspace.path, presetId: arm, digest: heroTrialDigest }
+        if (saved && !isDeepStrictEqual(saved, current)) throw new Error('这场会话与原对照阵容不一致。')
+        if (!saved) await comparisons.writeArm(id, arm, current)
+        saved = current
+      }
       if (comparison.material) {
         if (workspace?.path !== comparison.cwd) throw new Error('请选择一个现有的工作区。')
         // Check again after resolving the plan. A file can change while its tools are being checked.
@@ -4855,16 +4942,21 @@ export async function apply(ctx) {
         const created = await controller.create({ sessionId, workspaceId: workspace.id, agentPreset: saved.presetId })
         if (created.sessionId !== sessionId) throw new Error('新对局的会话标识已变化，请重新开局。')
       }
-      if (verify) {
+      if (verify || heroTrial) {
         if (!ctx.get('agents')?.get(sessionId)) {
           const result = await controller.resolveAgent(sessionId)
           if (!result.agent) throw new Error(result.error?.message ?? '无法打开新对局。')
         }
-        verifyLive({ presetId: saved.presetId, sessionId })
+        if (heroTrial) {
+          const agent = ctx.get('agents')?.get(sessionId)
+          const scope = agent && toolRuntime.scopeOf(agent.ctx)
+          if (!scope || ctx.agentPresets.composedPreset(agent.ctx) !== arm ||
+            !heroTrialToolFit(arm, new Set(ctx.tools.schemas(scope).map(tool => tool.name)))) throw new Error(heroTrialUnavailable)
+        } else verifyLive({ presetId: saved.presetId, sessionId })
       }
       await comparisons.writeArm(id, arm, { ...saved, opened: true })
       updates.notify(sessionId)
-      return response
+      return heroTrial ? { ...response, workspaceId: saved.workspaceId } : response
     }
     const work = open().finally(() => openingMatches.delete(sessionId))
     openingMatches.set(sessionId, work)
@@ -5748,6 +5840,8 @@ export async function apply(ctx) {
         value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }),
           ...evidenceReplayView(baseline) }
       }
+      const heroTrial = heroTrials.member(sessionId)
+      if (heroTrial && (await heroTrials.readArm(heroTrial.id, heroTrial.arm))?.opened) value.heroTrial = heroTrial
       if (savedTask?.launch) {
         const { planName, material, task, source } = savedTask.launch
         if (!savedTask.started) value.planTask = { planName, material, task,
@@ -5787,7 +5881,8 @@ export async function apply(ctx) {
     return await admission.ready && !signal.aborted ? next() : { kind: 'reject' }
   }, { global: true })
   ctx.on('agent/pre-step', async ({ agent, turn, messages, signal }, next) => {
-    const comparisonStore = materialComparisonStores.find(store => store.member(agent.id))
+    const heroTrial = heroTrials.member(agent.id)
+    const comparisonStore = heroTrial ? heroTrials : materialComparisonStores.find(store => store.member(agent.id))
     if (!comparisonStore && !agent.id.startsWith(planTaskSessionPrefix)) return next()
     const submissions = messages.filter(message => message.source?.kind === 'user')
     const item = turn === 1 && submissions.length === 1 ? submissions[0] : undefined
@@ -5804,8 +5899,10 @@ export async function apply(ctx) {
     const task = item?.content.length === 1 && item.content[0]?.type === 'text' && item.content[0].text === (member ?? target).task
     if (task || replies.length) {
       try {
-        const state = member ? await workspaceMaterialState(comparisonStore.read(member.id), signal)
-          : await personalTaskMaterialState(target, signal)
+        const material = heroTrial
+          ? { ...await heroTrials.readArm(heroTrial.id, heroTrial.arm), material: lighthouseHeroMaterial }
+          : member && comparisonStore.read(member.id)
+        const state = member ? await workspaceMaterialState(material, signal) : await personalTaskMaterialState(target, signal)
         if (!signal.aborted) appendPluginRecord(agent.session, materialProofRecord, {
           turn, state, ...(task && { requestId: item.source.rpcId ?? null }), ...(replies.length && { replies }),
         })
@@ -5906,6 +6003,13 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-combo-preview') value = await previewQuestCombo(selection)
         else if (selection?.action === 'growth-open') value = await startWithQuest(selection, request.signal)
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
+        else if (selection?.action === 'hero-trial-create') value = await createHeroTrial(selection, english, request.signal)
+        else if (selection?.action === 'hero-trial-open') value = await openComparisonArm(heroTrials, selection, english, request.signal)
+        else if (selection?.action === 'hero-trial') {
+          const record = selection.comparisonId === undefined ? heroTrials.latest() : heroTrials.read(selection.comparisonId)
+          if (selection.comparisonId !== undefined && !record) throw new Error('找不到这组同题对照。')
+          value = await readHeroTrial(record, request.signal)
+        }
         else if (selection?.action === 'lighthouse-rematch-open') value = await openLighthouseLesson(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-evidence-open') value = await openLighthouseLesson(selection, english, request.signal, evidenceLesson)
         else if (selection?.action === 'lighthouse-challenge-share') value = await shareLighthouseChallenge(selection, request.signal)

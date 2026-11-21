@@ -161,6 +161,24 @@ export async function apply(ctx) {
         sequence = equipped ? ['glob', 'fixture_standing_note'] : ['glob']
         name = sequence[results.length]
         args = name === 'glob' ? { pattern: 'README.md' } : {}
+      } else if (latestText?.startsWith('【英雄同题试玩】\n') || latestText?.startsWith('[Hero handoff trial]\n')) {
+        const offered = new Set(tools?.map(tool => tool.name))
+        const material = '02-lighthouse.md'
+        sequence = [offered.has('read') ? 'read' : 'bash', ...(offered.has('present') ? ['present'] : [])]
+        name = sequence[results.length]
+        if (name === 'read') args = { file_path: material }
+        if (name === 'bash') args = { command: 'cat 02-lighthouse.md', description: 'Read the packaged Lighthouse supply card' }
+        if (name === 'present') {
+          const file = process.env.DSH_LOADOUT_TEST_WRONG_LIGHTHOUSE_CARD === '1' ? 'alternate/' + material : material
+          args = { files: [{ path: file, description: 'Packaged Lighthouse supply card' }] }
+        }
+        if (!name) {
+          sequence = undefined
+          const output = results[0]?.content.map(block => block.text ?? '').join(' ') ?? ''
+          text = ['Second-floor lookout', '2 cans of lamp oil', '1 signal flag'].every(fact => output.includes(fact))
+            ? 'Handoff: Collect 2 cans of lamp oil and 1 signal flag at the second-floor lookout. Source: 02-lighthouse.md.'
+            : 'The supplies and collection point were not verified in the read result.'
+        }
       } else if (latestText?.startsWith('【灯塔同题对照】\n') || latestText?.startsWith('[Lighthouse comparison]\n')) {
         const english = latestText.startsWith('[Lighthouse comparison]')
         const canPresent = tools?.some(tool => tool.name === 'present')

@@ -1436,6 +1436,172 @@ test('field playbooks preview read-only and add a real handoff decision to the s
   }
 })
 
+test('stock heroes use the same Lighthouse card and show which delivery need each native session meets', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-stock-hero-trial-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const fixture = { insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }
+  const material = '02-lighthouse.md'
+  const handoff = 'Handoff: Collect 2 cans of lamp oil and 1 signal flag at the second-floor lookout. Source: 02-lighthouse.md.'
+  let host
+  try {
+    await writeFile(patch, JSON.stringify([fixture]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, fields, status) => (await host.request(endpoint, { action, ...fields }, status)).value
+    const create = async (launchId, need, status = 200) => {
+      const response = await host.requestRaw(endpoint, { method: 'POST',
+        headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+        body: JSON.stringify({ action: 'hero-trial-create', launchId, need }) })
+      const payload = await response.json()
+      assert.equal(response.status, status, JSON.stringify(payload))
+      return payload.value
+    }
+    const read = comparisonId => invoke('hero-trial', { comparisonId })
+    const open = (comparisonId, arm, status) => invoke('hero-trial-open', { comparisonId, arm }, status)
+    const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
+    const send = ({ sessionId, task, requestId }) => host.request(turnEndpoint, { sessionId, text: task, requestId })
+    const byHero = (trial, hero) => trial.arms.find(arm => arm.id === hero)
+    const traceTools = native => native.events.filter(event => event.type === 'tool/call')
+    const traceFiles = native => native.events.filter(event => event.type === 'deliverables/presented').flatMap(event => event.data.files)
+    const launchId = value => value.repeat(32)
+    const nativeSessions = async () => {
+      const entries = await readdir(join(env.DSH_HOME, 'sessions'), { recursive: true, withFileTypes: true }).catch(error => {
+        if (error.code === 'ENOENT') return []
+        throw error
+      })
+      return entries.filter(entry => entry.isDirectory() && entry.name.startsWith('session-')).map(entry => entry.name).sort()
+    }
+
+    const before = (await host.request(endpoint)).value
+    const beforeSessions = await nativeSessions()
+    assert.equal(before.heroTrialAvailable, true)
+    assert.equal((await read()).id, undefined)
+    await create('../', 'original', 422)
+    await create(launchId('c'), 'both', 422)
+    const [trial, duplicate] = await Promise.all([create(launchId('a'), 'original'), create(launchId('a'), 'original')])
+    assert.deepEqual(duplicate, trial)
+    assert.equal(trial.need, 'original')
+    assert.equal(trial.material, material)
+    assert.match(trial.task, /^\[Hero handoff trial\]\n/)
+    assert.ok(trial.task.includes(material))
+    assert.deepEqual(trial.arms.map(({ id, status }) => [id, status]), [['standard', 'unopened'], ['minimal', 'unopened']])
+    assert.equal((await read()).id, trial.id)
+    await create(launchId('a'), 'summary', 422)
+    await open(trial.id, 'ptc', 422)
+    await open(launchId('d'), 'standard', 422)
+    assert.deepEqual(await nativeSessions(), beforeSessions)
+
+    const [standard, sameStandard] = await Promise.all([open(trial.id, 'standard'), open(trial.id, 'standard')])
+    assert.deepEqual(sameStandard, standard)
+    const minimal = await open(trial.id, 'minimal')
+    assert.notEqual(standard.sessionId, minimal.sessionId)
+    assert.notEqual(standard.workspaceId, minimal.workspaceId)
+    assert.deepEqual(await nativeSessions(), [...beforeSessions, standard.sessionId, minimal.sessionId].sort())
+    const drafts = new Map()
+    const waiting = await read(trial.id)
+    for (const [hero, opened] of [['standard', standard], ['minimal', minimal]]) {
+      assert.equal(opened.id, trial.id)
+      assert.equal(opened.task, trial.task)
+      assert.ok(opened.requestId)
+      const native = await history(opened.sessionId)
+      assert.equal(native.presetId, hero)
+      assert.equal(native.workspaceId, opened.workspaceId)
+      assert.equal(native.inherited, 0)
+      assert.ok(!native.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+      assert.equal(byHero(waiting, hero).status, 'waiting')
+      assert.equal(byHero(waiting, hero).summary, undefined)
+      assert.deepEqual((await equipmentIn(host, opened.sessionId)).heroTrial, { id: trial.id, arm: hero, task: trial.task })
+      drafts.set(hero, native)
+    }
+    const materialBytes = await readFile(join(drafts.get('standard').workspacePath, material))
+    assert.notEqual(drafts.get('standard').workspacePath, drafts.get('minimal').workspacePath)
+    assert.match(materialBytes.toString(), /Second-floor lookout.*2 cans of lamp oil, 1 signal flag/su)
+    assert.deepEqual(await readFile(join(drafts.get('minimal').workspacePath, material)), materialBytes)
+    assert.deepEqual((await host.request(endpoint)).value.plans, before.plans)
+
+    await send(standard)
+    assert.equal(byHero(await read(trial.id), 'minimal').status, 'waiting')
+    await send(minimal)
+    const result = await read(trial.id)
+    for (const [hero, opened] of [['standard', standard], ['minimal', minimal]]) {
+      const native = await history(opened.sessionId)
+      const arm = byHero(result, hero)
+      const actualPrompt = native.events.find(event => event.type === 'user/message' && event.data.source.kind === 'user')
+      const nativeText = native.events.filter(event => event.type === 'assistant/message')
+        .flatMap(event => event.data.message.content.filter(block => block.type === 'text').map(block => block.text))
+      assert.equal(actualPrompt?.data.content[0].text, trial.task)
+      assert.ok(nativeText.includes(handoff))
+      const names = hero === 'standard' ? ['read', 'present'] : ['bash']
+      assert.deepEqual(traceTools(native).map(event => event.data.name), names)
+      const nativeRead = native.events.find(event => event.type === 'tool/result')
+      assert.match(JSON.stringify(nativeRead.data.message.content), /Second-floor lookout.*2 cans of lamp oil/u)
+      assert.deepEqual(traceFiles(native).map(file => file.path), hero === 'standard' ? [join(native.workspacePath, material)] : [])
+      assert.deepEqual(await readFile(join(native.workspacePath, material)), materialBytes)
+      assert.equal(arm.sessionId, opened.sessionId)
+      assert.equal(arm.status, 'complete')
+      assert.equal(arm.materialState, 'verified')
+      assert.equal(arm.summary, handoff)
+      assert.equal(arm.originalAttached, hero === 'standard')
+      assert.equal(arm.meetsNeed, hero === 'standard')
+      assert.deepEqual(arm.deliverables.map(file => file.name), hero === 'standard' ? [material] : [])
+      assert.deepEqual(arm.entries.map(item => [item.name, item.state]), names.map(name => [name, 'completed']))
+    }
+
+    const summary = await create(launchId('b'), 'summary')
+    assert.equal(summary.task, trial.task)
+    assert.equal(summary.need, 'summary')
+    const minimalSummary = await open(summary.id, 'minimal')
+    await send(minimalSummary)
+    const textOnly = byHero(await read(summary.id), 'minimal')
+    assert.equal(textOnly.summary, handoff)
+    assert.equal(textOnly.originalAttached, false)
+    assert.equal(textOnly.meetsNeed, true)
+    const changed = await open(summary.id, 'standard')
+    const changedNative = await history(changed.sessionId)
+    await appendFile(join(changedNative.workspacePath, material), '\nEdited after opening the isolated trial.\n')
+    await send(changed)
+    const invalid = byHero(await read(summary.id), 'standard')
+    assert.equal(invalid.status, 'unavailable')
+    assert.equal(invalid.materialState, 'changed')
+    assert.ok(!invalid.originalAttached && !invalid.meetsNeed)
+
+    await host.stop()
+    host = await startHost({ ...env, DSH_LOADOUT_TEST_WRONG_LIGHTHOUSE_CARD: '1' }, patch)
+    assert.deepEqual(await read(trial.id), result)
+    assert.deepEqual(await open(trial.id, 'standard'), standard)
+    assert.equal((await read()).id, summary.id)
+    const alternateTrial = await create(launchId('e'), 'original')
+    const alternate = await open(alternateTrial.id, 'standard')
+    const alternateNative = await history(alternate.sessionId)
+    const sameName = join(alternateNative.workspacePath, 'alternate', material)
+    await mkdir(dirname(sameName))
+    await writeFile(sameName, materialBytes)
+    await send(alternate)
+    assert.deepEqual(traceFiles(await history(alternate.sessionId)).map(file => file.path), [sameName])
+    assert.deepEqual(await readFile(join(alternateNative.workspacePath, material)), materialBytes)
+    const wrongFile = byHero(await read(alternateTrial.id), 'standard')
+    assert.equal(wrongFile.status, 'complete')
+    assert.equal(wrongFile.summary, handoff)
+    assert.equal(wrongFile.originalAttached, false)
+    assert.equal(wrongFile.meetsNeed, false)
+    assert.deepEqual((await host.request(endpoint)).value.plans, before.plans)
+
+    await host.stop()
+    await writeFile(patch, JSON.stringify([fixture, { id: 'preset-minimal', disabled: true }]))
+    host = await startHost(env, patch)
+    assert.equal((await host.request(endpoint)).value.heroTrialAvailable, false)
+    await create(launchId('f'), 'original', 422)
+    const archived = await read(trial.id)
+    assert.equal(archived.id, trial.id)
+    assert.equal(archived.need, 'original')
+    assert.deepEqual(byHero(archived, 'standard'), byHero(result, 'standard'))
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('isolated Lighthouse rematch lesson makes the real review choice visible', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-lighthouse-lesson-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }

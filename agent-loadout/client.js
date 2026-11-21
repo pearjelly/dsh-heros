@@ -512,16 +512,18 @@ window.__ModuleLoader__.load({
     }
 
     function HeroGallery({ presets, items, roles, current, initialHero, initialEquipment, gear, sources, currentDraft, baseOnly, request, signatureRules, onSignature,
-      onRegistered, onClose, onSelect, onInspectGear, onOpenMatch, onPrepareRound, onPrepareDelivery }) {
+      onRegistered, onClose, onSelect, onInspectGear, onOpenMatch, onPrepareRound, onPrepareDelivery, heroTrialAvailable, onOpenTrial }) {
       const [query, setQuery] = useState('')
       const [role, setRole] = useState('')
       const [choice, setChoice] = useState(initialHero ?? current)
       const [importId, setImportId] = useState(null)
+      const [trialOpen, setTrialOpen] = useState(false)
       const importOpen = importId !== null
       const pick = event => setChoice(event.currentTarget.value)
       const dialog = useRef(null)
       const search = useRef(null)
       const pickedCard = useRef(null)
+      const trialButton = useRef(null)
       const titleId = useId()
       const groupId = useId()
       const catalog = useMemo(() => new Set(items.map(item => item.id)), [items])
@@ -560,7 +562,7 @@ window.__ModuleLoader__.load({
         onClose()
       }
 
-      return h('dialog', { ref: dialog, className: 'moba-gallery', 'aria-labelledby': titleId,
+      return h(Fragment, null, h('dialog', { ref: dialog, className: 'moba-gallery', 'aria-labelledby': titleId,
         onCancel: event => { event.preventDefault(); close() } },
         h('header', { className: 'moba-gallery-heading' },
           h('h2', { id: titleId }, importOpen ? importId ? t('核对旧预设更新') : t('接入旧预设') : t('英雄图鉴')),
@@ -618,6 +620,10 @@ window.__ModuleLoader__.load({
                           h('dd', null, h('ul', null, group.map(item =>
                             h('li', { key: item.id }, h(ItemArt, { item }), h('span', null, item.name)))))))),
                   hero.id !== current && h(HeroSwitchPreview, { hero, currentDraft, baseOnly, change, sources, request }),
+                  heroTrialAvailable && heroTrialHeroes.some(item => item.id === hero.id) && h('div', { className: 'moba-gallery-comparison' },
+                    h('button', { ref: trialButton, className: 'moba-roster-open', type: 'button', 'aria-haspopup': 'dialog',
+                      onClick: () => setTrialOpen(true) }, t(heroTrialTitle)),
+                    h('p', null, t('让标准模式和极简模式处理同一张补给卡，看看哪种交付适合接班人。'))),
                   hero.gearCompatibility?.length > 0 && h('details', { className: 'moba-gallery-kit', open: true },
                     h('summary', null, t('受版本限制的自带装备')), hero.gearCompatibility.map(item => h('div', {
                       key: item.id, className: 'moba-compatibility-gear',
@@ -640,7 +646,11 @@ window.__ModuleLoader__.load({
             onClick: () => {
               close()
               if (hero.id !== current) onSelect(hero.id)
-            } }, hero?.id === current ? t('返回当前阵容') : t('选择英雄'), h(Glyph, { kind: 'arrow', size: 17 })))))
+            } }, hero?.id === current ? t('返回当前阵容') : t('选择英雄'), h(Glyph, { kind: 'arrow', size: 17 }))))),
+        trialOpen && h(HeroTrial, { request, onClose: () => {
+          setTrialOpen(false)
+          requestAnimationFrame(() => trialButton.current?.focus())
+        }, onVisit: (sessionId, task) => { close(); onOpenTrial(sessionId, task) } }))
     }
 
     function LegacyPresetImport({ initialId, request, onRegistered, onBack }) {
@@ -1535,7 +1545,7 @@ window.__ModuleLoader__.load({
     const lighthouseEvidenceReplayLabel = '卸下证据核验再试一局'
 
     function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart, onReuse, onRematch, onLessonTask, outfit,
-      evidenceReplay, testedSource, onLighthouseEvidenceReplay }) {
+      evidenceReplay, testedSource, onLighthouseEvidenceReplay, result, fillOnVisit = true }) {
       const files = arm.deliverables ?? empty
       const pendingQuestions = arm.pendingQuestions ?? empty
       return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status, 'data-comparison-arm': arm.id, tabIndex: -1,
@@ -1544,7 +1554,7 @@ window.__ModuleLoader__.load({
           h('div', null, h('h3', null, comparisonArmName(config, arm)),
             arm.heroName ? h('small', { className: 'moba-lighthouse-arm-hero' }, arm.heroName)
               : (config.tools || config.gear) && h('code', null, config.tools ?? t(config.gear))),
-          h('strong', { className: 'moba-lighthouse-arm-state', role: 'status' }, t(comparisonArmStates[arm.status]))),
+          h('strong', { className: 'moba-lighthouse-arm-state', role: 'status' }, t(comparisonArmStates[arm.status] ?? arm.status))),
         testedSource && h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t('此方案保存自这局'))),
         outfit ? h(PlanEquipment, { items: outfit, removed: arm.removed ?? empty })
           : arm.removed?.length > 0 && h(RemovedEquipment, { labels: arm.removed }),
@@ -1561,6 +1571,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, 'aria-haspopup': 'dialog',
             'data-rematch-arm': arm.id, onClick: onLighthouseEvidenceReplay }, t(lighthouseEvidenceReplayLabel))),
         h(ObservedComparisonCalls, { entries: arm.entries }),
+        result,
         evidenceReplay && arm.status === 'complete' && !arm.entries?.some(entry => entry.type === 'tool' && entry.choices?.length) &&
           h('p', { className: 'moba-lighthouse-note' }, t('本局没有记录提问卡选择。')),
         (arm.status === 'complete' || files.length > 0) && h('div', { className: 'moba-lighthouse-artifacts' },
@@ -1578,11 +1589,216 @@ window.__ModuleLoader__.load({
               type: 'button', className: 'moba-roster-open', disabled: busy, onClick: () => onNotice(putTask(task)),
             }, t('填入任务')),
             h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
-              onClick: () => onVisit(arm.sessionId, arm.status === 'waiting' ? task : undefined) },
-            t('查看原会话')))
+              onClick: () => onVisit(arm.sessionId, fillOnVisit && arm.status === 'waiting' ? task : undefined) },
+            t(config.visit ?? '查看原会话')))
             : arm.status === 'unopened' && onStart && h('button', { type: 'button', className: 'moba-start', disabled: busy || !canStart,
               onClick: () => onStart(arm.id) }, t(config.open),
               h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
+    const heroTrialTitle = '英雄同题试玩'
+    const heroTrialView = '查看试玩对照'
+    const heroTrialNeeds = [
+      { id: 'original', icon: 'report', name: '可打开的原件', note: '接班人要在会话里打开原件核对。' },
+      { id: 'summary', icon: 'report', name: '可核对的文字摘要', note: '接班人只要拿到补给卡的要点。' },
+    ]
+    const heroTrialHeroes = [
+      { id: 'standard', icon: 'report', name: '标准模式', open: '打开标准模式会话', visit: '查看标准模式原会话',
+        note: '自带原生读取和文件交付工具。' },
+      { id: 'minimal', icon: 'action', name: '极简模式', open: '打开极简模式会话', visit: '查看极简模式原会话',
+        note: '可用终端读取材料并用文字回应。' },
+    ]
+    function HeroTrialResult({ arm }) {
+      const materialNote = { changed: '这局的试玩材料已修改。', unavailable: '暂时无法读取这局的试玩材料。' }[arm.materialState]
+      if (!arm.summary && arm.status !== 'complete') return materialNote ? h('p', { role: 'status', className: 'moba-alert' }, t(materialNote)) : null
+      return h('div', { className: 'moba-lighthouse-artifacts' },
+        h('h4', null, t('本局交接记录')),
+        materialNote && h('p', { role: 'status', className: 'moba-alert' }, t(materialNote)),
+        h('ul', null,
+          typeof arm.meetsNeed === 'boolean' && h('li', null, h('strong', null, t(arm.meetsNeed
+            ? '这局的交付记录符合接班需求' : '这局未记录到符合接班需求的交付'))),
+          typeof arm.materialRead === 'boolean' && h('li', null, t(arm.materialRead
+            ? '记录到读取补给卡' : '未核对到补给卡读取记录')),
+          !materialNote && typeof arm.originalAttached === 'boolean' && h('li', null, t(arm.originalAttached
+            ? '补给卡原件已附到会话' : '这局未核对到补给卡原件附件'))),
+        arm.summary && h('details', { open: true }, h('summary', null, t('助手实际回复')),
+          h('p', { className: 'moba-lighthouse-note', style: { whiteSpace: 'pre-wrap' } }, arm.summary)))
+    }
+
+    function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, backLabel = '返回英雄图鉴' }) {
+      const language = useLanguage()
+      const [need, setNeed] = useState('')
+      const [activeId, setActiveId] = useState(comparisonId ?? '')
+      const [latest, setLatest] = useState(null)
+      const [board, setBoard] = useState(null)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [attempt, retry] = useState(0)
+      const mutation = useRef(false)
+      const launchIds = useRef(new Map())
+      const taskField = useRef(null)
+      const group = useId()
+      const setup = !activeId
+      const value = board?.id === activeId ? board : undefined
+
+      useEffect(() => {
+        const abort = new AbortController()
+        let timer
+        async function refresh() {
+          try {
+            const action = 'hero-trial'
+            const result = await request(action, { action, ...(activeId && { comparisonId: activeId }) }, abort.signal, language)
+            if (abort.signal.aborted) return
+            if (!activeId) {
+              setLatest(result?.id ? result : null)
+              return
+            }
+            if (result?.id !== activeId) {
+              setError(t('无法读取这组英雄试玩。'))
+              return
+            }
+            setBoard(result)
+            if (result.arms.some(arm => ['waiting', 'running', 'waiting-choice'].includes(arm.status))) {
+              timer = setTimeout(refresh, 1600)
+            }
+          } catch (reason) {
+            if (!abort.signal.aborted && activeId) setError(reason.message)
+          }
+        }
+        refresh()
+        return () => { abort.abort(); clearTimeout(timer) }
+      }, [request, activeId, language, attempt])
+
+      async function start(event) {
+        event.preventDefault()
+        if (!need || mutation.current) return
+        mutation.current = true
+        setBusy(true)
+        setError('')
+        try {
+          const action = 'hero-trial-create'
+          if (!launchIds.current.has(need)) {
+            const bytes = crypto.getRandomValues(new Uint8Array(16))
+            launchIds.current.set(need, Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''))
+          }
+          const created = await request(action, { action, need, launchId: launchIds.current.get(need) }, undefined, language)
+          launchIds.current.delete(need)
+          setBoard(created)
+          setActiveId(created.id)
+        } catch (reason) {
+          setError(reason.message)
+        } finally {
+          mutation.current = false
+          setBusy(false)
+        }
+      }
+
+      async function open(arm) {
+        if (!value || mutation.current) return
+        mutation.current = true
+        setBusy(true)
+        setError('')
+        try {
+          const action = 'hero-trial-open'
+          const opened = await request(action, { action, comparisonId: value.id, arm }, undefined, language)
+          onVisit(opened.sessionId, opened.task)
+        } catch (reason) {
+          setError(reason.message)
+        } finally {
+          mutation.current = false
+          setBusy(false)
+        }
+      }
+
+      async function copy() {
+        try {
+          await navigator.clipboard.writeText(value.task)
+          setNotice(t('同题任务已复制。'))
+        } catch {
+          taskField.current?.focus()
+          taskField.current?.select()
+          setNotice(t('已选中任务文字，可以手动复制。'))
+        }
+      }
+
+      function reset() {
+        setNeed('')
+        setActiveId('')
+        setError('')
+        setNotice('')
+      }
+
+      const finished = value?.arms.length > 0 && value.arms.every(arm => arm.status === 'complete')
+      return h(InstallDialog, { title: t(heroTrialTitle), busy, onCancel: onClose,
+        className: setup ? 'moba-starter-dialog' : 'moba-lighthouse-comparison',
+        initialFocus: setup ? 'input[type="radio"]' : value ? '[data-hero-trial-results]' : 'h2',
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!busy) onClose() }) },
+        setup ? h('form', { onSubmit: start },
+          h('p', null, t('同一张内置补给卡，两种交接。先为接班人选好交付要求。')),
+          h('fieldset', { className: 'moba-starter-routes', disabled: busy },
+            h('legend', null, t('接班人需要什么？')),
+            heroTrialNeeds.map(item => h('label', { key: item.id, className: 'moba-starter-route', 'data-picked': need === item.id },
+              h('input', { type: 'radio', name: group, required: true, value: item.id, checked: need === item.id,
+                onChange: event => setNeed(event.currentTarget.value) }),
+              h('span', null, h('strong', null, h(Glyph, { kind: item.icon, size: 16 }), t(item.name)), h('small', null, t(item.note)))))),
+          error && h('p', { role: 'alert', className: 'moba-alert' }, error),
+          h('div', { className: 'moba-install-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-text', disabled: busy, onClick: onClose }, t(backLabel)),
+            latest?.id && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
+              onClick: () => { setBoard(latest); setError(''); setActiveId(latest.id) } }, t('继续上一次试玩')),
+            h('button', { type: 'submit', className: 'moba-start', disabled: busy || !need },
+              t(busy ? '正在准备试玩…' : '开始同题试玩'), h(Glyph, { kind: 'arrow', size: 16 }))))
+          : h(Fragment, null,
+            value ? h(Fragment, null,
+              h('p', { tabIndex: -1, 'data-hero-trial-results': true }, h('strong', null, t('接班人需要什么？')), ' ',
+                t(heroTrialNeeds.find(item => item.id === value.need)?.name ?? value.need)),
+              !finished && h('p', { className: 'moba-lighthouse-note' }, t('每位英雄有自己的会话。请分别手动发送同一段任务，再回来看结果。')),
+              finished && h('p', { className: 'moba-lighthouse-note' }, t('交付是否符合需求依据工具、回复和附件记录。摘要内容可打开原会话核对。')),
+              h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm => {
+                const config = heroTrialHeroes.find(item => item.id === arm.id)
+                return config && h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
+                  onStart: open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
+                  onNotice: status => setNotice(t(comparisonDraftNotices[status])), result: h(HeroTrialResult, { arm }) })
+              })),
+              h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
+                h('textarea', { ref: taskField, readOnly: true, rows: 3, value: value.task })),
+              h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制任务')))
+              : !error && h('p', { role: 'status' }, t('正在读取英雄试玩…')),
+            error && h('p', { role: 'alert', className: 'moba-alert' }, error),
+            notice && h('p', { role: 'status', className: 'moba-lighthouse-note' }, notice),
+            h('div', { className: 'moba-install-actions moba-starter-actions' },
+              h('button', { type: 'button', className: 'moba-text', disabled: busy, onClick: onClose }, t(backLabel)),
+              error && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
+                onClick: () => { setError(''); retry(count => count + 1) } }, t('重试')),
+              !comparisonId && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: reset }, t('另开一组试玩')))))
+    }
+
+    function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn }) {
+      const [open, setOpen] = useState(false)
+      const [draftStatus, setDraftStatus] = useState('')
+      const trigger = useRef(null)
+      const hero = heroTrialHeroes.find(item => item.id === member.arm)
+      useEffect(() => {
+        const status = consumeDraft(sessionId)
+        if (status) setDraftStatus(status)
+      }, [member.id, sessionId, consumeDraft])
+
+      function close() {
+        setOpen(false)
+        requestAnimationFrame(() => trigger.current?.focus())
+      }
+
+      return h(Fragment, null,
+        h('div', { className: 'moba-lighthouse-anchor' },
+          h('div', null, h('strong', null, t(heroTrialTitle)), hero && h('span', null, t(hero.name))),
+          h('div', { className: 'moba-lighthouse-anchor-actions' },
+            h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
+              onClick: () => setOpen(true) }, t(heroTrialView))),
+          !hasTurn && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
+        open && h(HeroTrial, { request, comparisonId: member.id, sessionId, onClose: close,
+          backLabel: '返回试玩会话', putTask: task => putTask(sessionId, task),
+          onVisit: (next, task) => { if (next === sessionId) close(); else { setOpen(false); onVisit(next, task) } } }))
     }
 
     function rematchGearName(item) {
@@ -6752,6 +6968,7 @@ window.__ModuleLoader__.load({
               saved: value.saved.map(item => item.baseId === id ? { ...item, heroSignature: signature } : item) })),
             onClose: () => setGalleryOpen(false), onSelect: changePreset, onInspectGear: inspectGalleryEquipment,
             onOpenMatch: openSource, onPrepareRound: prepareHeroRound,
+            heroTrialAvailable: data?.heroTrialAvailable === true, onOpenTrial: openDraftSession,
             onPrepareDelivery: pending || !canCompare ? undefined : prepareHeroDelivery }),
           flagsOpen && h(FlagCollection, { request, heroId: stagePreset?.id, initialFlagId: flagsOpen.id, onClose: () => setFlagsOpen(null),
             onDisplay: () => setLoadAttempt(attempt => attempt + 1), onOpenMatch: openSource, onPrepare: applyFlagLoadout }),
@@ -8894,6 +9111,8 @@ window.__ModuleLoader__.load({
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
+        snapshot?.heroTrial && h(HeroTrialAnchor, { member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
+          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt) }),
         snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
           kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openDraftSession,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), onUse: reuseComparisonLoadout,
