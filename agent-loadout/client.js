@@ -1873,15 +1873,25 @@ window.__ModuleLoader__.load({
       }
 
       const source = preview?.source && [preview.source.name, preview.source.version].filter(Boolean).join(' · ')
-      return h(InstallDialog, { title: t('核对极简模式加装'), className: 'moba-lighthouse-comparison moba-playbook-dialog', busy: opening, onCancel: onBack,
+      return h(InstallDialog, { title: t('核对极简模式加装'),
+        className: 'moba-lighthouse-comparison moba-playbook-dialog', busy: opening, onCancel: onBack,
         initialFocus: '[data-minimal-replay-intro]', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
-        h('p', { tabIndex: -1, 'data-minimal-replay-intro': true }, t('保留极简模式和原有的终端工具。加上交付物预览后，同一张补给卡可以附到会话里。')),
+        h('p', { tabIndex: -1, 'data-minimal-replay-intro': true }, t('沿用极简模式和原有终端，只加一件装备。')),
         preview && h(Fragment, null,
-          h(InstallFacts, { facts: [[t('装备来源'), source], [t('材料文件'), preview.material]] }),
-          preview.comparison && h('section', { className: 'moba-gallery-comparison', 'aria-label': t('对照结果') },
-            h(CapabilityDifferences, { result: preview.comparison, activeDelta, setActiveDelta })),
-          h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
-            h('textarea', { readOnly: true, rows: 3, value: preview.task })),
+          h('section', { className: 'moba-minimal-replay-gear' },
+            h(ItemArt, { item: { id: 'present' } }),
+            h('div', null, h('h3', null, t('交付物预览')),
+              h('p', null, t('让接班人从会话打开补给卡原件。')))),
+          h('details', { className: 'moba-minimal-replay-detail' },
+            h('summary', null, t('查看工具和来源')),
+            h(InstallFacts, { facts: [[t('装备来源'), source]] }),
+            preview.comparison && h('section', { className: 'moba-gallery-comparison', 'aria-label': t('对照结果') },
+              h(CapabilityDifferences, { result: preview.comparison, activeDelta, setActiveDelta }))),
+          h('details', { className: 'moba-minimal-replay-detail' },
+            h('summary', null, t('查看复赛使用的任务')),
+            h(InstallFacts, { facts: [[t('材料文件'), preview.material]] }),
+            h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
+              h('textarea', { readOnly: true, rows: 3, value: preview.task }))),
           h('p', { className: 'moba-lighthouse-note' }, t('打开加装会话后，请手动发送同一段任务。'))),
         !state && h('p', { role: 'status' }, t('正在核对极简模式加装…')),
         (state?.error || openError) && h('p', { role: 'alert', className: 'moba-alert' }, state?.error || openError),
@@ -10841,6 +10851,15 @@ window.__ModuleLoader__.load({
       .moba-hero-replay-result { display: grid; gap: 6px; min-width: 0; padding: 9px;
         border: 1px solid #59786b; background: #1b2d2b; }
       .moba-hero-replay-result dd:last-child { color: #afddc0; }
+      .moba-minimal-replay-gear { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center;
+        gap: 10px; margin: 10px 0; padding: 9px; border-block: 1px solid #5e7468; background: #202c2c; }
+      .moba-minimal-replay-gear .moba-item-art { width: 44px; height: 44px; }
+      .moba-minimal-replay-gear h3 { margin: 0 0 3px; color: var(--gold); font-size: 16px; }
+      .moba-minimal-replay-gear p { margin: 0; color: var(--ink); }
+      .moba-minimal-replay-detail { min-width: 0; border-block-end: 1px solid var(--line); }
+      .moba-minimal-replay-detail > summary { padding: 7px 1px; color: var(--blue); cursor: pointer; }
+      .moba-minimal-replay-detail[open] { padding-block-end: 7px; }
+      .moba-minimal-replay-detail .moba-lighthouse-task { margin-block-start: 7px; }
       .moba-handoff-report-grid { grid-template-columns: repeat(auto-fit, minmax(min(206px, 100%), 1fr)); }
       .moba-handoff-report-side header { align-items: center; }
       .moba-handoff-report-side header span:not(.moba-starter-hero) { display: block; color: var(--muted); font-weight: 500; }
