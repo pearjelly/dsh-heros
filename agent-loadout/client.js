@@ -1111,7 +1111,7 @@ window.__ModuleLoader__.load({
       { id: 'delivery', icon: 'report', name: '交付路线', tools: 'glob → present', outcome: '把补给卡交到对话里，你可以点开核对内容。' },
     ]
 
-    function LighthouseStarter({ hero, request, launchIds, onCancel, onOpen, onEquip }) {
+    function LighthouseStarter({ hero, request, launchIds, onCancel, onOpen, onEquip, onCompare }) {
       const [route, setRoute] = useState('delivery')
       const [busy, setBusy] = useState(false)
       const [problem, setProblem] = useState(null)
@@ -1169,11 +1169,205 @@ window.__ModuleLoader__.load({
           problem && h('p', { className: 'moba-alert', role: 'alert' }, problem.message),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: onCancel }, t('返回大厅')),
+            h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: onCompare }, t('同题对照')),
             problem?.sessionId && h('button', { type: 'button', className: 'moba-roster-open',
               onClick: () => onOpen(problem.sessionId) }, t('进入已建对局')),
             h('button', { type: 'submit', className: 'moba-start', disabled: busy },
               busy ? t('正在准备对局…') : problem ? t('重试') : t('锁定路线并开局'),
               h(Glyph, { kind: 'arrow', size: 16 })))))
+    }
+
+    const lighthouseArmNames = { recon: '侦察阵容', delivery: '交付阵容' }
+    const lighthouseArmStates = { unopened: '待开局', waiting: '等待发送任务', running: '任务进行中', complete: '已完成', unavailable: '暂不可对照' }
+    const lighthouseArmReasons = {
+      'changed-task': '任务文字已改动。用同一段文字重新试一组。',
+      'changed-loadout': '实际出装已变更。请用对照指定的阵容重新尝试。',
+      interrupted: '这次尝试已中断。',
+      'session-unavailable': '暂时无法读取这次尝试的会话。',
+    }
+    const comparisonDraftNotices = {
+      applied: '同题任务已填入输入栏。请在会话中手动发送。',
+      preserved: '已保留输入栏原有草稿。可复制同题任务后手动粘贴。',
+      blocked: '可复制同题任务，粘贴到会话输入栏。',
+    }
+
+    function LighthouseArm({ arm, task, sessionId, busy, onStart, onVisit, putTask, onNotice }) {
+      const config = starterRoutes.find(route => route.id === arm.id)
+      const files = arm.deliverables ?? empty
+      const tools = arm.entries?.filter(entry => entry.type === 'tool') ?? empty
+      return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status },
+        h('header', null, h(Glyph, { kind: config.icon, size: 20 }),
+          h('div', null, h('h3', null, t(lighthouseArmNames[arm.id])),
+            h('code', null, config.tools)),
+          h('strong', { className: 'moba-lighthouse-arm-state', role: 'status' }, t(lighthouseArmStates[arm.status]))),
+        arm.reason && h('p', { className: 'moba-lighthouse-note' }, t(lighthouseArmReasons[arm.reason] ?? arm.reason)),
+        arm.models?.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('实际使用的模型') + ' · ' + arm.models.join(' / ')),
+        tools.length > 0 && h('ul', { className: 'moba-lighthouse-results', 'aria-label': t('实测工具调用') },
+          tools.map((entry, index) => h('li', { key: index },
+            h('div', null, h('strong', null, entry.name),
+              entry.sourceNames?.length > 0 && h('small', null, t('调用来源 ') + entry.sourceNames.join(' / ')),
+              entry.choices?.length > 0 && h('small', null, t('你实际选择了 ') + entry.choices.join(' / '))),
+            h('span', { 'data-state': entry.state }, t(reportToolStates[entry.state] ?? entry.state))))),
+        arm.status === 'complete' && h('div', { className: 'moba-lighthouse-artifacts' },
+          h('h4', null, t('交付文件') + ' · ' + files.length),
+          files.length > 0 && h('ul', null, files.map((file, index) => h('li', { key: index }, file.name)))),
+        h('footer', null,
+          arm.sessionId ? h(Fragment, null,
+            typeof putTask === 'function' && arm.sessionId === sessionId && arm.status === 'waiting' && h('button', {
+              type: 'button', className: 'moba-roster-open', disabled: busy, onClick: () => onNotice(putTask(task)),
+            }, t('填入任务')),
+            h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
+              onClick: () => onVisit(arm.sessionId, arm.status === 'waiting' ? task : undefined) },
+            t('查看原会话')))
+            : arm.status === 'unopened' && h('button', { type: 'button', className: 'moba-start', disabled: busy,
+              onClick: () => onStart(arm.id) }, arm.id === 'recon' ? t('打开侦察会话') : t('打开交付会话'),
+              h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
+    function LighthouseComparison({ request, comparisonId, sessionId, onClose, onVisit, putTask }) {
+      const language = useLanguage()
+      const [prototype, setPrototype] = useState(false)
+      const [view, setView] = useState(null)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [attempt, retry] = useState(0)
+      const [launch, setLaunch] = useState('')
+      const starting = useRef(false)
+      const launchIds = useRef(new Map())
+      const taskField = useRef(null)
+      const scope = useMemo(() => prototype ? { prototype: true } : comparisonId ? { comparisonId }
+        : sessionId ? { sessionId } : {}, [prototype, comparisonId, sessionId])
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'lighthouse-comparison'
+        let timer
+        async function update() {
+          try {
+            const result = await request(action, { action, ...scope }, abort.signal, language)
+            if (abort.signal.aborted) return
+            setView({ scope, result })
+            if (result?.arms.some(arm => arm.status === 'running' || arm.status === 'waiting')) {
+              timer = setTimeout(update, 1600)
+            }
+          } catch (reason) {
+            if (!abort.signal.aborted) setError(reason.message)
+          }
+        }
+        update()
+        return () => { abort.abort(); clearTimeout(timer) }
+      }, [request, scope, language, attempt])
+
+      const value = view?.scope === scope ? view.result : undefined
+      const task = value?.task
+      const finished = value?.arms.every(arm => arm.status === 'complete')
+
+      async function start(arm) {
+        if (starting.current || !value) return
+        starting.current = true
+        setLaunch(arm)
+        setError('')
+        const key = (value.id ?? '') + ':' + arm
+        const action = 'lighthouse-comparison-open'
+        try {
+          if (!launchIds.current.has(key)) {
+            const bytes = crypto.getRandomValues(new Uint8Array(16))
+            launchIds.current.set(key, Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''))
+          }
+          const opened = await request(action, { action, comparisonId: value.id, arm, launchId: launchIds.current.get(key) })
+          launchIds.current.delete(key)
+          onVisit(opened.sessionId, opened.task)
+        } catch (reason) {
+          setError(reason.message)
+        } finally {
+          starting.current = false
+          setLaunch('')
+        }
+      }
+
+      async function copy() {
+        try {
+          await navigator.clipboard.writeText(task)
+          setNotice(t('同题任务已复制。'))
+        } catch {
+          taskField.current?.focus()
+          taskField.current?.select()
+          setNotice(t('已选中任务文字，可以手动复制。'))
+        }
+      }
+
+      function switchPreview(next) {
+        setError('')
+        setNotice('')
+        setPrototype(next)
+      }
+
+      return h(InstallDialog, { title: t('灯塔同题对照'), className: 'moba-lighthouse-comparison', busy: Boolean(launch),
+        onCancel: onClose, initialFocus: '.moba-lighthouse-close', onKeyDown: event => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          if (!starting.current) onClose()
+        } },
+        h('p', { className: 'moba-lighthouse-note' }, t('两边用同一段任务。进入各自会话后，用输入栏手动发送。')),
+        error && h('p', { className: 'moba-alert', role: 'alert' }, error, ' ',
+          h('button', { type: 'button', className: 'moba-text', disabled: Boolean(launch), onClick: () => {
+            setError(''); retry(value => value + 1)
+          } }, t('刷新对照'))),
+        !error && value === undefined && h('p', { className: 'moba-empty', role: 'status' }, t('正在读取对照…')),
+        value === null && h('p', { className: 'moba-empty', role: 'status' }, t('找不到此会话的对照。')),
+        value && h(Fragment, null,
+          h('div', { className: 'moba-lighthouse-task' },
+            h('label', null, t('两边共用的任务'),
+              h('textarea', { ref: taskField, readOnly: true, value: task, rows: 4 })),
+            h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制任务')),
+            notice && h('p', { className: 'moba-lighthouse-note', role: 'status' }, notice)),
+          h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm =>
+            h(LighthouseArm, { key: arm.id, arm, task, sessionId, busy: Boolean(launch), onStart: start, onVisit, putTask,
+              onNotice: outcome => setNotice(t(comparisonDraftNotices[outcome] ?? comparisonDraftNotices.blocked)) }))),
+          finished && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t('两次尝试已完成，可以回看实际调用和交付。'))),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          value?.id && !prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
+            onClick: () => switchPreview(true) }, t('开始新的对照')),
+          prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
+            onClick: () => switchPreview(false) }, t('返回上次对照')),
+          h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-close', disabled: Boolean(launch),
+            onClick: onClose }, t('关闭同题对照'))))
+    }
+
+    function LighthouseComparisonAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn }) {
+      const [open, setOpen] = useState(false)
+      const [draftStatus, setDraftStatus] = useState('')
+      const trigger = useRef(null)
+      useEffect(() => {
+        if (!member?.id) return
+        const outcome = consumeDraft(sessionId)
+        if (outcome) setDraftStatus(outcome)
+      }, [member?.id, sessionId, consumeDraft])
+      useEffect(() => { if (hasTurn) setDraftStatus('') }, [hasTurn])
+
+      if (!member) return null
+      function close() {
+        setOpen(false)
+        requestAnimationFrame(() => trigger.current?.focus())
+      }
+      return h(Fragment, null,
+        h('div', { className: 'moba-lighthouse-anchor' },
+          h('div', null, h('strong', null, t('灯塔同题对照')), h('span', null, t(lighthouseArmNames[member.arm]))),
+          h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
+            onClick: () => setOpen(true) }, t('同题对照')),
+          draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
+        open && h(LighthouseComparison, { request, comparisonId: member.id, sessionId, onClose: close,
+          putTask: task => putTask(sessionId, task),
+          onVisit: (next, task) => {
+            if (next === sessionId) {
+              if (task) setDraftStatus(putTask(sessionId, task))
+              close()
+            } else {
+              setOpen(false)
+              onVisit(next, task)
+            }
+          } }))
     }
 
     function ActionEditor({ target, request, onClose, onSaved }) {
@@ -3526,7 +3720,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-text', disabled: pending, onClick: onReturn }, t('回原对局'))))
     }
 
-    function Lobby({ request, workspaces, open, manage, openSource, getReturnDraft, consumeReturnDraft }) {
+    function Lobby({ request, workspaces, open, manage, openSource, openComparisonSession, getReturnDraft, consumeReturnDraft }) {
       const language = useLanguage()
       const workspaceList = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [returning] = useState(getReturnDraft)
@@ -3552,6 +3746,8 @@ window.__ModuleLoader__.load({
       const [starterOpen, setStarterOpen] = useState(false)
       const starterLaunchIds = useRef({})
       const starterButton = useRef(null)
+      const [lighthouseCompareOpen, setLighthouseCompareOpen] = useState(false)
+      const lighthouseCompareButton = useRef(null)
       const [playbooksOpen, setPlaybooksOpen] = useState(false)
       const playbooksButton = useRef(null)
       const [notice, setNotice] = useState(proven ? t('已载入实战出装草稿。') : '')
@@ -4176,18 +4372,30 @@ window.__ModuleLoader__.load({
               document.fullscreenEnabled && h('button', { type: 'button', className: 'moba-icon-action',
                 onClick: toggleFullscreen, 'aria-label': fullscreen ? t('退出全屏') : t('全屏备战'),
                 'aria-pressed': fullscreen, title: fullscreen ? t('退出全屏') : t('全屏备战') }, h(Glyph, { kind: 'fullscreen' })))),
-          data && h('button', { type: 'button', className: 'moba-starter-entry', disabled: pending, ref: starterButton,
-            'aria-haspopup': 'dialog', onClick: () => setStarterOpen(true) },
-            h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'flag', size: 23 })),
-            h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t('灯塔补给行动')),
-              h('span', null, t('找到补给卡就撤，还是带着交付物回来？'))),
-            h('span', { className: 'moba-starter-entry-action' }, t('选择路线'), h(Glyph, { kind: 'arrow', size: 18 }))),
+          data && h('div', { className: 'moba-lighthouse-entry' },
+            h('button', { type: 'button', className: 'moba-starter-entry', disabled: pending, ref: starterButton,
+              'aria-haspopup': 'dialog', onClick: () => setStarterOpen(true) },
+              h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'flag', size: 23 })),
+              h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t('灯塔补给行动')),
+                h('span', null, t('找到补给卡就撤，还是带着交付物回来？'))),
+              h('span', { className: 'moba-starter-entry-action' }, t('选择路线'), h(Glyph, { kind: 'arrow', size: 18 }))),
+            h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
+              ref: lighthouseCompareButton, 'aria-haspopup': 'dialog', onClick: () => setLighthouseCompareOpen(true) },
+            h(Glyph, { kind: 'swap', size: 17 }), t('同题对照'))),
           starterOpen && h(LighthouseStarter, { hero: presets.find(item => item.id === 'standard' && !item.broken),
             request, launchIds: starterLaunchIds, onCancel: () => {
               setStarterOpen(false)
               requestAnimationFrame(() => starterButton.current?.focus())
             }, onEquip: () => cue('equip'),
+            onCompare: () => { setStarterOpen(false); setLighthouseCompareOpen(true) },
             onOpen: sessionId => { cue('lock'); setStarterOpen(false); openSource(sessionId) } }),
+          lighthouseCompareOpen && h(LighthouseComparison, { request, onClose: () => {
+            setLighthouseCompareOpen(false)
+            requestAnimationFrame(() => lighthouseCompareButton.current?.focus())
+          }, onVisit: (sessionId, task) => {
+            setLighthouseCompareOpen(false)
+            openComparisonSession(sessionId, task)
+          } }),
           playbooksOpen && h(FieldPlaybooks, { request, draftKey: canCompare ? draftKey : '', sourceSessionId: returning?.sessionId,
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
             onClose: closePlaybooks, onAdopt: adoptPlaybook }),
@@ -5861,7 +6069,8 @@ window.__ModuleLoader__.load({
         }))
     }
 
-    function MatchEquipment({ sessionId, request, openLobby, openContinuation, send }) {
+    function MatchEquipment({ sessionId, request, openLobby, openContinuation, openComparisonSession,
+      consumeComparisonDraft, putComparisonTask, send }) {
       const language = useLanguage()
       const id = useId()
       const anchor = '--moba-match-' + id.replace(/[^a-zA-Z0-9-]/g, '')
@@ -6163,6 +6372,10 @@ window.__ModuleLoader__.load({
         h('span', null, snapshot.heroName))
       return h(Fragment, null,
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
+        snapshot?.lighthouseComparison && h(LighthouseComparisonAnchor, {
+          member: snapshot.lighthouseComparison, sessionId, request, onVisit: openComparisonSession,
+          consumeDraft: consumeComparisonDraft, putTask: putComparisonTask, hasTurn: Boolean(snapshot.running || receipt),
+        }),
         showReceipt && h(SettlementRibbon, { key: receipt.id, receipt, quest: questReady, snapshot, controls: id,
           onDetails: event => show(event, settlementAction), onQuest: event => show(event, growthAction),
           onGear: (event, focusGearId) => show(event, { ...settlementAction, focusGearId }),
@@ -6874,6 +7087,15 @@ window.__ModuleLoader__.load({
         gap: clamp(7px, 2cqi, 15px); width: 100%; margin-block-end: 15px; padding: 8px 11px;
         border: 1px solid #8a754d; background: linear-gradient(115deg, #1b2d34, #17202b 62%, #272315);
         text-align: start; }
+      .moba-lighthouse-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; margin-block-end: 15px; }
+      .moba-lighthouse-entry .moba-starter-entry { margin: 0; }
+      .moba-lighthouse-entry .moba-lighthouse-entry-button { align-self: stretch; border-color: #607d78; background: #192c33;
+        max-inline-size: 12em; text-align: start; }
+      .moba-lighthouse-entry-button svg { flex: none; }
+      @container (max-width: 390px) {
+        .moba-lighthouse-entry .moba-starter-entry { grid-template-columns: auto minmax(0, 1fr); }
+        .moba-lighthouse-entry .moba-starter-entry-action { display: none; }
+      }
       .moba-starter-entry:hover:not(:disabled) { border-color: var(--gold); background: linear-gradient(115deg, #26414a, #1e2a37 62%, #332b19); }
       .moba-starter-entry:disabled { opacity: .6; }
       .moba-starter-symbol { display: grid; place-items: center; width: 39px; height: 39px;
@@ -7288,6 +7510,45 @@ window.__ModuleLoader__.load({
       .moba-direct-form input[type="file"]::file-selector-button { margin-right: 8px; padding: 6px 9px; border: 1px solid #745f40; background: #1b2331; color: var(--ink); cursor: pointer; }
       .moba-market-dialog .moba-market-actions { margin-top: 12px; }
       .moba-starter-dialog { width: min(535px, calc(100vw - 28px)); }
+      .moba-lighthouse-comparison { --ink: #f3e9d2; --muted: #b6b4bc; --gold: #e6bc70; --line: #564532;
+        --blue: #9ed4ec; --deep: #0a0e17; width: min(700px, calc(100vw - 28px)); }
+      .moba-lighthouse-comparison h2 { margin: 0; font-size: 22px; }
+      .moba-lighthouse-comparison button { font: inherit; }
+      .moba-lighthouse-comparison :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+      .moba-lighthouse-note { margin: 6px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+      .moba-lighthouse-task { display: grid; gap: 5px; align-items: start; margin: 10px 0; padding: 8px;
+        border: 1px solid #4b655f; background: #16252b; }
+      .moba-lighthouse-task label { display: grid; gap: 5px; color: #b8ded4; font-size: 12px; }
+      .moba-lighthouse-task textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; color: var(--ink);
+        background: #111b24; border: 1px solid #4b655f; padding: 6px; font: inherit; line-height: 1.4; }
+      .moba-lighthouse-task button { justify-self: start; }
+      .moba-lighthouse-arms { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(245px, 100%), 1fr));
+        align-items: start; gap: 7px; }
+      .moba-lighthouse-arm { display: grid; gap: 8px; min-width: 0; padding: 8px; border: 1px solid var(--line);
+        background: #141b27; overflow-wrap: anywhere; }
+      .moba-lighthouse-arm header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 7px; }
+      .moba-lighthouse-arm header svg { margin-top: 2px; color: var(--gold); }
+      .moba-lighthouse-arm h3 { margin: 0 0 2px; color: var(--ink); font-size: 15px; }
+      .moba-lighthouse-arm code { color: #a5d9d1; font-size: 12px; }
+      .moba-lighthouse-arm-state { min-width: 0; max-width: 8em; text-align: end; color: var(--muted); font-size: 11px; }
+      .moba-lighthouse-arm[data-state="complete"] .moba-lighthouse-arm-state { color: #afddc0; }
+      .moba-lighthouse-arm[data-state="unavailable"] .moba-lighthouse-arm-state { color: #ffc0cf; }
+      .moba-lighthouse-results, .moba-lighthouse-artifacts ul { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+      .moba-lighthouse-results li { display: flex; justify-content: space-between; gap: 6px; min-width: 0; padding: 5px;
+        border: 1px solid #3d4051; font-size: 12px; }
+      .moba-lighthouse-results small { display: block; color: var(--muted); font-size: 11px; }
+      .moba-lighthouse-results li > span { flex: none; max-width: 9em; font-size: 11px; color: #f3c592; }
+      .moba-lighthouse-results li > span[data-state="completed"] { color: #adceb6; }
+      .moba-lighthouse-artifacts { padding: 6px; background: #14252b; }
+      .moba-lighthouse-artifacts h4 { margin: 0 0 4px; color: #b8ded4; font-size: 12px; }
+      .moba-lighthouse-artifacts li { font-size: 12px; }
+      .moba-lighthouse-arm footer { display: flex; flex-wrap: wrap; gap: 5px; justify-content: end; }
+      .moba-lighthouse-comparison > .moba-market-actions { position: sticky; inset-block-end: 0; background: #171c27; padding-block: 4px; }
+      .moba-lighthouse-anchor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+        gap: 3px 7px; padding: 6px 8px; margin-block-end: 5px; border: 1px solid #607d78; background: #192c33; color: #f3e9d2; font-size: 12px; }
+      .moba-lighthouse-anchor div { display: flex; flex-wrap: wrap; gap: 1px 7px; overflow-wrap: anywhere; }
+      .moba-lighthouse-anchor span { color: #b8ded4; }
+      .moba-lighthouse-anchor p { grid-column: 1 / -1; margin: 0; color: #ccdcd8; font-size: 11px; }
       .moba-starter-dialog h2 { margin: 0 0 12px; font-size: 22px; }
       .moba-starter-brief { display: grid; grid-template-columns: 45px minmax(0, 1fr); align-items: center; gap: 9px;
         padding: 8px; background: #16252b; border: 1px solid #4b655f; }
@@ -7638,6 +7899,7 @@ window.__ModuleLoader__.load({
           // The host can still expose the source-language UI while reconnecting.
         }
         let returnDraft
+        let comparisonDraft
         function consumeReturnDraft(draft) {
           if (returnDraft === draft) returnDraft = undefined
         }
@@ -7647,6 +7909,26 @@ window.__ModuleLoader__.load({
           returnDraft = { sessionId, workspaceId: workspace?.workspaceId, presetId: snapshot?.presetId ?? projection, selectionPresetId,
             running: snapshot?.running, continuation: snapshot?.continuation, followUp, inspect, relaySetup, flagId, proven }
           ctx.get('layout')?.selectPanel(panelId)
+        }
+        function putComparisonTask(sessionId, task) {
+          const binding = ctx.sessions.binding(sessionId)
+          const input = ctx.get('conversation')?.input
+          if (!binding || typeof input?.requestDraftInitialization !== 'function') return 'blocked'
+          try {
+            return input.requestDraftInitialization(binding, { prompt: task, whenDraftExists: 'keep' })
+          } catch {
+            return 'blocked'
+          }
+        }
+        function openComparisonSession(sessionId, task) {
+          comparisonDraft = task ? { sessionId, task } : undefined
+          ctx.uiWorkspace.openSession(sessionId)
+        }
+        function consumeComparisonDraft(sessionId) {
+          if (comparisonDraft?.sessionId !== sessionId) return
+          const { task } = comparisonDraft
+          comparisonDraft = undefined
+          return putComparisonTask(sessionId, task)
         }
         ctx.effect(() => {
           const sheet = document.createElement('style')
@@ -7708,7 +7990,8 @@ window.__ModuleLoader__.load({
           { name: 'conversation.input.dock', id: panelId, order: 5 },
           ({ sessionId, session }) => {
             const id = sessionId ?? session?.sessionId
-            return id ? h(MatchEquipment, { key: id, sessionId: id, request, openLobby, send,
+            return id ? h(MatchEquipment, { key: id, sessionId: id, request, openLobby, send, openComparisonSession,
+              consumeComparisonDraft, putComparisonTask,
               openContinuation: next => ctx.uiWorkspace.openSession(next) }) : null
           }))
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
@@ -7716,7 +7999,7 @@ window.__ModuleLoader__.load({
           ({ sessionId }) => sessionId ? h(InteractionReturn, { sessionId, status: ctx.uiSession.sessionStatus, openLobby }) : null))
         ctx.slots.inject('main', () => ctx.slots.register(
           { name: 'main', key: panelId, inject: () => ({
-            request, workspaces: ctx.workspaces.list, manage, openSource: id => ctx.uiWorkspace.openSession(id),
+            request, workspaces: ctx.workspaces.list, manage, openSource: id => ctx.uiWorkspace.openSession(id), openComparisonSession,
             getReturnDraft: () => returnDraft, consumeReturnDraft,
             async open(workspaceId, { presetId: agentPreset, verifyLive }, matchMode, sourceSessionId) {
               if (!matchMode && !verifyLive) return ctx.uiWorkspace.openWorkspace(workspaceId, undefined, { agentPreset })

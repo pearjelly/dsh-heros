@@ -1204,6 +1204,147 @@ test('Lighthouse starts two real loadouts without sending, and awards the delive
   }
 })
 
+test('Lighthouse same-task comparison keeps two original attempts and their native evidence', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-lighthouse-compare-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  let host
+  try {
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, payload, status) => (await host.request(endpoint, { action, ...payload }, status)).value
+    const read = filter => invoke('lighthouse-comparison', filter)
+    const open = (arm, launchId, comparisonId, status) =>
+      invoke('lighthouse-comparison-open', { arm, launchId, comparisonId }, status)
+    const history = id => host.request('/api/loadout-fixture-history?sessionId=' + id)
+    const armOf = (view, id) => view.arms.find(arm => arm.id === id)
+    const rank = async () => (await host.request(endpoint)).value.presets.find(hero => hero.id === 'standard').rank?.xp ?? 0
+    const launchA = 'a'.repeat(32)
+    const launchB = 'b'.repeat(32)
+    const preview = await read({ prototype: true })
+    assert.deepEqual(preview.arms.map(arm => [arm.id, arm.status]), [['recon', 'unopened'], ['delivery', 'unopened']])
+    assert.match(preview.task, /^【灯塔同题对照】\n/)
+    await open('unknown', launchA, undefined, 422)
+    await open('recon', '../', undefined, 422)
+    const xpBefore = await rank()
+    const [recon, retry] = await Promise.all([open('recon', launchA), open('recon', launchA)])
+    assert.deepEqual(recon, retry)
+    assert.equal(recon.task, preview.task)
+    assert.ok(recon.requestId)
+    const originalId = recon.id
+    const filter = { comparisonId: originalId }
+    const pending = await read()
+    assert.equal(pending.id, originalId)
+    assert.equal(armOf(pending, 'recon').status, 'waiting')
+    assert.equal(armOf(pending, 'recon').sessionId, recon.sessionId)
+    assert.equal(armOf(pending, 'delivery').status, 'unopened')
+    assert.equal(await rank(), xpBefore)
+    const reconHistory = await history(recon.sessionId)
+    assert.ok(reconHistory.workspaceId)
+    assert.ok(reconHistory.workspacePath)
+    assert.ok(!reconHistory.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    const linked = await equipmentIn(host, recon.sessionId)
+    assert.deepEqual(linked.lighthouseComparison, { id: originalId, arm: 'recon', task: recon.task })
+    assert.equal((await read({ sessionId: recon.sessionId })).id, originalId)
+
+    await host.request('/api/loadout-fixture-shadow', { sessionId: recon.sessionId, mode: 'hold-result', tool: 'glob' })
+    const reconTurn = host.request(turnEndpoint, { sessionId: recon.sessionId, text: recon.task, requestId: randomUUID() })
+    reconTurn.catch(() => {})
+    try {
+      let held
+      for (let attempt = 0; attempt < 100; attempt++) {
+        held = (await host.request(turnEndpoint, { sessionId: recon.sessionId, gateStatus: true })).held
+        if (held) break
+        await delay(40)
+      }
+      assert.ok(held)
+      assert.equal(armOf(await read(filter), 'recon').status, 'running')
+    } finally {
+      await host.request(turnEndpoint, { sessionId: recon.sessionId, finish: true })
+      await reconTurn
+    }
+    const first = await read(filter)
+    const doneRecon = armOf(first, 'recon')
+    assert.equal(doneRecon.status, 'complete')
+    assert.equal(doneRecon.turn, 1)
+    assert.equal(armOf(first, 'delivery').status, 'unopened')
+    assert.deepEqual(doneRecon.entries.map(entry => [entry.name, entry.state]),
+      [['glob', 'completed'], ['ask_user_question', 'completed']])
+    assert.ok(doneRecon.entries.find(entry => entry.name === 'glob').sourceNames?.length)
+    assert.deepEqual(doneRecon.entries.find(entry => entry.name === 'ask_user_question').choices, ['先保留路径'])
+    assert.deepEqual(doneRecon.deliverables, [])
+    await invoke('match-report', { sessionId: recon.sessionId })
+    const xpAfterRecon = await rank()
+
+    const delivery = await open('delivery', launchB, originalId)
+    assert.notEqual(delivery.sessionId, recon.sessionId)
+    assert.notEqual(delivery.requestId, recon.requestId)
+    assert.equal(delivery.task, recon.task)
+    assert.deepEqual(await open('delivery', launchA, originalId), delivery)
+    assert.equal(await rank(), xpAfterRecon)
+    const deliveryHistory = await history(delivery.sessionId)
+    assert.notEqual(deliveryHistory.workspaceId, reconHistory.workspaceId)
+    assert.notEqual(deliveryHistory.workspacePath, reconHistory.workspacePath)
+    assert.ok(!deliveryHistory.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    for (const filename of ['01-waystation.md', '02-lighthouse.md', '03-old-bridge.md']) {
+      const left = await readFile(join(reconHistory.workspacePath, filename), 'utf8')
+      const right = await readFile(join(deliveryHistory.workspacePath, filename), 'utf8')
+      assert.equal(right, left)
+    }
+    const equips = async ({ presetId }) => host.request('/api/loadout-fixture-tools?id=' + presetId)
+    assert.ok(!(await equips(reconHistory)).includes('present'))
+    assert.ok((await equips(deliveryHistory)).includes('present'))
+
+    await host.request(turnEndpoint, { sessionId: delivery.sessionId, text: delivery.task, requestId: delivery.requestId })
+    const complete = await read(filter)
+    assert.deepEqual(armOf(complete, 'recon'), doneRecon)
+    const otherLanguage = await host.requestRaw(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+      body: JSON.stringify({ action: 'lighthouse-comparison', ...filter }),
+    })
+    assert.equal(otherLanguage.status, 200)
+    assert.equal((await otherLanguage.json()).value.task, recon.task)
+    const doneDelivery = armOf(complete, 'delivery')
+    assert.equal(doneDelivery.status, 'complete')
+    assert.equal(doneDelivery.turn, 1)
+    assert.deepEqual(doneDelivery.entries.map(entry => [entry.name, entry.state]), [['glob', 'completed'], ['present', 'completed']])
+    assert.ok(doneDelivery.entries.find(entry => entry.name === 'present').sourceNames?.length)
+    assert.deepEqual(doneDelivery.deliverables, [{ name: '02-lighthouse.md', turn: 1 }])
+    const presented = (await history(delivery.sessionId)).events.find(event => event.type === 'deliverables/presented')
+    assert.equal(presented.data.files[0].path, join(deliveryHistory.workspacePath, '02-lighthouse.md'))
+
+    await host.request(turnEndpoint, { sessionId: delivery.sessionId, text: 'Fixture follow-up [0-9][0-9]-*.md' })
+    assert.deepEqual(armOf(await read(filter), 'delivery'), doneDelivery)
+    const fork = await invoke('continue', { sourceSessionId: delivery.sessionId, presetId: 'standard' })
+    assert.ok((await history(fork.sessionId)).inherited > 0)
+    assert.equal(await read({ sessionId: fork.sessionId }), null)
+
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual((await read()).arms, complete.arms)
+    assert.deepEqual(await open('recon', launchB, originalId), recon)
+    assert.equal((await read({ sessionId: delivery.sessionId })).id, originalId)
+
+    const edited = await open('delivery', 'c'.repeat(32))
+    assert.notEqual(edited.id, originalId)
+    await host.request(turnEndpoint, { sessionId: edited.sessionId,
+      text: edited.task + '\nOnly for a separate experiment.', requestId: edited.requestId })
+    const editedStatus = armOf(await read({ comparisonId: edited.id }), 'delivery')
+    assert.equal(editedStatus.status, 'unavailable')
+    assert.equal(editedStatus.reason, 'changed-task')
+    assert.ok(!editedStatus.deliverables?.length)
+    assert.ok((await history(edited.sessionId)).events.some(event => event.type === 'deliverables/presented'))
+    await host.request(turnEndpoint, { sessionId: edited.sessionId, text: edited.task, requestId: randomUUID() })
+    assert.deepEqual(armOf(await read({ comparisonId: edited.id }), 'delivery'), editedStatus)
+    assert.deepEqual((await read(filter)).arms, complete.arms)
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 60_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-playbook-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }

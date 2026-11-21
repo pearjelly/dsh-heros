@@ -15,13 +15,19 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.72.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.73.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 For the desktop app, use its bundled CLI with `--profile desktop`, then quit and reopen the app. If an earlier copy is installed, remove `dsh-agent-loadout` from the same profile before installing the release. The package keeps that identifier for compatibility.
 
 Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
+
+## Compare two Lighthouse loadouts
+
+1. Choose **Compare runs** in the lobby to open **Lighthouse comparison**. Start **Recon** and **Delivery** in separate, fresh Standard Mode sessions seeded with matching copies of the sample files.
+2. Send the same prepared task yourself in each session. Recon can find the card with `glob` and ask whether the path is enough. Delivery equips Deliverable Preview and can attach the card with `present`. Open the original session to inspect the attachment when it is delivered.
+3. Choose **Compare runs** in either session to finish the other route or review both results. Compare actual tool calls, any answer you gave in a DSH question card, and delivered file names. Use **Review proven loadout** in the original session to reuse the gear you verified.
 
 ## Play the Lighthouse Supply Run
 

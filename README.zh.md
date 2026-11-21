@@ -15,13 +15,19 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.72.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.73.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 桌面版用应用随附的 CLI，把 `--profile web` 改为 `--profile desktop`，安装后退出并重新打开应用。如果已安装早期版本，先从同一 Profile 移除 `dsh-agent-loadout` 再安装。发布包沿用这个内部名称，便于兼容原有阵容。
 
 从 DSH 侧栏打开 **深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
+
+## 同一道题试两套出装
+
+1. 在大厅打开 **同题对照**，为侦察和交付分别开一个全新的标准模式会话。两个工作区各有一份相同的示例材料。
+2. 在两局各自打开并发送同一段任务。侦察可以用 `glob` 找位置，再问你路径是否够用。交付装上 **交付物预览**，可以用 `present` 把卡片放进对话。成功交付后，可到原会话打开文件核对。
+3. 回到 **同题对照** 继续未跑的路线，或核对两局实际调用、在 DSH 提问卡上的选择和交付的文件名。想保留一套打法，可到对应原会话用 **核对已验证出装** 复用装备。
 
 ## 打一局灯塔补给行动
 

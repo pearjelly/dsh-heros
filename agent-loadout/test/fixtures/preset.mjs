@@ -69,6 +69,9 @@ export async function apply(ctx) {
   }, { global: true })
   ctx.on('user-questions/request', (request, next) => {
     const question = request.questions[0]
+    if (question?.id === 'fixture-lighthouse-route') {
+      return { answers: [{ id: question.id, selected: [question.options[0].label] }] }
+    }
     if (question?.id === 'fixture-delivery-review') {
       const sessionId = request.agent.id
       const answer = Promise.withResolvers()
@@ -150,6 +153,18 @@ export async function apply(ctx) {
         sequence = equipped ? ['glob', 'fixture_standing_note'] : ['glob']
         name = sequence[results.length]
         args = name === 'glob' ? { pattern: 'README.md' } : {}
+      } else if (latestText?.startsWith('【灯塔同题对照】\n') || latestText?.startsWith('[Lighthouse comparison]\n')) {
+        const english = latestText.startsWith('[Lighthouse comparison]')
+        const canPresent = tools?.some(tool => tool.name === 'present')
+        sequence = ['glob', canPresent ? 'present' : 'ask_user_question']
+        name = sequence[results.length]
+        if (name === 'glob') args = { pattern: '[0-9][0-9]-*.md' }
+        if (name === 'present') args = { files: [{ path: '02-lighthouse.md', description: 'Lighthouse supply card' }] }
+        if (name === 'ask_user_question') {
+          const question = english ? 'Keep the report as a path or keep looking for a deliverable?' : '保留文件路径，还是继续找可交付的材料？'
+          const options = english ? ['Keep the path', 'Keep looking for a deliverable'] : ['先保留路径', '继续找可交付的材料']
+          args = { questions: [{ id: 'fixture-lighthouse-route', question, options: options.map(label => ({ label })) }] }
+        }
       } else if (latestText?.includes('[0-9][0-9]-*.md')) {
         sequence = latestText.includes('02-lighthouse.md') ? ['glob', 'present'] : ['glob']
         name = sequence[results.length]
@@ -499,7 +514,8 @@ export async function apply(ctx) {
     methods: ['POST'],
     requestBody: 'buffered',
     async fetch(request) {
-      const { sessionId, finish, text, selectOnly, requestId, signalTool, checkpoint, profileBranch, workingDirectory } = await request.json()
+      const { sessionId, finish, text, selectOnly, requestId, signalTool, checkpoint, profileBranch, workingDirectory, gateStatus } = await request.json()
+      if (gateStatus) return Response.json({ held: turns.has(sessionId) })
       if (workingDirectory) {
         const agent = ctx.agents.get(sessionId)
         await agent.ctx.get('workingDirectory').set(agent, workingDirectory, request.signal)
@@ -639,7 +655,7 @@ export async function apply(ctx) {
         const workspace = ctx.workspaceRegistry.list().find(item => item.sessionIds.includes(sessionId))
         return Response.json({
           events: source.events, inherited: source.inheritedEventCount,
-          presetId: source.projections?.values.agentPreset, workspaceId: workspace?.id,
+          presetId: source.projections?.values.agentPreset, workspaceId: workspace?.id, workspacePath: workspace?.path,
         })
       } finally {
         source[Symbol.dispose]()

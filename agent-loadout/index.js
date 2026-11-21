@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
-import { mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { link, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { englishStrings, englishText, localizeDisplay } from './localization.js'
@@ -18,13 +18,13 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseDirectory, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { lighthouseArmIdentity, lighthouseArms, lighthouseComparisonId, lighthouseDirectory, lighthouseTask, lighthouseWorkspace, openLighthouseComparisons } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
 import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } from './match-growth.js'
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
-import { matchReceipts, matchReport, matchToolRecords, panelActivityRecord, toolSourceRecord } from './match-report.js'
+import { lighthouseComparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
 import { planReviewActivities } from './plan-reviews.js'
@@ -367,13 +367,14 @@ function savedToolSources(record, ecosystem) {
   return Object.fromEntries(sources)
 }
 
-async function saveEntry(directory, id, record) {
+async function saveEntry(directory, id, record, { exclusive = false } = {}) {
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const filename = join(directory, id + '.json')
   const temp = filename + '.' + randomUUID() + '.tmp'
   try {
     await writeFile(temp, JSON.stringify(record), { mode: 0o600, flag: 'wx' })
-    await rename(temp, filename)
+    if (exclusive) await link(temp, filename)
+    else await rename(temp, filename)
   } finally {
     await rm(temp, { force: true })
   }
@@ -440,6 +441,7 @@ export async function apply(ctx) {
   })
   const actions = await customActionStore(join(directory, 'actions'), saveEntry, warnings)
   const buildPlans = await openBuildPlans(join(directory, 'plans'), saveEntry, warnings)
+  const lighthouseComparisons = await openLighthouseComparisons(directory, saveEntry, () => warnings.push('lighthouse-comparisons'))
   // Native session history is shared by profiles under the same DSH home.
   const receipts = matchReceipts(join(ctx.profileContext.home, 'agent-loadout', 'match-actions'))
   const pins = matchShortcutStore(join(directory, 'shortcuts'), saveEntry, key => {
@@ -2954,11 +2956,7 @@ export async function apply(ctx) {
           turn = event.data.turn
           pending = new Map()
         } else if (event.type === 'deliverables/presented' && turn !== undefined && event.data.turn === turn) {
-          for (const file of event.data.files ?? []) {
-            if (typeof file.path !== 'string') continue
-            const name = basename(file.path.replaceAll('\\', '/')).replace(/\p{Cc}/gu, '').slice(0, 200)
-            if (name) pending.set(file.path, { name, turn })
-          }
+          noteDeliveredFiles(pending, event.data)
         } else if (event.type === 'turn/end') {
           if (turn !== undefined && ends.get(event.seq) === turn && event.data.turn === turn && event.data.reason?.kind === 'completed') {
             for (const [path, file] of pending) files.set(path, file)
@@ -3278,6 +3276,108 @@ export async function apply(ctx) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     const workspace = await lighthouseWorkspace(directory, registry)
     return startWithQuest({ draft, quest, workspaceId: workspace.id, launchId }, signal, { allowBasicReplay: delivery })
+  }
+
+  async function readLighthouseArm(comparison, arm, signal) {
+    const { sessionId } = lighthouseArmIdentity(comparison.id, arm)
+    let saved
+    let source
+    try {
+      saved = await lighthouseComparisons.readArm(comparison.id, arm)
+      const workspace = saved && ctx.get('workspaceRegistry')?.get(saved.workspaceId)
+      if (!saved?.opened && !workspace?.sessionIds.includes(sessionId)) return { id: arm, status: 'unopened' }
+      source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: 'none', signal })
+      const result = await lighthouseComparisonEvidence(source, { ...saved, task: comparison.task }, receipts)
+      return { id: arm, sessionId, ...result }
+    } catch {
+      signal?.throwIfAborted()
+      return { id: arm, ...(saved?.opened && { sessionId }), status: 'unavailable', reason: 'session-unavailable' }
+    } finally {
+      source?.[Symbol.dispose]()
+    }
+  }
+
+  async function readLighthouseComparison({ comparisonId, sessionId, prototype }, english, signal) {
+    let record
+    if (sessionId !== undefined) {
+      const member = lighthouseComparisons.member(sessionId)
+      if (!member) return null
+      record = lighthouseComparisons.read(member.id)
+    } else if (comparisonId !== undefined) {
+      record = lighthouseComparisons.read(comparisonId)
+      if (!record) throw new Error('找不到这组同题对照。')
+    } else if (prototype !== true) {
+      record = lighthouseComparisons.latest()
+    }
+    const { id, task } = record ?? lighthouseComparisons.prototype(english)
+    const arms = record ? await Promise.all(lighthouseArms.map(arm => readLighthouseArm(record, arm, signal)))
+      : lighthouseArms.map(id => ({ id, status: 'unopened' }))
+    return { id, task, arms }
+  }
+
+  async function openLighthouseArm({ comparisonId, arm, launchId }, english, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    if (!lighthouseArms.includes(arm) || (comparisonId === undefined ? !validOpeningId(launchId) : !lighthouseComparisonId(comparisonId))) {
+      throw new Error('开局请求无效，请重试。')
+    }
+    const registry = ctx.get('workspaceRegistry')
+    const controller = ctx.get('sessionController')
+    const query = ctx.get('sessionQuery')
+    if (!registry?.create || !controller?.create || !query) throw new Error('灯塔练习工作区不可用。')
+    const comparison = comparisonId === undefined ? await lighthouseComparisons.create(launchId, english)
+      : lighthouseComparisons.read(comparisonId)
+    if (!comparison) throw new Error('找不到这组同题对照。')
+    const { id, task } = comparison
+    const { sessionId, requestId } = lighthouseArmIdentity(id, arm)
+    const response = { id, task, sessionId, requestId }
+    if (openingMatches.has(sessionId)) return openingMatches.get(sessionId)
+
+    const open = async () => {
+      let saved = await lighthouseComparisons.readArm(id, arm)
+      if (saved?.opened) return response
+      let workspace
+      if (saved) {
+        workspace = registry.get(saved.workspaceId)
+        if (!workspace || workspace.path !== saved.cwd) throw new Error('灯塔练习工作区不可用。')
+      } else {
+        const delivery = arm === 'delivery'
+        const ecosystem = await discover()
+        const draft = standardDeliveryDraft(ecosystem, delivery ? ['present'] : [])
+        const { candidate, choices } = await plannedGrowth(draft, { ecosystem })
+        const hasTool = name => choices.some(item => item.kind === 'tool' && item.name === name && !item.timing)
+        if (!hasTool('glob') || hasTool('present') !== delivery) throw new Error('标准模式的对照阵容无法装配。')
+        const { presetId } = await prepare(draft, candidate)
+        signal?.throwIfAborted()
+        workspace = await lighthouseComparisons.workspace(id, arm, registry)
+        saved = { workspaceId: workspace.id, cwd: workspace.path, presetId }
+        await lighthouseComparisons.writeArm(id, arm, saved)
+      }
+      signal?.throwIfAborted()
+      if (closed) throw new Error('配装服务正在关闭，请重试。')
+      const existing = await query.observeSession(sessionId, { projectionMode: 'none', signal }).catch(error => {
+        if (error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
+      })
+      if (existing) {
+        try {
+          const header = existing.header
+          if (header.cwd !== saved.cwd || header.agentPreset !== saved.presetId || header.isSeeded || existing.inheritedEventCount) {
+            throw new Error('这场会话与原对照阵容不一致。')
+          }
+          if (!workspace.sessionIds.includes(sessionId)) await workspace.attachSession(sessionId)
+        } finally {
+          existing[Symbol.dispose]()
+        }
+      } else {
+        const created = await controller.create({ sessionId, workspaceId: workspace.id, agentPreset: saved.presetId })
+        if (created.sessionId !== sessionId) throw new Error('新对局的会话标识已变化，请重新开局。')
+      }
+      await lighthouseComparisons.writeArm(id, arm, { ...saved, opened: true })
+      updates.notify(sessionId)
+      return response
+    }
+    const work = open().finally(() => openingMatches.delete(sessionId))
+    openingMatches.set(sessionId, work)
+    return work
   }
 
   async function matchPlans({ sessionId }) {
@@ -4134,7 +4234,10 @@ export async function apply(ctx) {
     methods: ['GET'],
     requestBody: 'buffered',
     async fetch(request) {
-      const value = await sessionEquipment(new URL(request.url).searchParams.get('sessionId'))
+      const sessionId = new URL(request.url).searchParams.get('sessionId')
+      const value = await sessionEquipment(sessionId)
+      const comparison = lighthouseComparisons.member(sessionId)
+      if (comparison) value.lighthouseComparison = comparison
       return Response.json({ ok: true, value: englishRequest(request) ? localizeDisplay(value) : value },
         { headers: { 'Cache-Control': 'no-store' } })
     },
@@ -4258,6 +4361,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-combo-preview') value = await previewQuestCombo(selection)
         else if (selection?.action === 'growth-open') value = await startWithQuest(selection, request.signal)
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-comparison') value = await readLighthouseComparison(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-comparison-open') value = await openLighthouseArm(selection, english, request.signal)
         else if (selection?.action === 'field-playbook-preview') value = await previewFieldPlaybook(selection)
         else if (selection?.action === 'match-settlements' || selection?.action === 'match-settlements-page') value = await matchSettlements(selection)
         else if (selection?.action === 'match-follow-up' || selection?.action === 'match-follow-up-preview') value = await matchFollowUp(selection)

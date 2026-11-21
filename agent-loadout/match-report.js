@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { link, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { sourceConflictCode } from './tool-bindings.js'
 import { validShortcut } from './match-shortcuts.js'
 
@@ -303,6 +303,54 @@ async function reportTurn(source, start, end, receipts) {
   }
   return { seq: start, endSeq, turn: beginning.data.turn, time: beginning.time, inherited, status,
     entries: entries.sort((a, b) => a.seq - b.seq) }
+}
+
+export function noteDeliveredFiles(files, { files: delivered, turn }) {
+  for (const file of delivered ?? []) {
+    if (typeof file.path !== 'string') continue
+    const name = basename(file.path.replaceAll('\\', '/')).replace(/\p{Cc}/gu, '').slice(0, 200)
+    if (name) files.set(file.path, { name, turn })
+  }
+}
+
+export async function lighthouseComparisonEvidence(source, { cwd, presetId, task }, receipts) {
+  const unavailable = reason => ({ status: 'unavailable', reason })
+  if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
+    return unavailable('session-unavailable')
+  }
+  const events = source.events
+  const start = events.findIndex(event => event.type === 'turn/start')
+  if (start < 0) return { status: 'waiting' }
+  const turn = events[start].data.turn
+  const end = events.findIndex((event, index) => index > start && event.type === 'turn/end')
+  const body = events.slice(start + 1, end < 0 ? undefined : end)
+  const initialPreset = events.slice(0, start).findLast(event => event.type === 'agent-preset/selected')
+  if ((initialPreset?.data.agentPreset ?? source.header.agentPreset) !== presetId ||
+    body.some(event => event.type === 'agent-preset/selected' && event.data.agentPreset !== presetId)) {
+    return unavailable('changed-loadout')
+  }
+  const messages = body.filter(event => event.type === 'user/message' && event.surfaceOp === 'append' && event.data.source.kind === 'user')
+  const content = messages[0]?.data.content
+  if (messages.length && (messages.length !== 1 || content?.length !== 1 || content[0].type !== 'text' || content[0].text !== task)) {
+    return unavailable('changed-task')
+  }
+  if (end < 0 && source.source === 'live') return { status: 'running', turn }
+  const finish = events[end]
+  if (!finish || finish.data.turn !== turn || finish.data.reason.kind !== 'completed') return unavailable('interrupted')
+  if (!messages.length) return unavailable('changed-task')
+
+  const files = new Map()
+  const models = new Set()
+  for (const event of body) {
+    if (event.type === 'deliverables/presented' && event.data.turn === turn) noteDeliveredFiles(files, event.data)
+    if (event.type !== 'request/header') continue
+    const { provider, model } = event.data.header?.config ?? {}
+    if (typeof model === 'string' && model) models.add(typeof provider === 'string' && provider ? provider + '/' + model : model)
+  }
+  const evidence = await reportTurn(source, start, end + 1, receipts)
+  const entries = (evidence?.entries ?? []).filter(item => item.type === 'tool')
+    .map(({ type, name, state, sourceNames, choices, nested }) => ({ type, name, state, sourceNames, choices, nested }))
+  return { status: 'complete', turn, entries, deliverables: [...files.values()], ...(models.size && { models: [...models] }) }
 }
 
 export async function matchReport(source, before, receipts) {
