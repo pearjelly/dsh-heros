@@ -6543,8 +6543,9 @@ window.__ModuleLoader__.load({
       const [starterOpen, setStarterOpen] = useState(false)
       const starterLaunchIds = useRef({})
       const starterButton = useRef(null)
-      const [heroTrialOpen, setHeroTrialOpen] = useState(false)
+      const [heroTrialOpen, setHeroTrialOpen] = useState(null)
       const heroTrialButton = useRef(null)
+      const resumeHeroTrialButton = useRef(null)
       const [lessonOpen, setLessonOpen] = useState(null)
       const lessonButton = useRef(null)
       const starterLessonButton = useRef(null)
@@ -6735,6 +6736,7 @@ window.__ModuleLoader__.load({
         const hero = presets.find(item => item.id === option.id && !item.broken)
         return hero ? [{ ...option, art: hero.art }] : empty
       }) : empty
+      const lastTrialNeed = heroTrialNeeds.find(item => item.id === data?.lastHeroTrial?.need)
       const historicalHeroMissing = !saved && historicalHero && presetChoice === historicalHero && preset?.id !== historicalHero
       const canCompare = saved ? !saved.broken : Boolean(preset) && !historicalHeroMissing && !unavailable.length && !draftConflicts.length
       const galleryBase = !canCompare && presets.some(item => item.id === stagePreset?.id && !item.broken)
@@ -7222,7 +7224,7 @@ window.__ModuleLoader__.load({
           data && h('div', { className: 'moba-lighthouse-entry' },
             trialHeroes.length === 2 && h('button', { type: 'button', ref: heroTrialButton, disabled: pending,
               className: 'moba-starter-entry moba-hero-trial-entry', 'aria-haspopup': 'dialog', 'aria-label': t(heroTrialTitle),
-              onClick: () => setHeroTrialOpen(true) },
+              onClick: () => setHeroTrialOpen({ trigger: heroTrialButton }) },
               h('span', { className: 'moba-hero-trial-emblems' }, trialHeroes.map(hero =>
                 h(HeroArt, { key: hero.id, id: hero.id, art: hero.art, className: 'moba-starter-hero' }))),
               h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t(heroTrialTitle)),
@@ -7235,6 +7237,10 @@ window.__ModuleLoader__.load({
                 h('span', null, t('找到补给卡就撤，还是带着交付物回来？'))),
               h('span', { className: 'moba-starter-entry-action' }, t('选择路线'), h(Glyph, { kind: 'arrow', size: 18 }))),
             h('div', { className: 'moba-lighthouse-entry-actions' },
+              data.lastHeroTrial && h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
+                ref: resumeHeroTrialButton, 'aria-haspopup': 'dialog', 'aria-description': lastTrialNeed && t(lastTrialNeed.name),
+                onClick: () => setHeroTrialOpen({ trigger: resumeHeroTrialButton, comparisonId: data.lastHeroTrial.id }) },
+              h(Glyph, { kind: 'back', size: 17 }), t('继续上一次试玩')),
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: challengeButton, 'aria-haspopup': 'dialog', onClick: () => setChallengeTrigger(challengeButton) },
               h(Glyph, { kind: 'arrow', size: 17 }), t('加入灯塔挑战')),
@@ -7247,10 +7253,11 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: evidenceButton, 'aria-haspopup': 'dialog', onClick: () => setLessonOpen({ lesson: lighthouseEvidenceLesson, trigger: evidenceButton }) },
               h(Glyph, { kind: 'search', size: 17 }), t('灯塔证据取舍')))),
-          heroTrialOpen && h(HeroTrial, { request, workspaces: comparableWorkspaces, firstHeroes: trialHeroes, backLabel: '返回大厅', onClose: () => {
-            setHeroTrialOpen(false)
-            requestAnimationFrame(() => heroTrialButton.current?.focus())
-          }, onVisit: (sessionId, task) => { setHeroTrialOpen(false); openDraftSession(sessionId, task) } }),
+          heroTrialOpen && h(HeroTrial, { request, comparisonId: heroTrialOpen.comparisonId, workspaces: comparableWorkspaces,
+            firstHeroes: trialHeroes, backLabel: '返回大厅', onClose: () => {
+              setHeroTrialOpen(null)
+              requestAnimationFrame(() => (heroTrialOpen.trigger.current ?? heroTrialButton.current)?.focus())
+            }, onVisit: (sessionId, task) => { setHeroTrialOpen(null); openDraftSession(sessionId, task) } }),
           starterOpen && h(LighthouseStarter, { hero: presets.find(item => item.id === 'standard' && !item.broken),
             request, launchIds: starterLaunchIds, onCancel: () => {
               setStarterOpen(false)

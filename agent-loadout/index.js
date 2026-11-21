@@ -843,11 +843,13 @@ export async function apply(ctx) {
       return sources.map(item => labels.get(item.sourceName) === 1
         ? item : { ...item, sourceName: item.sourceName + ' · ' + item.sourceId.slice(-6) })
     }
+    const lastHeroTrial = heroTrials.latest()
     return {
       roles,
       standingClaims,
       lighthouseWorkspaceId: sampleWorkspace?.id,
       heroTrialAvailable: await heroTrialAvailable(ecosystem),
+      ...(lastHeroTrial && { lastHeroTrial: { id: lastHeroTrial.id, need: lastHeroTrial.need } }),
       equipment: [
         ...equipment.map(item => withRank({ ...publicEquipment(item), kind: 'featured', roles: classes.byId.get(item.id),
           art: art('gear', item.id) }, growth.gearRank(item.id))),
