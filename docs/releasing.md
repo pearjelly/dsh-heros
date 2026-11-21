@@ -55,8 +55,7 @@ Use scratch profiles and the same CLI that users run. `DSH_HOME` is scoped to th
 
 ```sh
 smoke_home=$(mktemp -d)
-DSH_HOME="$smoke_home" npm_config_ignore_workspace_root_check=true \
-  dsh plugin --profile web add "$bundle"
+DSH_HOME="$smoke_home" dsh plugin --profile web add -w "$bundle"
 jq -e --arg version "$version" '.version == $version' \
   "$smoke_home/profiles/web/node_modules/dsh-agent-loadout/package.json"
 DSH_HOME="$smoke_home" dsh web --port 0
@@ -115,5 +114,5 @@ The existing community entry follows the GitHub Latest asset route. A stable rel
      "$release_dir/community-catalog.json"
    ```
 
-2. Run the listed install command in a fresh scratch profile. Confirm the Armory opens and the installed package reports the released version.
+2. Run the listed install command in a fresh scratch profile. If pnpm reports `ERR_PNPM_ADDING_TO_ROOT`, add `-w` after `add` in the listed command. Confirm the lobby opens and the installed package reports the released version.
 3. If the listing's description, category, or other metadata needs an update, submit a PR that edits the existing YAML entry. Rolling GitHub bundles can have an empty version in the catalog. The separate in-app Discover index includes npm-backed plugins, while this entry is distributed through the website and full catalog. [Contribution guide](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md) · [Discover index builder](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/scripts/build-index.mjs)

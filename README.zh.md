@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-npm_config_ignore_workspace_root_check=true dsh plugin --profile web add https://github.com/pearjelly/dsh-heros/releases/download/v0.68.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.69.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -30,3 +30,9 @@ dsh web
 3. 走交付路线时，打开对话里的 `02-lighthouse.md` 核对内容。两件装备在同一回合成功使用后，首次达成可以验收并领取连携战旗。
 
 想给自己的任务出装时，可以在装备库试装，比较前后能力变化，再到自己的工作区开局。需要调整装备时，用 **回城换装** 和 **锁定阵容并续战** 接着做。DSH 已注册的预设、工具和插件会进入英雄图鉴或装备库，同一工具有多个来源时可以指定来源。[完整使用说明](agent-loadout/README.md) · [迭代路线](docs/roadmap.md)
+
+## 把打法用到自己的工作区
+
+在大厅打开 **实战打法**，选 **直接交付** 或 **复核后交付**。两套都用标准模式和交付物预览。直接交付适合已经能验收的文件，复核打法会提示模型先展示草稿，在有明确交接步骤时让你确认交付或退回修改。
+
+选中一套打法即可看清与当前出装的变化。确认采用后，它会替换大厅草稿并保留你选的工作区和开局或续战方式。锁定阵容后生效。常用搭配可以保存为出装方案。

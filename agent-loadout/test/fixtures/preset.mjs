@@ -51,6 +51,7 @@ export async function apply(ctx) {
   const shadowCalls = new Map()
   const localKeys = new Map()
   const teamLaunchGates = new Map()
+  const handoffQuestions = new Map()
   ctx.on('agent/created', async ({ agent, signal }) => {
     const session = agent.session
     if (session.header.origin !== 'subagent' || !session.snapshotEvents().some(event =>
@@ -68,6 +69,17 @@ export async function apply(ctx) {
   }, { global: true })
   ctx.on('user-questions/request', (request, next) => {
     const question = request.questions[0]
+    if (question?.id === 'fixture-delivery-review') {
+      const sessionId = request.agent.id
+      const answer = Promise.withResolvers()
+      const abort = () => answer.reject(request.signal.reason)
+      request.signal?.addEventListener('abort', abort, { once: true })
+      handoffQuestions.set(sessionId, { question, resolve: answer.resolve })
+      return answer.promise.finally(() => {
+        request.signal?.removeEventListener('abort', abort)
+        handoffQuestions.delete(sessionId)
+      })
+    }
     if (!question?.intent?.callId?.startsWith('fixture-plan-')) return next()
     const approve = question.intent.callId.endsWith('-approve')
     return { answers: [{ id: question.id, selected: [approve ? 'Approve' : 'Keep planning'],
@@ -143,6 +155,19 @@ export async function apply(ctx) {
         name = sequence[results.length]
         args = name === 'glob' ? { pattern: '[0-9][0-9]-*.md' }
           : { files: [{ path: '02-lighthouse.md', description: 'Lighthouse supply card' }] }
+      } else if (latestText === 'Hand off the workspace file handoff.md in this conversation.') {
+        const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
+          .map(block => block.text).join('\n')
+        const review = systemText.includes('whether to proceed with the handoff or revise the draft')
+        const confirmed = review && results.length > 0 &&
+          JSON.parse(results[0].content[0].text).answers?.[0]?.selected?.includes('Confirm handoff')
+        sequence = review ? ['ask_user_question', ...(confirmed ? ['present'] : [])] : ['present']
+        name = sequence[results.length]
+        args = name === 'ask_user_question' ? { questions: [{
+          id: 'fixture-delivery-review',
+          question: 'The handoff.md draft contains the lighthouse handoff summary. Deliver it or request changes?',
+          options: [{ label: 'Confirm handoff' }, { label: 'Revise draft' }],
+        }] } : { files: [{ path: 'handoff.md', description: 'Handoff summary' }] }
       } else if (latestText === '读取预设工作目录') {
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')
@@ -510,6 +535,21 @@ export async function apply(ctx) {
           content: [{ type: 'text', text: profileBranch ? 'fixture orchard ' + profileBranch : signalTool ? 'fixture signal' : 'fixture turn' }],
         })
       }
+      return Response.json({ ok: true })
+    },
+  })
+  ctx.connection.fetch.register({
+    path: '/api/loadout-fixture-handoff-question',
+    methods: ['POST'],
+    requestBody: 'buffered',
+    async fetch(request) {
+      const { sessionId, choice } = await request.json()
+      const pending = handoffQuestions.get(sessionId)
+      if (choice === undefined) return Response.json({ question: pending?.question })
+      if (!pending?.question.options.some(option => option.label === choice)) {
+        return Response.json({ error: 'No matching pending question option' }, { status: 400 })
+      }
+      pending.resolve({ answers: [{ id: pending.question.id, selected: [choice] }] })
       return Response.json({ ok: true })
     },
   })

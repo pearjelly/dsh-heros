@@ -1994,6 +1994,81 @@ window.__ModuleLoader__.load({
           groups.map(group => h(CapabilityList, { key: group.tone, ...group, onTrial, onDelivery, active: group.tone === visible }))))
     }
 
+    const fieldPlaybooks = [
+      { id: 'direct', icon: 'report', name: '直接交付', gear: '交付物预览', note: '把生成的文件放进对话，打开即可查看。' },
+      { id: 'review', icon: 'lock', name: '复核后交付', gear: '交付物预览 + 交付前复核', note: '有明确的交接事项时，提示助手先用 DSH 确认卡请你确认交付或退回修改。' },
+    ]
+
+    function FieldPlaybookComparison({ result, draft, baseline }) {
+      const deliveryGear = result.gained.find(item => item.id === 'present')
+      const replaced = deliveryGear ? result.lost.filter(item =>
+        item.kind === 'plugin' && draft.removedEquipmentIds.includes(item.id)) : empty
+      const groups = capabilityChanges(result).map(group => {
+        if (!replaced.length) return group
+        const cards = group.cards.filter(item => item !== deliveryGear && !replaced.includes(item))
+        return { ...group, cards }
+      }).filter(group => group.cards.length)
+      return h('section', { className: 'moba-playbook-comparison', 'aria-label': t('打法对照') },
+        h('div', { className: 'moba-playbook-lineup' },
+          h('div', null, h('small', null, baseline), h('strong', null, result.before.name)),
+          h(Glyph, { kind: 'arrow', size: 18 }),
+          h('div', null, h('small', null, t('推荐出装')), h('strong', null, result.after.name))),
+        replaced.length > 0 && h('div', { className: 'moba-playbook-swap' }, h('strong', null, t('交付工具换装')),
+          h('p', null, replaced.map(item => item.name).join(' / ') + ' → ' + deliveryGear.name)),
+        groups.map(group => h(CapabilityList, { ...group, key: group.tone, disclosure: true,
+          heading: group.heading + ' · ' + group.cards.slice(0, 2).map(item => item.name).join(' / ') + ' ' })),
+        !replaced.length && !groups.length && h('p', { className: 'moba-empty' }, t('已知能力、工具来源和就绪时机均一致。')))
+    }
+
+    function FieldPlaybooks({ request, draftKey, sourceSessionId, hasOpening, onClose, onAdopt }) {
+      const language = useLanguage()
+      const [selected, setSelected] = useState(fieldPlaybooks[0].id)
+      const [checked, setChecked] = useState(null)
+      const [attempt, retry] = useState(0)
+      const group = useId()
+      const choice = fieldPlaybooks.find(item => item.id === selected)
+      const key = JSON.stringify([selected, draftKey, sourceSessionId, language, attempt])
+      const preview = checked?.key === key ? checked : null
+      const baseline = draftKey ? t('现有出装') : sourceSessionId ? t('当前会话') : t('标准模式基础出装')
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'field-playbook-preview'
+        request(action, { action, id: selected, againstDraft: draftKey ? JSON.parse(draftKey) : undefined,
+          sourceSessionId: draftKey ? undefined : sourceSessionId }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setChecked({ key, value }) })
+          .catch(reason => { if (!abort.signal.aborted) setChecked({ key, error: reason.message }) })
+        return () => abort.abort()
+      }, [request, selected, draftKey, sourceSessionId, language, key])
+
+      return h(InstallDialog, { title: t('实战打法'), className: 'moba-playbook-dialog', onCancel: onClose,
+        initialFocus: 'input:checked', onKeyDown: event => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          onClose()
+        } },
+        h('fieldset', { className: 'moba-starter-routes' },
+          h('legend', null, t('选择交付方式')),
+          fieldPlaybooks.map(item => h('label', { className: 'moba-starter-route', key: item.id, 'data-picked': item.id === selected },
+            h('input', { type: 'radio', name: group, value: item.id, checked: item.id === selected,
+              onChange: () => { setChecked(null); setSelected(item.id) } }),
+            h('span', null, h('strong', null, h(Glyph, { kind: item.icon, size: 16 }), t(item.name)),
+              h('span', { className: 'moba-playbook-gear' }, t(item.gear)), h('small', null, t(item.note)))))),
+        !draftKey && h('p', { className: 'moba-empty' }, t('当前出装暂时无法对照，预览改用下方标出的基准。')),
+        !preview && h('p', { className: 'moba-empty', role: 'status' }, t('正在比较出装…')),
+        preview?.error && h('p', { className: 'moba-alert', role: 'alert' }, preview.error, ' ',
+          h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重试'))),
+        preview?.value && h(FieldPlaybookComparison, { result: preview.value.comparison, draft: preview.value.draft, baseline }),
+        h('p', { className: 'moba-starter-note' }, t('确认后替换大厅中的出装草稿。'),
+          hasOpening && ' ' + t('当前筹备的开局委托也会清空。')),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: onClose }, t('返回大厅')),
+          h('button', { type: 'button', className: 'moba-start', disabled: !preview?.value,
+            onClick: () => onAdopt(choice.id, t(choice.name), preview.value.draft) },
+          t('确认采用打法'), h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
     function ComparisonHero({ hero, label, planName }) {
       const build = hero.buildName?.startsWith(hero.name + ' · ') ? hero.buildName.slice(hero.name.length + 3) : hero.buildName
       const outfit = hero.outfit ?? empty
@@ -3163,6 +3238,8 @@ window.__ModuleLoader__.load({
       const [starterOpen, setStarterOpen] = useState(false)
       const starterLaunchIds = useRef({})
       const starterButton = useRef(null)
+      const [playbooksOpen, setPlaybooksOpen] = useState(false)
+      const playbooksButton = useRef(null)
       const [notice, setNotice] = useState('')
       const [appearance, setAppearance] = useState(null)
       const [actionTarget, setActionTarget] = useState(null)
@@ -3410,7 +3487,7 @@ window.__ModuleLoader__.load({
         setNotice(t('已采用「') + plan.name + '」。')
       }
 
-      function applyHistoricalDraft(draft, labels, inspectId, notice) {
+      function applyHistoricalDraft(draft, labels, inspectId, notice, { preserveMatchMode = false } = {}) {
         cue('hero')
         setHistoricalHero(draft.presetId)
         setPresetChoice(draft.presetId)
@@ -3427,13 +3504,26 @@ window.__ModuleLoader__.load({
         setDeliveryTarget(null)
         setComparisonOpen(false)
         choseMatchMode.current = true
-        setMatchMode(returning?.sessionId ? 'fresh' : undefined)
+        if (!preserveMatchMode) setMatchMode(returning?.sessionId ? 'fresh' : undefined)
         const card = catalog.get(inspectId)
         setInspected(inspectId)
         setRequestedGear(card ? { id: card.id, name: card.name, discovered: Boolean(card.discovery) } : null)
         setError('')
         setNotice(notice)
         setLoadAttempt(attempt => attempt + 1)
+      }
+
+      function closePlaybooks() {
+        setPlaybooksOpen(false)
+        requestAnimationFrame(() => playbooksButton.current?.focus())
+      }
+
+      function adoptPlaybook(id, name, draft) {
+        const labels = Object.fromEntries(draft.equipmentIds.map(item => [item, catalog.get(item)?.name ?? item]))
+        const preferred = id === 'review' ? 'review' : 'present'
+        const inspectId = draft.equipmentIds.includes(preferred) ? preferred : draft.equipmentIds[0] ?? preferred
+        applyHistoricalDraft(draft, labels, inspectId, t('已采用「%s」打法。').replace('%s', name), { preserveMatchMode: true })
+        closePlaybooks()
       }
 
       function applyFlagLoadout(flag, { draft, slots, practice }, mode) {
@@ -3744,6 +3834,9 @@ window.__ModuleLoader__.load({
             h('div', { className: 'moba-header-tools' },
               returning?.sessionId && h('button', { className: 'moba-text', type: 'button', disabled: pending,
                 onClick: () => openSource(returning.sessionId) }, t('回原会话')),
+              data && h('button', { className: 'moba-roster-open moba-playbook-button', type: 'button', disabled: pending,
+                ref: playbooksButton, 'aria-haspopup': 'dialog', onClick: () => setPlaybooksOpen(true) },
+              h(Glyph, { kind: 'action', size: 15 }), t('实战打法')),
               data && h('button', { className: 'moba-roster-open', type: 'button', disabled: pending,
                 'aria-haspopup': 'dialog', onClick: () => {
                   setLoadAttempt(attempt => attempt + 1)
@@ -3775,6 +3868,9 @@ window.__ModuleLoader__.load({
               requestAnimationFrame(() => starterButton.current?.focus())
             }, onEquip: () => cue('equip'),
             onOpen: sessionId => { cue('lock'); setStarterOpen(false); openSource(sessionId) } }),
+          playbooksOpen && h(FieldPlaybooks, { request, draftKey: canCompare ? draftKey : '', sourceSessionId: returning?.sessionId,
+            hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
+            onClose: closePlaybooks, onAdopt: adoptPlaybook }),
           error && h('div', { className: 'moba-alert', role: 'alert' }, error,
             !data && h('button', { type: 'button', onClick: () => {
               setError('')
@@ -6717,6 +6813,24 @@ window.__ModuleLoader__.load({
       .moba-starter-route small, .moba-starter-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
       .moba-starter-actions { flex-wrap: wrap; }
       .moba-starter-actions .moba-roster-open { min-height: 44px; }
+      .moba-playbook-button { border-color: #677d70; background: #182c2a; color: #bfe3d5 !important; }
+      .moba-playbook-dialog { width: min(550px, calc(100vw - 28px)); }
+      .moba-playbook-dialog h2 { margin: 0; font-size: 22px; }
+      .moba-playbook-gear { color: #a5d9d1; font-size: 12px; }
+      .moba-playbook-comparison { padding: 0 8px; background: #131a25; border: 1px solid var(--line); }
+      .moba-playbook-lineup { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center;
+        gap: 8px; padding: 7px 0; overflow-wrap: anywhere; }
+      .moba-playbook-lineup small, .moba-playbook-lineup strong { display: block; }
+      .moba-playbook-lineup small { color: var(--muted); font-size: 11px; }
+      .moba-playbook-lineup strong { font-size: 13px; }
+      .moba-playbook-lineup svg { color: var(--gold); }
+      .moba-playbook-swap { padding-block: 6px; border-top: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+      .moba-playbook-swap strong { color: var(--gold); }
+      .moba-playbook-swap p { margin: 2px 0 0; color: var(--muted); }
+      .moba-playbook-comparison .moba-delta { border-top: 1px solid var(--line); }
+      .moba-playbook-comparison .moba-delta summary { padding: 6px 0; color: var(--gold); font-size: 12px;
+        cursor: pointer; overflow-wrap: anywhere; }
+      .moba-playbook-comparison .moba-delta summary span { margin-inline-start: 5px; color: var(--muted); }
       .moba-pairing-dialog { width: min(620px, calc(100vw - 28px)); }
       .moba-pairing-target { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
       .moba-pairing-target .moba-item-art { width: 38px; flex: none; border: 1px solid var(--line); }

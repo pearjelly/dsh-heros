@@ -2730,17 +2730,28 @@ export async function apply(ctx) {
     return work
   }
 
+  function standardDeliveryDraft(ecosystem, equipmentIds) {
+    const presetId = 'standard'
+    const builtIns = presetEquipment(ecosystem, presetId)
+    const removedEquipmentIds = Object.keys(builtIns).filter(id => builtIns[id].tools.includes('present'))
+    return { presetId, equipmentIds, equipmentSources: {}, removedEquipmentIds }
+  }
+
+  async function previewFieldPlaybook({ id, againstDraft, sourceSessionId }) {
+    if (id !== 'direct' && id !== 'review') throw new Error('请选择大厅里的实战打法。')
+    const ecosystem = await discover()
+    const draft = standardDeliveryDraft(ecosystem, id === 'review' ? ['present', 'review'] : ['present'])
+    return { draft, comparison: await compare({ ...draft, againstDraft, sourceSessionId }, ecosystem) }
+  }
+
   async function startLighthouse({ route, launchId }, english, signal) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     if (!validOpeningId(launchId) || !['recon', 'delivery'].includes(route)) throw new Error('开局请求无效，请重试。')
     const registry = ctx.get('workspaceRegistry')
     if (!registry?.create || !ctx.get('sessionController')?.create) throw new Error('灯塔练习工作区不可用。')
     const ecosystem = await discover()
-    const presetId = 'standard'
-    const builtIns = presetEquipment(ecosystem, presetId)
-    const removedEquipmentIds = Object.keys(builtIns).filter(id => builtIns[id].tools.includes('present'))
     const delivery = route === 'delivery'
-    const draft = { presetId, equipmentIds: delivery ? ['present'] : [], removedEquipmentIds }
+    const draft = standardDeliveryDraft(ecosystem, delivery ? ['present'] : [])
     const planned = await plannedGrowth(draft, { ecosystem })
     const glob = planned.choices.find(item => item.name === 'glob' && questToolSource(item) && !item.timing)
     if (!glob) throw new Error('标准模式的 glob 工具不可用，请检查 DSH 的预设配置。')
@@ -3735,6 +3746,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-combo-preview') value = await previewQuestCombo(selection)
         else if (selection?.action === 'growth-open') value = await startWithQuest(selection, request.signal)
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
+        else if (selection?.action === 'field-playbook-preview') value = await previewFieldPlaybook(selection)
         else if (selection?.action === 'match-settlements' || selection?.action === 'match-settlements-page') value = await matchSettlements(selection)
         else if (selection?.action === 'match-follow-up' || selection?.action === 'match-follow-up-preview') value = await matchFollowUp(selection)
         else if (selection?.action === 'settlement-dismiss') {

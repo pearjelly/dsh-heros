@@ -1142,6 +1142,71 @@ test('Lighthouse starts two real loadouts without sending, and awards the delive
   }
 })
 
+test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 60_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-playbook-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  let host
+  try {
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await writeFile(join(directory, 'handoff.md'), '# Lighthouse handoff summary\n')
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const preview = async (id, options = {}, status) =>
+      (await host.request(endpoint, { action: 'field-playbook-preview', id, ...options }, status)).value
+    const saved = async () => (await host.request(endpoint)).value.saved
+    const existing = await saved()
+    await preview('unknown', {}, 422)
+    const direct = await preview('direct')
+    const review = await preview('review', { againstDraft: direct.draft })
+    assert.equal(direct.draft.presetId, 'standard')
+    assert.deepEqual(direct.draft.equipmentIds, ['present'])
+    assert.equal(review.draft.presetId, 'standard')
+    assert.deepEqual([...review.draft.equipmentIds].sort(), ['present', 'review'])
+    const effect = review.comparison.gained.find(card => card.id === 'review')
+    assert.equal(effect?.kind, 'effect')
+    assert.deepEqual(effect.decisions.map(([label]) => label), ['确认交付', '退回修改'])
+    assert.deepEqual(await saved(), existing)
+
+    const prepare = async draft => (await host.request(endpoint, draft)).value.presetId
+    const open = async presetId => (await host.request('/api/loadout-fixture-session', { presetId, workspacePath: directory })).sessionId
+    const history = async sessionId => (await host.request('/api/loadout-fixture-history?sessionId=' + sessionId)).events
+    const delivered = events => events.filter(event => event.type === 'deliverables/presented')
+      .flatMap(event => event.data.files.map(file => basename(file.path)))
+    const text = 'Hand off the workspace file handoff.md in this conversation.'
+    const directSession = await open(await prepare(direct.draft))
+    const before = await history(directSession)
+    const liveComparison = await preview('review', { sourceSessionId: directSession })
+    assert.equal(liveComparison.comparison.live, true)
+    assert.ok(liveComparison.comparison.gained.some(card => card.id === 'review'))
+    assert.deepEqual(await history(directSession), before)
+    await host.request(turnEndpoint, { sessionId: directSession, text })
+    assert.deepEqual(delivered(await history(directSession)), ['handoff.md'])
+
+    const reviewPresetId = await prepare(review.draft)
+    const questions = '/api/loadout-fixture-handoff-question'
+    for (const choice of ['Revise draft', 'Confirm handoff']) {
+      const sessionId = await open(reviewPresetId)
+      const turn = host.request(turnEndpoint, { sessionId, text })
+      turn.catch(() => {})
+      let question
+      for (let attempt = 0; attempt < 100; attempt++) {
+        question = (await host.request(questions, { sessionId })).question
+        if (question) break
+        await delay(30)
+      }
+      assert.deepEqual(question?.options.map(option => option.label), ['Confirm handoff', 'Revise draft'])
+      assert.deepEqual(delivered(await history(sessionId)), [])
+      await host.request(questions, { sessionId, choice })
+      await turn
+      assert.deepEqual(delivered(await history(sessionId)), choice === 'Confirm handoff' ? ['handoff.md'] : [])
+    }
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('equips independent modules imported from an archive and a Git repository', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-remote-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home') }
