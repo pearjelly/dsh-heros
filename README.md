@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.110.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.111.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -30,6 +30,11 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 1. In the lobby's **Armory**, choose **Try both heroes**. You can also open it from **Standard** or **Minimal** in **Hero gallery**. Both supported stock presets need to be active in your profile.
 2. Choose **Openable original** or **Verifiable text summary**, then **Open Standard session** or **Open Minimal session** on the corresponding illustration. This opens one DSH draft. Review and manually send the prepared task.
 3. Choose **View the hero trial** from the session or **Continue the last trial** from the lobby. Open the other hero when ready. The two sessions use the same task and separate copies of the same bundled card. Compare actual replies and attachments, and open either source session to see the full result.
+
+### Share the hero trial
+
+1. Once both stock heroes finish and the results pass verification, choose **Share hero trial** on the comparison and copy the code. It identifies the public sample version and task language and carries the handoff need. Your replies, files, and workspaces stay in your profile.
+2. To accept an invitation, choose **Join a Lighthouse challenge** from the Armory's Lighthouse entry, paste the code, and choose **Check challenge code**. The preview shows the original task in its original language and the handoff need. Choose your own first hero when both stock presets are available, then manually send the task in DSH. You can still use this entry for shared Lighthouse evidence challenges.
 
 ### Give Minimal one more tool
 

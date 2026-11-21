@@ -1301,15 +1301,15 @@ window.__ModuleLoader__.load({
               t(busy ? '正在准备对局…' : error ? '重试' : evidence ? '开始证据取舍' : '开始换装练习'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
-    function LighthouseChallengeShare({ comparisonId, request, onBack }) {
+    function LighthouseChallengeShare({ comparisonId, request, onBack, heroTrial = false }) {
       const language = useLanguage()
       const [result, setResult] = useState(null)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
       const field = useRef(null)
+      const action = heroTrial ? 'hero-trial-challenge-share' : 'lighthouse-challenge-share'
       useEffect(() => {
         const abort = new AbortController()
-        const action = 'lighthouse-challenge-share'
         setResult(null)
         setError('')
         setNotice('')
@@ -1317,7 +1317,7 @@ window.__ModuleLoader__.load({
           .then(value => { if (!abort.signal.aborted) setResult(value) })
           .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
         return () => abort.abort()
-      }, [comparisonId, request, language])
+      }, [action, comparisonId, request, language])
 
       async function copy() {
         try {
@@ -1330,10 +1330,12 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h(InstallDialog, { title: t('分享灯塔挑战'), className: 'moba-starter-dialog',
+      return h(InstallDialog, { title: t(heroTrial ? '分享英雄试玩' : '分享灯塔挑战'),
+        className: heroTrial ? 'moba-lighthouse-comparison moba-starter-dialog' : 'moba-starter-dialog',
         onCancel: onBack, initialFocus: '.moba-challenge-back', onKeyDown: event => closeDialogOnEscape(event, onBack) },
         h('div', { className: 'moba-plan-fields moba-share-fields' },
-          h('p', { className: 'moba-starter-note' }, t('挑战码指定公开缺证样例和出装要求。接收者会在新会话里自己选择。')),
+          h('p', { className: 'moba-starter-note' }, t(heroTrial ? '挑战码包含公开样例、任务语言和接班需求。接收者自己选首发英雄。'
+            : '挑战码指定公开缺证样例和出装要求。接收者会在新会话里自己选择。')),
           error ? h('p', { className: 'moba-alert', role: 'alert' }, error)
             : result?.code ? h('label', null, t('挑战码'),
               h('textarea', { className: 'moba-share-code', ref: field, readOnly: true, value: result.code, rows: 3,
@@ -1345,7 +1347,7 @@ window.__ModuleLoader__.load({
           result?.code && h('button', { type: 'button', className: 'moba-start', onClick: copy }, t('复制挑战码'))))
     }
 
-    function LighthouseChallengeJoin({ request, onCancel, onOpen }) {
+    function LighthouseChallengeJoin({ request, onCancel, onOpen, firstHeroes }) {
       const language = useLanguage()
       const [code, setCode] = useState('')
       const [checked, setChecked] = useState(null)
@@ -1358,9 +1360,12 @@ window.__ModuleLoader__.load({
       const field = useRef(null)
       const trimmed = code.trim()
       const preview = checked?.code === trimmed && checked.language === language ? checked.value : undefined
+      const heroTrial = preview?.kind === 'hero-trial'
       const canOpen = !preview?.blocked && preview?.token
-      const canReviewLocal = preview?.blocked && preview.canUseLocalLoadout === true
-      const localLoadout = preview?.localLoadout === true
+      const canReviewLocal = !heroTrial && preview?.blocked && preview.canUseLocalLoadout === true
+      const localLoadout = !heroTrial && preview?.localLoadout === true
+      const need = heroTrial && heroTrialNeeds.find(item => item.id === preview.need)
+      const sampleLanguage = heroTrial && ({ en: '英文', zh: '中文' })[preview.sampleLanguage]
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => { if (preview) heading.current?.focus() }, [preview])
 
@@ -1383,19 +1388,19 @@ window.__ModuleLoader__.load({
         }
       }
 
-      async function start() {
-        if (!canOpen || pending.current) return
+      async function start(arm) {
+        if (!canOpen || pending.current || (heroTrial && !heroTrialHeroes.some(hero => hero.id === arm))) return
         const abort = new AbortController()
         pending.current = abort
         setBusy('start')
         setError('')
         try {
           const action = 'lighthouse-challenge-open'
-          const key = JSON.stringify([trimmed, preview.token, localLoadout, openingChoice, language])
+          const key = JSON.stringify(heroTrial ? [trimmed, preview.token, arm] : [trimmed, preview.token, localLoadout, openingChoice, language])
           if (!launchIds.current.has(key)) launchIds.current.set(key, Array.from(crypto.getRandomValues(new Uint8Array(16)),
             byte => byte.toString(16).padStart(2, '0')).join(''))
           const result = await request(action, { action, code: trimmed, token: preview.token, launchId: launchIds.current.get(key),
-            ...(localLoadout && { useLocal: true }), ...(openingChoice && { openingChoice }) }, abort.signal, language)
+            ...(heroTrial ? { arm } : { ...(localLoadout && { useLocal: true }), ...(openingChoice && { openingChoice }) }) }, abort.signal, language)
           if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
         } catch (reason) {
           if (!abort.signal.aborted) {
@@ -1421,24 +1426,33 @@ window.__ModuleLoader__.load({
             error && h('p', { className: 'moba-alert', role: 'alert' }, error),
             busy === 'check' && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对挑战要求…')),
             preview && h('div', { className: 'moba-share-review' },
-              h('h3', { ref: heading, tabIndex: -1 }, t(localLoadout ? '本机标准出装' : '关键证据缺失')),
+              h('h3', { ref: heading, tabIndex: -1 }, t(heroTrial ? heroTrialTitle : localLoadout ? '本机标准出装' : '关键证据缺失')),
               localLoadout && h(InstallFacts, { facts: [[t('原挑战的 DSH 版本'), preview.originalHost],
                 [t('本机 DSH 版本'), preview.host?.current ?? preview.host?.version]] }),
-              h(PlanShareRequirements, { value: preview, showHost: !localLoadout }),
-              h(SharedPlanCapabilities, { comparison: preview.comparison }),
+              heroTrial ? h(Fragment, null,
+                h(InstallFacts, { facts: [[t('挑战样例'), preview.sample && t('北岸灯塔补给卡')],
+                  [t('接班需求'), need && t(need.name)], [t('任务语言'), sampleLanguage && t(sampleLanguage)]] }),
+                preview.task && h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
+                  h('textarea', { readOnly: true, rows: 4, value: preview.task })))
+                : h(Fragment, null, h(PlanShareRequirements, { value: preview, showHost: !localLoadout }),
+                  h(SharedPlanCapabilities, { comparison: preview.comparison })),
               preview.blocked && h('p', { className: 'moba-alert', role: 'status' },
                 t(preview.reason ?? '请处理上方的装备或版本要求，再重新核对。')),
-              canOpen && h(Fragment, null,
+              canOpen && !heroTrial && h(Fragment, null,
                 h('p', { className: 'moba-lighthouse-note' }, t(evidenceScenarios[0].note)),
                 h(EvidenceOpeningChoice, { value: openingChoice, disabled: Boolean(busy), onChange: setOpeningChoice }))),
-            canOpen && h('p', { className: 'moba-starter-note' }, t('手动发送练习任务。如果出现证据取舍卡，请在会话里选择。'))),
+            canOpen && (heroTrial ? h(Fragment, null,
+              h(HeroTrialFirstHero, { heroes: firstHeroes, disabled: Boolean(busy), onChoose: start }),
+              h('p', { className: 'moba-starter-note', role: busy === 'start' ? 'status' : undefined },
+                t(busy === 'start' ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。')))
+              : h('p', { className: 'moba-starter-note' }, t('手动发送练习任务。如果出现证据取舍卡，请在会话里选择。')))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(busy), onClick: onCancel }, t('返回')),
             h('button', { type: 'submit', className: canOpen || canReviewLocal ? 'moba-roster-open' : 'moba-start',
               disabled: Boolean(busy) || !trimmed }, t('核对挑战码')),
             canReviewLocal && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy),
               onClick: () => void check(true) }, t('核对本机标准出装')),
-            canOpen && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy), onClick: start },
+            canOpen && !heroTrial && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy), onClick: () => start() },
               t(busy === 'start' ? '正在准备对局…' : '开始灯塔挑战'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
@@ -1614,6 +1628,16 @@ window.__ModuleLoader__.load({
       id: 'minimal-present', icon: 'report', name: '极简模式 + 交付物预览', visit: '查看加装后的会话',
       note: '同一位英雄，只加一件交付物预览。',
     }
+
+    function HeroTrialFirstHero({ heroes = heroTrialHeroes, disabled, onChoose }) {
+      return h('fieldset', { className: 'moba-hero-trial-picks', disabled },
+        h('legend', null, t('选一位英雄先开局')),
+        heroes.map(hero => h('button', { key: hero.id, type: 'button', className: 'moba-hero-trial-pick',
+          'aria-label': t(hero.open), 'aria-description': t(hero.choiceNote), onClick: () => onChoose(hero.id) },
+          h(HeroArt, { id: hero.id, art: hero.art, className: 'moba-starter-hero' }),
+          h('span', null, h('strong', null, t(hero.name)), h('small', null, t(hero.choiceNote))))))
+    }
+
     function HeroTrialResult({ arm }) {
       const materialNote = { changed: '这局的试玩材料已修改。', unavailable: '暂时无法读取这局的试玩材料。' }[arm.materialState]
       if (!arm.summary && arm.status !== 'complete') return materialNote ? h('p', { role: 'status', className: 'moba-alert' }, t(materialNote)) : null
@@ -1700,11 +1724,13 @@ window.__ModuleLoader__.load({
       const [attempt, retry] = useState(0)
       const [replayOpen, setReplayOpen] = useState(false)
       const [personalSource, setPersonalSource] = useState(null)
+      const [sharing, setSharing] = useState(false)
       const mutation = useRef(false)
       const launchIds = useRef(new Map())
       const taskField = useRef(null)
       const replayButton = useRef(null)
       const personalButton = useRef(null)
+      const shareButton = useRef(null)
       const heading = useRef(null)
       const group = useId()
       const setup = !activeId
@@ -1811,6 +1837,11 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (personalButton.current ?? heading.current)?.focus())
       }
 
+      function closeSharing() {
+        setSharing(false)
+        requestAnimationFrame(() => (shareButton.current ?? heading.current)?.focus())
+      }
+
       function renderArm(arm, config, extraResult) {
         const equipped = arm.id === minimalDeliveryReplayArm.id
         return h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
@@ -1834,12 +1865,7 @@ window.__ModuleLoader__.load({
               h('input', { type: 'radio', name: group, required: true, value: item.id, checked: need === item.id,
                 onChange: event => setNeed(event.currentTarget.value) }),
               h('span', null, h('strong', null, h(Glyph, { kind: item.icon, size: 16 }), t(item.name)), h('small', null, t(item.note)))))),
-          firstHeroes && h('fieldset', { className: 'moba-hero-trial-picks', disabled: busy || !need },
-            h('legend', null, t('选一位英雄先开局')),
-            firstHeroes.map(hero => h('button', { key: hero.id, type: 'button', className: 'moba-hero-trial-pick',
-              'aria-label': t(hero.open), 'aria-description': t(hero.choiceNote), onClick: () => start(hero.id) },
-              h(HeroArt, { id: hero.id, art: hero.art, className: 'moba-starter-hero' }),
-              h('span', null, h('strong', null, t(hero.name)), h('small', null, t(hero.choiceNote)))))),
+          firstHeroes && h(HeroTrialFirstHero, { heroes: firstHeroes, disabled: busy || !need, onChoose: start }),
           firstHeroes && busy && h('p', { role: 'status' }, t('正在打开试玩会话…')),
           error && h('p', { role: 'alert', className: 'moba-alert' }, error),
           h('div', { className: 'moba-install-actions moba-starter-actions' },
@@ -1854,6 +1880,9 @@ window.__ModuleLoader__.load({
                 t(heroTrialNeeds.find(item => item.id === value.need)?.name ?? value.need)),
               !finished && h('p', { className: 'moba-lighthouse-note' }, t('每位英雄有自己的会话。请分别手动发送同一段任务，再回来看结果。')),
               finished && h('p', { className: 'moba-lighthouse-note' }, t('交付是否符合需求依据工具、回复和附件记录。摘要内容可打开原会话核对。')),
+              value.canShareHeroChallenge && h('div', { className: 'moba-comparison-previous' },
+                h('button', { type: 'button', ref: shareButton, className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
+                  onClick: () => setSharing(true) }, t('分享英雄试玩'))),
               error && h('p', { role: 'alert', className: 'moba-alert' }, error),
               h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm => {
                 const config = heroTrialHeroes.find(item => item.id === arm.id)
@@ -1879,6 +1908,7 @@ window.__ModuleLoader__.load({
               !comparisonId && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: reset }, t('另开一组试玩'))))),
         replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: activeId, onBack: closeReplay,
           onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
+        sharing && h(LighthouseChallengeShare, { comparisonId: activeId, request, heroTrial: true, onBack: closeSharing }),
         personalSource && h(LessonLoadoutTask, { source: personalSource, workspaces, request, backLabel: '返回试玩对照',
           onBack: closePersonalTask, onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }))
     }
@@ -7016,7 +7046,7 @@ window.__ModuleLoader__.load({
             setStarterOpen(false)
             openDraftSession(sessionId, task)
           } }),
-          challengeOpen && h(LighthouseChallengeJoin, { request, onCancel: () => {
+          challengeOpen && h(LighthouseChallengeJoin, { request, firstHeroes: trialHeroes.length === 2 ? trialHeroes : undefined, onCancel: () => {
             setChallengeOpen(false)
             requestAnimationFrame(() => starterChallengeButton.current?.focus())
           }, onOpen: (sessionId, task) => {

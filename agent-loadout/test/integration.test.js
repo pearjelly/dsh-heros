@@ -1444,14 +1444,15 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
   const material = '02-lighthouse.md'
   const handoff = 'Handoff: Collect 2 cans of lamp oil and 1 signal flag at the second-floor lookout. Source: 02-lighthouse.md.'
   let host
+  let recipient
   try {
     await writeFile(patch, JSON.stringify([fixture]))
     await installProfile(directory, env)
     host = await startHost(env, patch)
     const invoke = async (action, fields, status) => (await host.request(endpoint, { action, ...fields }, status)).value
-    const create = async (launchId, need, status = 200) => {
+    const create = async (launchId, need, status = 200, language = 'en') => {
       const response = await host.requestRaw(endpoint, { method: 'POST',
-        headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+        headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': language },
         body: JSON.stringify({ action: 'hero-trial-create', launchId, need }) })
       const payload = await response.json()
       assert.equal(response.status, status, JSON.stringify(payload))
@@ -1461,6 +1462,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const open = (comparisonId, arm, status) => invoke('hero-trial-open', { comparisonId, arm }, status)
     const previewReplay = (comparisonId, status) => invoke('hero-trial-replay-preview', { comparisonId }, status)
     const openReplay = (comparisonId, token, status) => invoke('hero-trial-replay-open', { comparisonId, token }, status)
+    const shareTrial = (comparisonId, status) => invoke('hero-trial-challenge-share', { comparisonId }, status)
+    const challengeCode = (sample, need) => 'DSHC2.' + Buffer.from(JSON.stringify({ sample, need })).toString('base64url')
     const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
     const send = ({ sessionId, task, requestId }) => host.request(turnEndpoint, { sessionId, text: task, requestId })
     const byHero = (trial, hero) => trial.arms.find(arm => arm.id === hero)
@@ -1487,12 +1490,12 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal((await read()).id, undefined)
     await create('../', 'original', 422)
     await create(launchId('c'), 'both', 422)
-    const [trial, duplicate] = await Promise.all([create(launchId('a'), 'original'), create(launchId('a'), 'original')])
+    const [trial, duplicate] = await Promise.all([create(launchId('a'), 'original', 200, 'zh'), create(launchId('a'), 'original', 200, 'zh')])
     assert.deepEqual(duplicate, trial)
     const transfer = { kind: 'hero-trial', comparisonId: trial.id, arm: 'minimal-present' }
     assert.equal(trial.need, 'original')
     assert.equal(trial.material, material)
-    assert.match(trial.task, /^\[Hero handoff trial\]\n/)
+    assert.match(trial.task, /^【英雄同题试玩】\n/u)
     assert.ok(trial.task.includes(material))
     assert.deepEqual(trial.arms.map(({ id, status }) => [id, status]), [['standard', 'unopened'], ['minimal', 'unopened']])
     assert.equal((await read()).id, trial.id)
@@ -1501,6 +1504,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     await open(trial.id, 'minimal-present', 422)
     await open(launchId('d'), 'standard', 422)
     await previewReplay(trial.id, 422)
+    await shareTrial(trial.id, 422)
     assert.deepEqual(await nativeSessions(), beforeSessions)
 
     const [standard, sameStandard] = await Promise.all([open(trial.id, 'standard'), open(trial.id, 'standard')])
@@ -1536,6 +1540,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(byHero(between, 'minimal').status, 'waiting')
     assert.notEqual(between.canReplayMinimalDelivery, true)
     await previewReplay(trial.id, 422)
+    await shareTrial(trial.id, 422)
     await send(minimal)
     const result = await read(trial.id)
     for (const [hero, opened] of [['standard', standard], ['minimal', minimal]]) {
@@ -1561,6 +1566,85 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       assert.deepEqual(arm.deliverables.map(file => file.name), hero === 'standard' ? [material] : [])
       assert.deepEqual(arm.entries.map(item => [item.name, item.state]), names.map(name => [name, 'completed']))
     }
+
+    const sample = 'lighthouse-hero-handoff-1-zh'
+    const { code } = await shareTrial(trial.id)
+    assert.equal(code, challengeCode(sample, 'original'))
+    const payload = JSON.parse(Buffer.from(code.slice('DSHC2.'.length), 'base64url').toString('utf8'))
+    assert.deepEqual(payload, { sample, need: 'original' })
+    const recipientEnv = { ...env, DSH_HOME: join(directory, 'hero-recipient') }
+    await installProfile(directory, recipientEnv)
+    recipient = await startHost(recipientEnv, patch)
+    const receive = async (action, fields, status = 200) => {
+      const response = await recipient.requestRaw(endpoint, { method: 'POST',
+        headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+        body: JSON.stringify({ action, ...fields }) })
+      const result = await response.json()
+      assert.equal(response.status, status, JSON.stringify(result))
+      return result.value
+    }
+    const checkChallenge = (text, status) => receive('lighthouse-challenge-preview', { code: text }, status)
+    const joinChallenge = (fields, status) => receive('lighthouse-challenge-open', fields, status)
+    const recipientSessions = () => readdir(join(recipientEnv.DSH_HOME, 'sessions')).catch(error => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    })
+    assert.deepEqual(await recipientSessions(), [])
+    await receive('hero-trial', { comparisonId: trial.id }, 422)
+    const forged = data => 'DSHC2.' + Buffer.from(JSON.stringify(data)).toString('base64url')
+    for (const text of [code + '!', forged({ ...payload, extra: true }), forged({ ...payload, sessionId: minimal.sessionId }),
+      challengeCode('lighthouse-hero-handoff-2-zh', 'original'), challengeCode(sample, 'both')]) {
+      await checkChallenge(text, 422)
+    }
+    const checked = await checkChallenge(code)
+    assert.equal(checked.kind, 'hero-trial')
+    assert.equal(checked.sample, sample)
+    assert.equal(checked.sampleLanguage, 'zh')
+    assert.equal(checked.need, 'original')
+    assert.equal(checked.task, trial.task)
+    assert.match(checked.token, /^[a-f0-9]{64}$/u)
+    const receiverLaunch = { code, token: checked.token, launchId: launchId('1'), arm: 'minimal' }
+    await joinChallenge({ ...receiverLaunch, token: '0'.repeat(64) }, 422)
+    await joinChallenge({ ...receiverLaunch, arm: 'minimal-present' }, 422)
+    await joinChallenge({ ...receiverLaunch, launchId: '../' }, 422)
+    assert.deepEqual(await recipientSessions(), [])
+    const [joined, sameJoin] = await Promise.all([joinChallenge(receiverLaunch), joinChallenge(receiverLaunch)])
+    assert.deepEqual(sameJoin, joined)
+    assert.equal(joined.task, trial.task)
+    assert.notEqual(joined.id, trial.id)
+    assert.ok(![standard, minimal].some(opened => opened.sessionId === joined.sessionId || opened.workspaceId === joined.workspaceId))
+    const alteredCode = challengeCode(sample, 'summary')
+    const altered = await checkChallenge(alteredCode)
+    assert.notEqual(altered.token, checked.token)
+    await joinChallenge({ ...receiverLaunch, arm: 'standard' }, 422)
+    await joinChallenge({ ...receiverLaunch, code: alteredCode, token: altered.token }, 422)
+    await joinChallenge({ ...receiverLaunch, token: altered.token }, 422)
+    assert.equal((await recipientSessions()).length, 1)
+    const recipientHistory = () => recipient.request('/api/loadout-fixture-history?sessionId=' + joined.sessionId)
+    const recipientDraft = await recipientHistory()
+    assert.equal(recipientDraft.presetId, 'minimal')
+    assert.equal(recipientDraft.inherited, 0)
+    assert.ok(!recipientDraft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+    assert.deepEqual(await readFile(join(recipientDraft.workspacePath, material)), materialBytes)
+    const recipientTrial = () => receive('hero-trial', { comparisonId: joined.id })
+    assert.deepEqual((await recipientTrial()).arms.map(({ id, status }) => [id, status]), [['standard', 'unopened'], ['minimal', 'waiting']])
+    await recipient.request(turnEndpoint, { ...joined, text: joined.task })
+    const recipientRound = await recipientHistory()
+    assert.equal(recipientRound.events.find(event => event.type === 'user/message' && event.data.source.kind === 'user')?.data.content[0].text, trial.task)
+    assert.deepEqual(traceTools(recipientRound).map(event => event.data.name), ['bash'])
+    assert.deepEqual(traceFiles(recipientRound), [])
+    const received = await recipientTrial()
+    assert.equal(byHero(received, 'standard').status, 'unopened')
+    assert.equal(byHero(received, 'minimal').summary, handoff)
+    assert.equal(byHero(received, 'minimal').materialState, 'verified')
+    assert.equal(byHero(received, 'minimal').meetsNeed, false)
+    assert.deepEqual(await readFile(join(recipientRound.workspacePath, material)), materialBytes)
+    assert.deepEqual(await joinChallenge(receiverLaunch), joined)
+    assert.equal((await recipientSessions()).length, 1)
+    await receive('hero-trial-challenge-share', { comparisonId: joined.id }, 422)
+    assert.deepEqual(await read(trial.id), result)
+    await recipient.stop()
+    recipient = undefined
 
     assert.equal(result.canReplayMinimalDelivery, true)
     assert.equal(result.minimalReplay, undefined)
@@ -1723,7 +1807,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(ownResult.draft.presetId, 'minimal')
     assert.deepEqual(await read(trial.id), replayed)
 
-    const summary = await create(launchId('b'), 'summary')
+    const summary = await create(launchId('b'), 'summary', 200, 'zh')
     assert.equal(summary.task, trial.task)
     assert.equal(summary.need, 'summary')
     const minimalSummary = await open(summary.id, 'minimal')
@@ -1743,6 +1827,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(invalid.status, 'unavailable')
     assert.equal(invalid.materialState, 'changed')
     assert.ok(!invalid.originalAttached && !invalid.meetsNeed)
+    await shareTrial(summary.id, 422)
 
     await host.stop()
     host = await startHost({ ...env, DSH_LOADOUT_TEST_WRONG_LIGHTHOUSE_CARD: '1' }, patch)
@@ -1767,6 +1852,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(wrongFile.meetsNeed, false)
     const badMinimal = await open(alternateTrial.id, 'minimal')
     await send(badMinimal)
+    assert.equal((await shareTrial(alternateTrial.id)).code, challengeCode('lighthouse-hero-handoff-1-en', 'original'))
     const badReplayPreview = await previewReplay(alternateTrial.id)
     const badReplay = await openReplay(alternateTrial.id, badReplayPreview.token)
     const badNative = await history(badReplay.sessionId)
@@ -1787,11 +1873,16 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     host = await startHost(env, patch)
     assert.equal((await host.request(endpoint)).value.heroTrialAvailable, false)
     await create(launchId('f'), 'original', 422)
+    const unavailable = await invoke('lighthouse-challenge-preview', { code })
+    assert.equal(unavailable.kind, 'hero-trial')
+    assert.equal(unavailable.blocked, true)
+    assert.equal(unavailable.token, undefined)
     const archived = await read(trial.id)
     assert.equal(archived.id, trial.id)
     assert.equal(archived.need, 'original')
     assert.deepEqual(byHero(archived, 'standard'), byHero(result, 'standard'))
   } finally {
+    await recipient?.stop()
     await host?.stop()
     await rm(directory, { recursive: true, force: true })
   }

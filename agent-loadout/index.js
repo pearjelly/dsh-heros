@@ -10,7 +10,7 @@ import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, 
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
 import { openBuildPlans, planTaskPrompt } from './build-plans.js'
-import { decodeBuildShare, decodeLighthouseChallenge, encodeBuildShare, encodeLighthouseChallenge, lighthouseChallengeName } from './build-sharing.js'
+import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseHeroChallenge, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseHeroChallenge, isLighthouseHeroChallenge, lighthouseChallengeName } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
 import { customActionStore } from './custom-actions.js'
@@ -1599,6 +1599,45 @@ export async function apply(ctx) {
     if (preview.token !== token) throw new Error(challengeChanged)
     const challengeId = createHash('sha256').update('lighthouse-challenge-v1:' + launchId).digest('hex').slice(0, 32)
     return openLighthouseLesson({ launchId: challengeId, scenario: 'gap', openingChoice }, english, signal, evidenceLesson, presetId)
+  }
+
+  function completedHeroChallenge(arms) {
+    return arms.every(arm => arm.status === 'complete' && arm.materialState === 'verified' &&
+      arm.materialRead === true && Boolean(arm.summary))
+  }
+
+  async function shareHeroChallenge({ comparisonId }, signal) {
+    const record = heroTrials.read(comparisonId)
+    if (!record) throw new Error('请先完成并核验两位英雄的试玩。')
+    const arms = await Promise.all(lighthouseHeroArms.map(arm => readHeroTrialArm(record, arm, signal)))
+    if (!completedHeroChallenge(arms)) throw new Error('请先完成并核验两位英雄的试玩。')
+    signal?.throwIfAborted()
+    const language = record.task === lighthouseHeroTask(true) ? 'en' : 'zh'
+    return { code: encodeLighthouseHeroChallenge(language, record.need) }
+  }
+
+  async function previewHeroChallenge(code, signal) {
+    const { sample, need, language: sampleLanguage } = decodeLighthouseHeroChallenge(code)
+    const task = lighthouseHeroTask(sampleLanguage === 'en')
+    const view = { kind: 'hero-trial', sample, need, sampleLanguage, task }
+    const available = await heroTrialAvailable()
+    signal?.throwIfAborted()
+    if (!available) return { ...view, blocked: true, reason: heroTrialUnavailable }
+    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, view])).digest('hex')
+    return { ...view, token }
+  }
+
+  async function openHeroChallenge({ code, token, launchId, arm }, signal) {
+    if (!validOpeningId(launchId) || !lighthouseHeroArms.includes(arm) || typeof token !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(token)) throw new Error(challengeChanged)
+    const preview = await previewHeroChallenge(code, signal)
+    if (preview.blocked) throw new Error(preview.reason)
+    if (token !== preview.token) throw new Error(challengeChanged)
+    const { need, task, sample } = preview
+    const challenge = { sample, arm }
+    const record = await heroTrials.create('challenge:' + launchId, () => ({ need, task, challenge }))
+    if (record.need !== need || record.task !== task || !isDeepStrictEqual(record.challenge, challenge)) throw new Error(challengeChanged)
+    return openComparisonArm(heroTrials, { comparisonId: record.id, arm }, preview.sampleLanguage === 'en', signal)
   }
 
   const invalidShareChoice = '换装选择无效，请重新核对分享码。'
@@ -4883,6 +4922,7 @@ export async function apply(ctx) {
     const [standard, minimal, replay] = await Promise.all(heroTrials.arms.map(arm => readHeroTrialArm(record, arm, signal)))
     const lessonTaskSource = heroDeliveryLessonSource(record, minimal, replay)
     return { id, need, task, material: lighthouseHeroMaterial, arms: [standard, minimal],
+      ...(completedHeroChallenge([standard, minimal]) && { canShareHeroChallenge: true }),
       ...(replay.status !== 'unopened' ? { minimalReplay: { ...replay, ...(lessonTaskSource && { lessonTaskSource }) } }
         : canReplayHeroDelivery(record, minimal) && { canReplayMinimalDelivery: true }) }
   }
@@ -6109,8 +6149,14 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-rematch-open') value = await openLighthouseLesson(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-evidence-open') value = await openLighthouseLesson(selection, english, request.signal, evidenceLesson)
         else if (selection?.action === 'lighthouse-challenge-share') value = await shareLighthouseChallenge(selection, request.signal)
-        else if (selection?.action === 'lighthouse-challenge-preview') value = (await checkLighthouseChallenge(selection.code, request.signal, selection.useLocal === true)).preview
-        else if (selection?.action === 'lighthouse-challenge-open') value = await openLighthouseChallenge(selection, english, request.signal)
+        else if (selection?.action === 'hero-trial-challenge-share') value = await shareHeroChallenge(selection, request.signal)
+        else if (selection?.action === 'lighthouse-challenge-preview') {
+          value = isLighthouseHeroChallenge(selection.code) ? await previewHeroChallenge(selection.code, request.signal)
+            : (await checkLighthouseChallenge(selection.code, request.signal, selection.useLocal === true)).preview
+        } else if (selection?.action === 'lighthouse-challenge-open') {
+          value = isLighthouseHeroChallenge(selection.code) ? await openHeroChallenge(selection, request.signal)
+            : await openLighthouseChallenge(selection, english, request.signal)
+        }
         else if (selection?.action === 'lighthouse-comparison') value = await readComparison(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'lighthouse-comparison-open') value = await openComparisonArm(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'workspace-comparison') value = await readComparison(workspaceComparisons, selection, english, request.signal)

@@ -1,3 +1,5 @@
+import { lighthouseHeroNeeds } from './lighthouse.js'
+
 const prefix = 'DSHH1.'
 const codeLimit = 16_384
 const idPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/
@@ -118,6 +120,9 @@ const challengeLimit = Math.ceil(codeLimit * 4 / 3) + 100
 const challengeSample = 'lighthouse-evidence-1'
 export const lighthouseChallengeName = 'Lighthouse evidence challenge'
 const invalidChallenge = '灯塔挑战码无效或版本不受支持。'
+const heroChallengePrefix = 'DSHC2.'
+const heroChallengeLimit = 128
+const heroChallengeSamples = { en: 'lighthouse-hero-handoff-1-en', zh: 'lighthouse-hero-handoff-1-zh' }
 
 function challengeLoadout(code) {
   if (typeof code !== 'string' || code.trim() !== code) throw new Error(invalidChallenge)
@@ -151,6 +156,34 @@ export function decodeLighthouseChallenge(value) {
     }
   } catch {
     // The public sample and its portable loadout are both versioned.
+  }
+  throw new Error(invalidChallenge)
+}
+
+export function isLighthouseHeroChallenge(value) {
+  return typeof value === 'string' && value.trim().startsWith(heroChallengePrefix)
+}
+
+export function encodeLighthouseHeroChallenge(language, need) {
+  if (!Object.hasOwn(heroChallengeSamples, language) || !lighthouseHeroNeeds.includes(need)) throw new Error(invalidChallenge)
+  const sample = heroChallengeSamples[language]
+  return heroChallengePrefix + Buffer.from(JSON.stringify({ sample, need })).toString('base64url')
+}
+
+export function decodeLighthouseHeroChallenge(value) {
+  if (!isLighthouseHeroChallenge(value) || value.length > heroChallengeLimit) throw new Error(invalidChallenge)
+  const code = value.trim()
+  const payload = code.slice(heroChallengePrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidChallenge)
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (shape(data, ['sample', 'need'])) {
+      const { sample, need } = data
+      const language = Object.keys(heroChallengeSamples).find(key => heroChallengeSamples[key] === sample)
+      if (language && encodeLighthouseHeroChallenge(language, need) === code) return { sample, need, language }
+    }
+  } catch {
+    // Only canonical recipes for bundled public tasks can be replayed.
   }
   throw new Error(invalidChallenge)
 }
