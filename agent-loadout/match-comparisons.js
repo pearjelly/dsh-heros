@@ -4,6 +4,7 @@ import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 
 export const workspaceComparisonArms = ['direct', 'review']
+export const planComparisonArms = ['left', 'right']
 export const comparisonIdValid = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id)
 export const materialProofRecord = 'plugin:dsh-agent-loadout/comparison-material'
 
@@ -102,6 +103,17 @@ export function workspaceComparisonTask({ material: value, task }, english) {
 export function validWorkspaceComparison(record) {
   return typeof record.workspaceId === 'string' && Boolean(record.workspaceId) && typeof record.cwd === 'string' &&
     isAbsolute(record.cwd) && workspaceMaterialPath(record.material) === record.material && /^[a-f0-9]{64}$/.test(record.digest)
+}
+
+export function validPlanComparison(record) {
+  const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+  return validWorkspaceComparison(record) && hash(record.inputHash) && hash(record.token) &&
+    typeof record.brief === 'string' && record.brief.length > 0 && record.brief.length <= 1200 &&
+    planComparisonArms.every(arm => {
+      const plan = record.plans?.[arm]
+      return plan && [plan.id, plan.revision, plan.presetId, plan.heroId, plan.planName, plan.heroName].every(
+        value => typeof value === 'string' && Boolean(value)) && /^[a-f0-9]{24}$/.test(plan.identity)
+    }) && record.plans.left.id !== record.plans.right.id
 }
 
 export async function digestWorkspaceMaterial(cwd, material, signal) {

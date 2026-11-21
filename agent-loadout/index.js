@@ -24,7 +24,7 @@ import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt
 import { matchEvents } from './match-events.js'
 import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } from './match-growth.js'
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
-import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
+import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
 import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
@@ -450,6 +450,9 @@ export async function apply(ctx) {
     () => warnings.push('lighthouse-comparisons'))
   const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', workspaceComparisonArms, saveEntry,
     () => warnings.push('workspace-comparisons'), validWorkspaceComparison)
+  const planComparisons = await openMatchComparisons(directory, 'plan-comparison', planComparisonArms, saveEntry,
+    () => warnings.push('plan-comparisons'), validPlanComparison)
+  const comparisonStores = { lighthouse: lighthouseComparisons, workspace: workspaceComparisons, plans: planComparisons }
   const workspaceMaterials = workspaceMaterialPicker(() => ctx.get('workspaceRegistry'))
   // Native session history is shared by profiles under the same DSH home.
   const receipts = matchReceipts(join(ctx.profileContext.home, 'agent-loadout', 'match-actions'))
@@ -1076,6 +1079,30 @@ export async function apply(ctx) {
     return candidate
   }
 
+  async function verifySavedPlan(saved, ecosystem) {
+    const original = records.get(saved.presetId)
+    if (!original && saved.presetId !== saved.heroId) throw new Error('方案的英雄或阵容当前不可用。')
+    const draft = recordedLoadoutDraft(original, saved.heroId, ecosystem)
+    const candidate = await verifyRecordedLoadout(saved.presetId, draft, ecosystem)
+    const sources = equippedToolBindings(candidate.record).filter(item => item.profileSourceId).map(item => {
+      const entry = ecosystem.profileSources.get(item.profileSourceId)?.entry
+      return [item.profileSourceId, entry?.options?.config ?? null]
+    })
+    const identity = jsonFingerprint([draft, candidate.record?.definition.plugins ?? ecosystem.definitions.get(saved.heroId), sources])
+    if (!identity) throw new Error('无法核对当前出装的配置。')
+    return { draft, candidate, identity }
+  }
+
+  async function readWorkspaceMaterial(workspaceId, material, signal) {
+    const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
+    if (!workspace) throw new Error('请选择一个现有的工作区。')
+    const digest = await digestWorkspaceMaterial(workspace.path, material, signal).catch(() => {
+      signal?.throwIfAborted()
+      throw new Error('无法读取所选材料，请核对工作区内的文件路径。')
+    })
+    return { workspace, digest }
+  }
+
   function requestedPlanTask(selection, english) {
     const { id, revision, workspaceId } = selection
     if (![id, revision, workspaceId].every(value => typeof value === 'string' && value.length > 0 && value.length <= 512)) {
@@ -1089,26 +1116,12 @@ export async function apply(ctx) {
   async function checkPlanTask(input, signal) {
     const { id, revision, workspaceId, material, task, hash } = input
     const saved = buildPlans.read(id, revision)
-    const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
-    if (!workspace) throw new Error('请选择一个现有的工作区。')
-    const digest = await digestWorkspaceMaterial(workspace.path, material, signal).catch(() => {
-      signal?.throwIfAborted()
-      throw new Error('无法读取所选材料，请核对工作区内的文件路径。')
-    })
+    const { workspace, digest } = await readWorkspaceMaterial(workspaceId, material, signal)
     const view = { id, revision, workspaceId, workspaceTitle: workspace.title, material, planName: saved.name, task }
     const cwd = workspace.path
     try {
       const ecosystem = await discover()
-      const original = records.get(saved.presetId)
-      if (!original && saved.presetId !== saved.heroId) throw new Error('方案的英雄或阵容当前不可用。')
-      const draft = recordedLoadoutDraft(original, saved.heroId, ecosystem)
-      const candidate = await verifyRecordedLoadout(saved.presetId, draft, ecosystem)
-      const sources = equippedToolBindings(candidate.record).filter(item => item.profileSourceId).map(item => {
-        const entry = ecosystem.profileSources.get(item.profileSourceId)?.entry
-        return [item.profileSourceId, entry?.options?.config ?? null]
-      })
-      const identity = jsonFingerprint([draft, candidate.record?.definition.plugins ?? ecosystem.definitions.get(saved.heroId), sources])
-      if (!identity) throw new Error('无法核对当前出装的配置。')
+      const { draft, candidate, identity } = await verifySavedPlan(saved, ecosystem)
       const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, saved.presetId, identity])).digest('hex')
       signal?.throwIfAborted()
       return { view, cwd, draft, candidate, ecosystem, token }
@@ -1592,7 +1605,7 @@ export async function apply(ctx) {
     }
   }
 
-  async function compare(selection, discovered, planned) {
+  async function compare(selection, discovered, planned, plannedReference) {
     const reference = selection.againstDraft
     if (reference !== undefined && (!reference || typeof reference !== 'object' || Array.isArray(reference))) {
       throw new Error('对照阵容无效，请重新选择。')
@@ -1603,7 +1616,7 @@ export async function apply(ctx) {
     const target = summarizeCapabilities(ecosystem, selection.presetId, {
       record: candidate.record, units: candidate.units, removed: candidate.removed,
     })
-    const againstDraft = reference && await plan(reference, ecosystem)
+    const againstDraft = reference && (plannedReference ?? await plan(reference, ecosystem))
     const live = !againstDraft && !selection.againstPresetId && match(selection.sourceSessionId)
     const hasBaseline = ecosystem.standingByPreset.has(selection.sourcePresetId)
     const baselineId = againstDraft?.id ?? (selection.againstPresetId || live?.presetId
@@ -3433,20 +3446,118 @@ export async function apply(ctx) {
     return startWithQuest({ draft, quest, workspaceId: workspace.id, launchId }, signal, { allowBasicReplay: delivery })
   }
 
+  function requestedPlanComparison(selection, english) {
+    const { workspaceId } = selection
+    const validRef = value => typeof value === 'string' && value.length > 0 && value.length <= 512
+    const plans = Object.fromEntries(planComparisonArms.map(arm => {
+      const { id, revision } = selection.plans?.[arm] ?? {}
+      if (!validRef(id) || !validRef(revision)) throw new Error('请选择两份不同的出装方案。')
+      return [arm, { id, revision }]
+    }))
+    if (plans.left.id === plans.right.id) throw new Error('请选择两份不同的出装方案。')
+    if (!validRef(workspaceId)) throw new Error('请选择一个现有的工作区。')
+    const { material, task } = planTaskPrompt(selection, english)
+    const input = { plans, workspaceId, material, brief: selection.task.trim(),
+      task: task + (english ? '\nKeep the original material unchanged.' : '\n保留原始材料，不要修改。') }
+    const inputHash = createHash('sha256').update(JSON.stringify(input)).digest('hex')
+    return { ...input, inputHash }
+  }
+
+  function planComparisonLabels(record, arm) {
+    const plan = record.plans?.[arm]
+    return plan ? { planName: plan.planName, heroName: plan.heroName } : {}
+  }
+
+  async function verifiedPlanComparisonArm(saved, ecosystem) {
+    const { draft, candidate, identity } = await verifySavedPlan(saved, ecosystem)
+    const capabilities = summarizeCapabilities(ecosystem, saved.heroId, candidate)
+    const sources = [...capabilities.keys()].sort().map(id => {
+      const { sourceId, timing } = capabilities.get(id)
+      return [id, sourceId ?? null, timing ?? null]
+    })
+    return { draft, candidate, identity: jsonFingerprint([identity, sources, candidate.record?.realms ?? []]) }
+  }
+
+  async function checkPlanComparison(input, signal) {
+    const { workspaceId, material, task, brief, inputHash } = input
+    const { workspace, digest } = await readWorkspaceMaterial(workspaceId, material, signal)
+    const ecosystem = await discover()
+    const checked = await Promise.all(planComparisonArms.map(async id => {
+      const view = { id, status: 'unopened' }
+      const ref = input.plans[id]
+      try {
+        const saved = buildPlans.read(ref.id, ref.revision)
+        view.planName = saved.name
+        view.heroName = saved.heroName
+        const { identity, draft, candidate } = await verifiedPlanComparisonArm(saved, ecosystem)
+        if (!identity) throw new Error('无法核对当前出装的配置。')
+        buildPlans.read(ref.id, ref.revision)
+        const removed = historicalRemovals(candidate, presetEquipment(ecosystem, saved.heroId), ecosystem)
+        return { view: { ...view, removed }, draft, candidate, pinned: { ...ref, identity, presetId: saved.presetId, heroId: saved.heroId,
+          planName: saved.name, heroName: saved.heroName } }
+      } catch (error) {
+        return { view: { ...view, reason: error instanceof Error ? error.message : '无法核对当前出装的配置。' } }
+      }
+    }))
+    signal?.throwIfAborted()
+    const view = { workspaceId, workspaceTitle: workspace.title, material, task, arms: checked.map(item => item.view) }
+    if (checked.some(item => !item.pinned)) return { view }
+    const [left, right] = checked
+    const plans = { left: left.pinned, right: right.pinned }
+    const token = createHash('sha256').update(JSON.stringify([inputHash, workspace.path, digest, plans])).digest('hex')
+    return { view, record: { workspaceId, workspaceTitle: workspace.title, cwd: workspace.path, material, task, brief, digest, inputHash, plans, token },
+      ecosystem, left, right }
+  }
+
+  async function previewPlanComparison(selection, english, signal) {
+    const { view, record, ecosystem, left, right } = await checkPlanComparison(requestedPlanComparison(selection, english), signal)
+    if (!record) return view
+    const comparison = await compare({ ...right.draft, againstDraft: left.draft }, ecosystem, right.candidate, left.candidate)
+    signal?.throwIfAborted()
+    return { ...view, comparison, token: record.token }
+  }
+
+  async function createPlanComparison(selection, english, signal) {
+    const input = requestedPlanComparison(selection, english)
+    const mismatch = '材料、任务或出装已变化，请重新核对。'
+    const { launchId, token } = selection
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw new Error('请先核对两套出装和共用材料。')
+    const record = await planComparisons.create(launchId, async () => {
+      const checked = await checkPlanComparison(input, signal)
+      if (checked.record?.token !== token) throw new Error(mismatch)
+      return checked.record
+    })
+    if (record.inputHash !== input.inputHash || record.token !== token) throw new Error(mismatch)
+    return record
+  }
+
+  async function preparePlanComparison(comparison, arm) {
+    const pinned = comparison.plans[arm]
+    const current = buildPlans.read(pinned.id, pinned.revision)
+    const { draft, candidate, identity } = await verifiedPlanComparisonArm(current, await discover())
+    if (current.presetId !== pinned.presetId || identity !== pinned.identity) {
+      throw new Error('材料、任务或出装已变化，请重新核对。')
+    }
+    return prepare(draft, candidate)
+  }
+
   async function readComparisonArm(comparisons, comparison, arm, signal) {
     const { sessionId } = comparisons.identity(comparison.id, arm)
+    const labels = planComparisonLabels(comparison, arm)
     let saved
     let source
     try {
       saved = await comparisons.readArm(comparison.id, arm)
       const workspace = saved && ctx.get('workspaceRegistry')?.get(saved.workspaceId)
-      if (!saved?.opened && !workspace?.sessionIds.includes(sessionId)) return { id: arm, status: 'unopened' }
+      if (!saved?.opened && (comparison.plans || !workspace?.sessionIds.includes(sessionId))) {
+        return { id: arm, ...labels, status: 'unopened' }
+      }
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material }, receipts)
-      return { id: arm, sessionId, ...result, canReuse: reusableComparisonArm(arm, result) }
+      return { id: arm, ...labels, sessionId, ...result, canReuse: reusableComparisonArm(arm, result) }
     } catch {
       signal?.throwIfAborted()
-      return { id: arm, ...(saved?.opened && { sessionId }), status: 'unavailable', reason: 'session-unavailable' }
+      return { id: arm, ...labels, ...(saved?.opened && { sessionId }), status: 'unavailable', reason: 'session-unavailable' }
     } finally {
       source?.[Symbol.dispose]()
     }
@@ -3460,6 +3571,7 @@ export async function apply(ctx) {
     if (result.status !== 'complete') return false
     if (arm === 'review') return comparisonChoices(result).length > 0
     if (arm === 'recon') return result.entries.some(entry => entry.name === 'glob' && entry.state === 'completed')
+    if (planComparisonArms.includes(arm)) return result.deliverables.length > 0 || result.entries.some(entry => entry.state === 'completed')
     return result.deliverables.length > 0
   }
 
@@ -3468,29 +3580,32 @@ export async function apply(ctx) {
   }
 
   async function comparisonHistory({ query = '', kind = 'all', outcome = 'all', before }, signal) {
-    if (typeof query !== 'string' || query.length > 200 || !['all', 'workspace', 'lighthouse'].includes(kind) ||
+    if (typeof query !== 'string' || query.length > 200 || !['all', ...Object.keys(comparisonStores)].includes(kind) ||
       !['all', 'delivered', 'decisions'].includes(outcome)) throw new Error('实战记录筛选无效，请重新选择。')
     let older
     if (before !== undefined) {
-      const fields = typeof before === 'string' && /^(\d{1,16}):(workspace|lighthouse):([a-f0-9]{32})$/.exec(before)
+      const fields = typeof before === 'string' && /^(\d{1,16}):(workspace|lighthouse|plans):([a-f0-9]{32})$/.exec(before)
       if (!fields || !Number.isSafeInteger(Number(fields[1]))) throw new Error('找不到这页实战记录。')
       older = { createdAt: Number(fields[1]), kind: fields[2], id: fields[3] }
     }
     const words = query.normalize('NFKC').toLowerCase().trim().split(/\s+/u).filter(Boolean)
     const registry = ctx.get('workspaceRegistry')
-    const groups = [['lighthouse', lighthouseComparisons], ['workspace', workspaceComparisons]]
+    const groups = Object.entries(comparisonStores)
+    const headings = { lighthouse: '灯塔补给行动 Lighthouse Supply Run', workspace: '实战同题对照 Workspace comparison',
+      plans: '方案同题对照 Saved plan comparison' }
     const matches = groups.filter(([category]) => kind === 'all' || kind === category).flatMap(([category, store]) =>
       Array.from(store.list(), record => {
         const { createdAt, id, task, material, workspaceId } = record
         const workspaceTitle = registry?.get(workspaceId)?.title ?? record.workspaceTitle
         const title = category === 'lighthouse' ? '灯塔补给行动'
-          : task.split('\n').slice(2, -1).join(' ').trim().slice(0, 120) || '实战同题对照'
+          : (record.brief ?? task.split('\n').slice(2, -1).join(' ')).trim().slice(0, 120) || headings[category].split(' ')[0]
         return { id, kind: category, createdAt, title, material, workspaceTitle, store, record }
       }).filter(item => {
         if (older && comparisonHistoryOrder(item, older) <= 0) return false
-        const headings = item.kind === 'lighthouse' ? '灯塔补给行动 Lighthouse Supply Run' : '实战同题对照 Workspace comparison'
         const workspaceName = item.workspaceTitle === 'default-workspace' ? 'default-workspace 默认工作区 Default workspace' : item.workspaceTitle
-        const searchable = [headings, workspaceName, item.material, item.record.task].join('\n').normalize('NFKC').toLowerCase()
+        const planLabels = item.record.plans && Object.values(item.record.plans).flatMap(({ planName, heroName }) => [planName, heroName])
+        const searchable = [headings[item.kind], workspaceName, item.material, item.record.task, ...(planLabels ?? [])]
+          .join('\n').normalize('NFKC').toLowerCase()
         return words.every(word => searchable.includes(word))
       })).sort(comparisonHistoryOrder)
 
@@ -3504,9 +3619,9 @@ export async function apply(ctx) {
       const cards = await Promise.all(group.map(async ({ store, record, ...item }) => {
         const arms = await Promise.all(store.arms.map(async id => {
           const arm = await readComparisonArm(store, record, id, signal)
-          const { status, sessionId, turn, deliverables, reason, continuationReason, canReuse } = arm
+          const { status, sessionId, turn, deliverables, reason, continuationReason, canReuse, planName, heroName } = arm
           const choices = comparisonChoices(arm)
-          return { id, status, sessionId, turn, deliverables, choices, reason, continuationReason, canReuse: Boolean(canReuse),
+          return { id, status, sessionId, turn, deliverables, choices, reason, continuationReason, planName, heroName, canReuse: Boolean(canReuse),
             pending: Boolean(arm.pendingQuestions?.length) }
         }))
         return { ...item, arms }
@@ -3520,21 +3635,22 @@ export async function apply(ctx) {
   }
 
   async function comparisonLoadout({ kind, comparisonId, arm }, signal) {
-    const store = kind === 'workspace' ? workspaceComparisons : kind === 'lighthouse' ? lighthouseComparisons : undefined
+    const store = Object.hasOwn(comparisonStores, kind) ? comparisonStores[kind] : undefined
     const record = store?.read(comparisonId)
     if (!record || !store.arms.includes(arm)) throw new Error('找不到这局实战对照。')
     const observed = await readComparisonArm(store, record, arm, signal)
     if (!observed.canReuse) throw new Error('这局还没有可复用出装的实战记录。')
     const saved = await store.readArm(comparisonId, arm)
     const original = records.get(saved?.presetId)
-    const heroId = original?.baseId ?? 'standard'
+    const pinned = record.plans?.[arm]
+    const heroId = pinned?.heroId ?? original?.baseId ?? 'standard'
     const [ecosystem, uploaded] = await Promise.all([discover(), appearance.index()])
     const art = packageArt(uploaded, ecosystem)
-    const hero = { id: heroId, name: matchHero(heroId, original).name, art: art('hero', heroId) }
+    const hero = { id: heroId, name: pinned?.heroName ?? matchHero(heroId, original).name, art: art('hero', heroId) }
     const { sessionId, turn, entries, deliverables } = observed
     const choices = comparisonChoices(observed)
     const workspaceId = ctx.get('workspaceRegistry')?.get(saved?.workspaceId)?.id
-    const result = { sessionId, workspaceId, hero, turn, entries, deliverables, choices, gear: [] }
+    const result = { sessionId, workspaceId, ...planComparisonLabels(record, arm), hero, turn, entries, deliverables, choices, gear: [] }
     if (!saved?.presetId || (!original && saved.presetId !== heroId)) {
       return { ...result, reason: '实战中的原出装目前无法读取。' }
     }
@@ -3550,7 +3666,9 @@ export async function apply(ctx) {
     })
     try {
       signal?.throwIfAborted()
-      const candidate = await verifyRecordedLoadout(saved.presetId, draft, ecosystem)
+      const verified = pinned && await verifiedPlanComparisonArm(pinned, ecosystem)
+      if (pinned && verified.identity !== pinned.identity) throw new Error('本机配置已变化，无法核对这局的原出装。')
+      const candidate = verified?.candidate ?? await verifyRecordedLoadout(saved.presetId, draft, ecosystem)
       const comparison = await compare(draft, ecosystem, candidate)
       return { ...result, gear: result.gear.map(item => ({ ...item, available: true })), draft, comparison }
     } catch (error) {
@@ -3571,8 +3689,9 @@ export async function apply(ctx) {
     } else if (prototype !== true) {
       record = comparisons.latest()
     }
-    if (!record) return { ...(comparisons === workspaceComparisons ? { defaultTask: workspaceComparisonDraft(english) }
-      : { task: lighthouseComparisonTask(english) }), arms: comparisons.arms.map(id => ({ id, status: 'unopened' })) }
+    if (!record) return { ...(comparisons === workspaceComparisons && { defaultTask: workspaceComparisonDraft(english) }),
+      ...(comparisons === lighthouseComparisons && { task: lighthouseComparisonTask(english) }),
+      arms: comparisons.arms.map(id => ({ id, status: 'unopened' })) }
     const { id, task, workspaceId, material } = record
     const workspace = material && ctx.get('workspaceRegistry')?.get(workspaceId)
     const [arms, materialState] = await Promise.all([
@@ -3613,9 +3732,11 @@ export async function apply(ctx) {
     const controller = ctx.get('sessionController')
     const query = ctx.get('sessionQuery')
     if (!registry?.create || !controller?.create || !query) throw new Error('当前 DSH 无法打开同题对照。')
-    const comparison = comparisonId !== undefined ? comparisons.read(comparisonId)
-      : comparisons === workspaceComparisons ? await createWorkspaceComparison(comparisons, registry, selection, english, signal)
-        : await comparisons.create(launchId, () => ({ task: lighthouseComparisonTask(english) }))
+    let comparison
+    if (comparisonId !== undefined) comparison = comparisons.read(comparisonId)
+    else if (comparisons === planComparisons) comparison = await createPlanComparison(selection, english, signal)
+    else if (comparisons === workspaceComparisons) comparison = await createWorkspaceComparison(comparisons, registry, selection, english, signal)
+    else comparison = await comparisons.create(launchId, () => ({ task: lighthouseComparisonTask(english) }))
     if (!comparison) throw new Error('找不到这组同题对照。')
     const { id, task } = comparison
     const { sessionId, requestId } = comparisons.identity(id, arm)
@@ -3625,12 +3746,26 @@ export async function apply(ctx) {
     const open = async () => {
       let saved = await comparisons.readArm(id, arm)
       if (saved?.opened) return response
+      const pinned = comparison.plans?.[arm]
       let workspace = comparison.workspaceId && registry.get(comparison.workspaceId)
+      let verify
       if (comparison.material) {
         if (workspace?.path !== comparison.cwd) throw new Error('请选择一个现有的工作区。')
+        // Check again after resolving the plan. A file can change while its tools are being checked.
+        const prepared = pinned && await preparePlanComparison(comparison, arm)
         const state = await workspaceMaterialState(comparison, signal)
         if (state !== 'verified') throw new Error(state === 'changed' ? '材料已变化，请用现在的文件开始新的对照。'
           : '无法读取所选材料，请核对工作区内的文件路径。')
+        if (prepared) {
+          buildPlans.read(pinned.id, pinned.revision)
+          workspace = registry.get(comparison.workspaceId)
+          if (workspace?.path !== comparison.cwd) throw new Error('请选择一个现有的工作区。')
+          const current = { workspaceId: workspace.id, cwd: workspace.path, presetId: prepared.presetId }
+          if (saved && !isDeepStrictEqual(saved, current)) throw new Error('这场会话与原对照阵容不一致。')
+          if (!saved) await comparisons.writeArm(id, arm, current)
+          saved = current
+          verify = prepared.verifyLive
+        }
       }
       if (saved) {
         workspace = registry.get(saved.workspaceId)
@@ -3669,6 +3804,13 @@ export async function apply(ctx) {
       } else {
         const created = await controller.create({ sessionId, workspaceId: workspace.id, agentPreset: saved.presetId })
         if (created.sessionId !== sessionId) throw new Error('新对局的会话标识已变化，请重新开局。')
+      }
+      if (verify) {
+        if (!ctx.get('agents')?.get(sessionId)) {
+          const result = await controller.resolveAgent(sessionId)
+          if (!result.agent) throw new Error(result.error?.message ?? '无法打开新对局。')
+        }
+        verifyLive({ presetId: saved.presetId, sessionId })
       }
       await comparisons.writeArm(id, arm, { ...saved, opened: true })
       updates.notify(sessionId)
@@ -4539,6 +4681,10 @@ export async function apply(ctx) {
       if (comparison) value.lighthouseComparison = comparison
       const workspaceComparison = workspaceComparisons.member(sessionId)
       if (workspaceComparison) value.workspaceComparison = workspaceComparison
+      const planComparison = planComparisons.member(sessionId)
+      if (planComparison) {
+        value.planComparison = { ...planComparison, ...planComparisonLabels(planComparisons.read(planComparison.id), planComparison.arm) }
+      }
       if (savedTask?.launch && !savedTask.started) {
         const { planName, material, task } = savedTask.launch
         value.planTask = { planName, material, task }
@@ -4576,14 +4722,15 @@ export async function apply(ctx) {
     return await admission.ready && !signal.aborted ? next() : { kind: 'reject' }
   }, { global: true })
   ctx.on('agent/pre-step', async ({ agent, turn, messages, signal }, next) => {
-    const member = workspaceComparisons.member(agent.id)
+    const comparisonStore = planComparisons.member(agent.id) ? planComparisons : workspaceComparisons
+    const member = comparisonStore.member(agent.id)
     if (!member) return next()
     const submissions = messages.filter(message => message.source?.kind === 'user')
     const item = turn === 1 && submissions.length === 1 ? submissions[0] : undefined
     const task = item?.content.length === 1 && item.content[0]?.type === 'text' && item.content[0].text === member.task
     const replies = messages.filter(message => message.source?.kind === 'user-question-reply').map(message => message.source.callId)
     if (task || replies.length) {
-      const comparison = workspaceComparisons.read(member.id)
+      const comparison = comparisonStore.read(member.id)
       try {
         const state = await workspaceMaterialState(comparison, signal)
         if (!signal.aborted) appendPluginRecord(agent.session, materialProofRecord, {
@@ -4690,6 +4837,9 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-comparison-open') value = await openComparisonArm(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'workspace-comparison') value = await readComparison(workspaceComparisons, selection, english, request.signal)
         else if (selection?.action === 'workspace-comparison-open') value = await openComparisonArm(workspaceComparisons, selection, english, request.signal)
+        else if (selection?.action === 'plan-comparison') value = await readComparison(planComparisons, selection, english, request.signal)
+        else if (selection?.action === 'plan-comparison-preview') value = await previewPlanComparison(selection, english, request.signal)
+        else if (selection?.action === 'plan-comparison-open') value = await openComparisonArm(planComparisons, selection, english, request.signal)
         else if (selection?.action === 'comparison-history') value = await comparisonHistory(selection, request.signal)
         else if (selection?.action === 'comparison-loadout-preview') value = await comparisonLoadout(selection, request.signal)
         else if (selection?.action === 'field-playbook-preview') value = await previewFieldPlaybook(selection)

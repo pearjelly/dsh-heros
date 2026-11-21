@@ -15,13 +15,19 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.77.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.78.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 For the desktop app, use its bundled CLI with `--profile desktop`, then quit and reopen the app. If an earlier copy is installed, remove `dsh-agent-loadout` from the same profile before installing the release. The package keeps that identifier for compatibility.
 
 Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
+
+## Compare your saved loadouts
+
+1. In **Loadout plans**, select a plan and choose **Compare with another saved plan**. Select a different plan, choose one workspace, and use **Browse files** to pick the shared material. Enter the task for both plans.
+2. Choose **Review both plans** to check capability changes, tool sources, and whether both loadouts are ready to run. Open each loadout in its own DSH session and manually send the same prepared task in both.
+3. Compare the actual tool calls, choices recorded in DSH question cards, and delivered files. Open either original session to check its results. Return through **Run history** to find the comparison and keep the loadout you verified.
 
 ## Use saved gear for a new task
 

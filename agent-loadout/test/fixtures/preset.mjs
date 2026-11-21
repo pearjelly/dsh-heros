@@ -182,13 +182,15 @@ export async function apply(ctx) {
         const review = systemText.includes('whether to proceed with the handoff or revise the draft')
         const confirmed = review && results.length > 0 &&
           JSON.parse(results[0].content[0].text).answers?.[0]?.selected?.includes('Confirm handoff')
-        sequence = review ? ['ask_user_question', ...(confirmed ? ['present'] : [])] : ['present']
+        const canPresent = tools?.some(tool => tool.name === 'present')
+        sequence = review ? ['ask_user_question', ...(confirmed && canPresent ? ['present'] : [])]
+          : [canPresent ? 'present' : 'glob']
         name = sequence[results.length]
         args = name === 'ask_user_question' ? { questions: [{
           id: 'fixture-delivery-review',
           question: 'The ' + file + ' draft contains the handoff summary. Deliver it or request changes?',
           options: [{ label: 'Confirm handoff' }, { label: 'Revise draft' }],
-        }] } : { files: [{ path: file, description: 'Handoff summary' }] }
+        }] } : name === 'glob' ? { pattern: file } : { files: [{ path: file, description: 'Handoff summary' }] }
       } else if (latestText === '读取预设工作目录') {
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')

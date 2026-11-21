@@ -104,7 +104,7 @@ curl -fsSL "$asset_base/latest/download/dsh-heros-bundle.tgz" \
 
 Update the existing community entry to the tagged bundle URL after publication. An install against a reused pnpm store can retrieve the old version of a rolling URL. A release-specific URL gives each bundle its own cache key. [Community entry](https://awesome-dsh-plugin.com/p/pearjelly/dsh-heros--agent-loadout/) · [Entry source](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/data/plugins/pearjelly__dsh-heros--agent-loadout.yml)
 
-1. Update `tarball` in the existing listing to `$asset_base/download/$tag/dsh-heros-bundle.tgz`. If its previous version PR is still open, update that PR with the new release. After merge and site rebuild, verify that the full catalog still has exactly one matching entry and the downloaded bytes match the release checksum.
+1. Prepare the `tarball` change in the existing listing to `$asset_base/download/$tag/dsh-heros-bundle.tgz`. Run the community submission checker against the previous entry using the published bundle. If its version PR is still open, let its current check finish before pushing the new pin. A push to the same PR cancels the running check. Update the PR and confirm that the next check is attached to the new commit. After merge and site rebuild, verify that the full catalog still has exactly one matching entry and the downloaded bytes match the release checksum.
 
    ```sh
    curl --compressed -fsSL https://awesome-dsh-plugin.com/plugins.json -o "$release_dir/community-catalog.json"

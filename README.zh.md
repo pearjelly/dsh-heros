@@ -15,13 +15,19 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.77.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.78.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 桌面版用应用随附的 CLI，把 `--profile web` 改为 `--profile desktop`，安装后退出并重新打开应用。如果已安装早期版本，先从同一 Profile 移除 `dsh-agent-loadout` 再安装。发布包沿用这个内部名称，便于兼容原有阵容。
 
 从 DSH 侧栏打开 **深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
+
+## 用自己保存的两套出装做同一道题
+
+1. 在 **出装方案** 选中一套，点 **与另一份方案同题对照**。选择另一份方案和同一个工作区，点 **浏览文件** 选择共同的材料，再填写两局要做的任务。
+2. 点 **核对两套方案**，查看能力差异、工具来源和开局就绪情况。分别开两个 DSH 会话，在每局手动发送同一段任务。
+3. 核对两局的真实调用、DSH 提问卡上的选择和交付文件。到任一原会话可以打开产物；之后也可从 **实战记录** 找回对照，保留核对过的出装。
 
 ## 用已保存的方案做新任务
 

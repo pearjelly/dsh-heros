@@ -1997,6 +1997,197 @@ test('workspace material browsing returns safe paths for plans and comparisons',
   }
 })
 
+test('saved plan comparisons pin two different native workflows on the same material', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-plan-comparison-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const workspacePath = join(directory, 'workspace')
+  const material = 'materials/reuse-fixture.md'
+  const content = '# Selected evidence for two saved plans\n'
+  const task = 'Locate the source and hand it off if your workflow allows.'
+  let host
+  try {
+    await mkdir(join(workspacePath, 'materials'), { recursive: true })
+    await writeFile(join(workspacePath, material), content)
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, payload, status) => (await host.request(endpoint, { action, ...payload }, status)).value
+    const workspace = '/api/loadout-fixture-session'
+    const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
+    const { workspaceId, sessionId } = await host.request(workspace, { presetId: 'standard', workspacePath })
+    const membership = async () => (await host.request(workspace, { inspectWorkspaceId: workspaceId })).sessionIds
+    const catalog = async () => {
+      const { plans, saved, presets } = (await host.request(endpoint)).value
+      return { plans, saved: saved.map(item => item.id), xp: presets.find(item => item.id === 'standard').rank?.xp ?? 0 }
+    }
+    const read = filters => invoke('plan-comparison', filters)
+    const preview = (fields, status) => invoke('plan-comparison-preview', fields, status)
+    const open = (fields, status) => invoke('plan-comparison-open', fields, status)
+    const send = attempt => host.request(turnEndpoint, { sessionId: attempt.sessionId, requestId: attempt.requestId, text: attempt.task })
+    const armOf = (view, id) => view.arms.find(arm => arm.id === id)
+    const key = ({ id, revision }) => ({ id, revision })
+    const { draft: direct } = await invoke('field-playbook-preview', { id: 'direct' })
+    const { draft: review } = await invoke('field-playbook-preview', { id: 'review' })
+    const scoutPlan = await invoke('plan-save', { name: 'Find source only', draft: { ...direct, equipmentIds: [] } })
+    const oldReview = await invoke('plan-save', { name: 'Reviewed delivery', draft: review })
+    const inputs = { plans: { left: key(scoutPlan), right: key(oldReview) }, workspaceId, material, task }
+    const stale = await preview(inputs)
+    assert.ok(stale.token)
+    const launchId = 'a'.repeat(32)
+    await appendFile(join(workspacePath, material), '\nChanged after the pair was previewed.\n')
+    await open({ ...inputs, token: stale.token, arm: 'left', launchId }, 422)
+    await writeFile(join(workspacePath, material), content)
+    const reviewPlan = await invoke('plan-save', { ...key(oldReview), name: 'Reviewed delivery v2' })
+    assert.notEqual(reviewPlan.revision, oldReview.revision)
+    await open({ ...inputs, token: stale.token, arm: 'left', launchId }, 422)
+    const fields = { ...inputs, plans: { ...inputs.plans, right: key(reviewPlan) } }
+    const before = await catalog()
+    const checked = await preview(fields)
+    assert.ok(checked.token)
+    assert.equal(checked.workspaceId, workspaceId)
+    assert.equal(checked.workspaceTitle, 'Fixture workspace')
+    assert.equal(checked.material, material)
+    assert.match(checked.task, /^【出装任务】\n/u)
+    assert.ok(checked.task.includes(task))
+    assert.deepEqual(checked.arms.map(arm => [arm.id, arm.planName, arm.status]),
+      [['left', scoutPlan.name, 'unopened'], ['right', reviewPlan.name, 'unopened']])
+    assert.ok(checked.arms.every(arm => arm.heroName))
+    assert.ok(armOf(checked, 'left').removed.includes('文件交付工具'))
+    assert.ok(checked.comparison.gained.some(item => item.id === 'review'))
+    assert.ok(!JSON.stringify(checked).includes(workspacePath))
+    assert.deepEqual(await catalog(), before)
+    assert.deepEqual(await membership(), [sessionId])
+    assert.equal(await read({ sessionId }), null)
+
+    const request = { ...fields, token: checked.token, arm: 'left', launchId }
+    const [left, same] = await Promise.all([open(request), open(request)])
+    assert.deepEqual(left, same)
+    assert.equal(left.task, checked.task)
+    assert.notEqual(left.sessionId, sessionId)
+    const filter = { comparisonId: left.id }
+    const openedLeft = await read(filter)
+    assert.equal(armOf(openedLeft, 'left').status, 'waiting')
+    assert.equal(armOf(openedLeft, 'right').status, 'unopened')
+    const native = async (attempt, expected) => {
+      const snapshot = await history(attempt.sessionId)
+      assert.equal(snapshot.workspaceId, workspaceId)
+      assert.equal(snapshot.workspacePath, await realpath(workspacePath))
+      assert.equal(snapshot.presetId, expected.presetId)
+      assert.equal(snapshot.inherited, 0)
+      return snapshot
+    }
+    assert.ok(!(await native(left, scoutPlan)).events.some(event => ['turn/start', 'user/message'].includes(event.type)))
+    assert.deepEqual(await catalog(), before)
+    await send(left)
+    const located = armOf(await read(filter), 'left')
+    assert.equal(located.status, 'complete')
+    assert.deepEqual(located.entries.map(item => [item.name, item.state]), [['glob', 'completed']])
+    assert.ok(located.entries[0].sourceNames?.length)
+    assert.deepEqual(located.deliverables, [])
+    assert.equal(located.canReuse, true)
+    const discovery = (await native(left, scoutPlan)).events.find(event => event.type === 'tool/result')
+    assert.match(JSON.stringify(discovery.data.message.content), /reuse-fixture\.md/u)
+
+    const renamedScout = await invoke('plan-save', { ...key(scoutPlan), name: 'Renamed source finder' })
+    await appendFile(join(workspacePath, material), '\nChanged between launch arms.\n')
+    assert.deepEqual(await open(request), left)
+    await open({ ...filter, arm: 'right' }, 422)
+    assert.equal(armOf(await read(filter), 'right').status, 'unopened')
+    await writeFile(join(workspacePath, material), content)
+    const right = await open({ ...filter, arm: 'right' })
+    assert.equal(right.id, left.id)
+    assert.equal(right.task, left.task)
+    assert.notEqual(right.sessionId, left.sessionId)
+    assert.notEqual(right.requestId, left.requestId)
+    assert.ok(!(await native(right, reviewPlan)).events.some(event => ['turn/start', 'user/message'].includes(event.type)))
+    assert.deepEqual(new Set(await membership()), new Set([sessionId, left.sessionId, right.sessionId]))
+
+    const waiting = send(right)
+    waiting.catch(() => {})
+    const questionPath = '/api/loadout-fixture-handoff-question'
+    let question
+    try {
+      for (let attempt = 0; attempt < 100 && !question; attempt++) {
+        question = (await host.request(questionPath, { sessionId: right.sessionId })).question
+        if (!question) await delay(40)
+      }
+      assert.deepEqual(question?.options.map(option => option.label), ['Confirm handoff', 'Revise draft'])
+      const card = armOf(await read(filter), 'right')
+      assert.equal(card.status, 'waiting-choice')
+      assert.ok(!card.deliverables?.length)
+    } finally {
+      if (question) await host.request(questionPath, { sessionId: right.sessionId, choice: 'Confirm handoff' })
+      await waiting
+    }
+    const complete = await read({ sessionId: right.sessionId })
+    const delivered = armOf(complete, 'right')
+    assert.equal(delivered.status, 'complete')
+    assert.deepEqual(delivered.entries.map(item => [item.name, item.state]), [['ask_user_question', 'completed'], ['present', 'completed']])
+    assert.deepEqual(delivered.entries[0].choices, ['Confirm handoff'])
+    assert.deepEqual(delivered.deliverables, [{ name: 'reuse-fixture.md', turn: 1 }])
+    assert.equal(armOf(complete, 'left').planName, scoutPlan.name)
+    assert.equal(delivered.planName, reviewPlan.name)
+    for (const attempt of [left, right]) {
+      const replay = await history(attempt.sessionId)
+      const submitted = replay.events.find(item => item.type === 'user/message' && item.data.source.kind === 'user')
+      assert.equal(submitted.data.content[0].text, checked.task)
+    }
+    const rightReplay = await native(right, reviewPlan)
+    const file = rightReplay.events.find(event => event.type === 'deliverables/presented').data.files[0]
+    assert.equal(file.path, join(await realpath(workspacePath), material))
+
+    const list = () => invoke('comparison-history', { kind: 'plans', query: 'reuse-fixture.md' })
+    const listed = await list()
+    assert.equal(listed.items.length, 1)
+    assert.equal(listed.items[0].id, left.id)
+    assert.equal(listed.items[0].kind, 'plans')
+    assert.equal(armOf(listed.items[0], 'left').sessionId, left.sessionId)
+    assert.deepEqual(armOf(listed.items[0], 'right').choices, ['Confirm handoff'])
+    const priorPlans = (await catalog()).plans
+    const reuse = arm => invoke('comparison-loadout-preview', { kind: 'plans', ...filter, arm })
+    const scoutReuse = await reuse('left')
+    assert.equal(scoutReuse.sessionId, left.sessionId)
+    assert.deepEqual(scoutReuse.draft.equipmentIds, [])
+    assert.deepEqual(scoutReuse.draft.removedEquipmentIds, direct.removedEquipmentIds)
+    const reviewReuse = await reuse('right')
+    assert.equal(reviewReuse.sessionId, right.sessionId)
+    assert.deepEqual(new Set(reviewReuse.draft.equipmentIds), new Set(['review', 'present']))
+    assert.deepEqual((await catalog()).plans, priorPlans)
+
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual(await read(filter), complete)
+    assert.deepEqual(await list(), listed)
+    assert.deepEqual(await open(request), left)
+    assert.deepEqual(await open({ ...filter, arm: 'right' }), right)
+
+    const pendingFields = { ...fields, plans: { left: key(renamedScout), right: key(reviewPlan) } }
+    const pending = await preview(pendingFields)
+    const pendingPair = await open({ ...pendingFields, token: pending.token, arm: 'left', launchId: 'b'.repeat(32) })
+    const renamedReview = await invoke('plan-save', { ...key(reviewPlan), name: 'Renamed reviewed delivery' })
+    await open({ comparisonId: pendingPair.id, arm: 'right' }, 422)
+    assert.equal(armOf(await read({ comparisonId: pendingPair.id }), 'right').status, 'unopened')
+    assert.deepEqual(await open({ ...filter, arm: 'right' }), right)
+
+    const foreign = await invoke('plan-save', { name: 'Alternate hero', draft: { presetId: 'fixture-spare-kit', equipmentIds: [] } })
+    const crossHeroFields = { ...fields, plans: { left: key(renamedReview), right: key(foreign) } }
+    const crossHero = await preview(crossHeroFields)
+    assert.equal(crossHero.comparison.before.id, 'standard')
+    assert.equal(crossHero.comparison.after.id, 'fixture-spare-kit')
+    const alternate = await open({ ...crossHeroFields, token: crossHero.token, arm: 'right', launchId: 'c'.repeat(32) })
+    const alternateNative = await native(alternate, foreign)
+    assert.equal(alternateNative.presetId, 'fixture-spare-kit')
+    assert.ok(!alternateNative.events.some(event => ['turn/start', 'user/message'].includes(event.type)))
+    const alternateTools = await host.request('/api/loadout-fixture-tools?id=fixture-spare-kit')
+    assert.ok(!alternateTools.includes('present'))
+    assert.equal(await readFile(join(workspacePath, material), 'utf8'), content)
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('shared plans resolve in a fresh profile without saving or copying private equipment', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-share-'))
   const root = await realpath(directory)
