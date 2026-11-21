@@ -1301,7 +1301,7 @@ window.__ModuleLoader__.load({
               t(busy ? '正在准备对局…' : error ? '重试' : evidence ? '开始证据取舍' : '开始换装练习'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
-    function LighthouseChallengeShare({ comparisonId, request, onBack, heroTrial = false }) {
+    function LighthouseChallengeShare({ comparisonId, request, onBack, heroTrial = false, playedHero }) {
       const language = useLanguage()
       const [result, setResult] = useState(null)
       const [error, setError] = useState('')
@@ -1310,8 +1310,15 @@ window.__ModuleLoader__.load({
       const field = useRef(null)
       const invitationField = useRef(null)
       const action = heroTrial ? 'hero-trial-challenge-share' : 'lighthouse-challenge-share'
-      const invitation = heroTrial && result?.code &&
-        t('来玩一局深度荣耀的灯塔英雄挑战。打开大厅，点「加入灯塔挑战」，粘贴这整段并核对，选你的首发英雄。') + '\n\n' + result.code
+      const heroHook = {
+        standard: '我用标准模式打了一局。同一张补给卡，你会选谁？',
+        minimal: '我用极简模式打了一局。同一张补给卡，你会选谁？',
+      }[playedHero]
+      const invitation = heroTrial && result?.code && [
+        ...(heroHook ? [t(heroHook)] : []),
+        t('来玩一局深度荣耀的灯塔英雄挑战。打开大厅，点「加入灯塔挑战」，粘贴这整段并核对，选你的首发英雄。'),
+        result.code,
+      ].join('\n\n')
       useEffect(() => {
         const abort = new AbortController()
         setResult(null)
@@ -1690,6 +1697,11 @@ window.__ModuleLoader__.load({
           h('p', { className: 'moba-lighthouse-note', style: { whiteSpace: 'pre-wrap' } }, arm.summary)))
     }
 
+    function canReportHeroHandoff(arm) {
+      return arm.status === 'complete' && arm.materialState === 'verified' &&
+        arm.materialRead === true && Boolean(arm.summary) && typeof arm.originalAttached === 'boolean'
+    }
+
     const heroHandoffReportCodeLimit = 192
 
     function HeroHandoffReport({ report, comparisonId, request, onBack }) {
@@ -1997,8 +2009,7 @@ window.__ModuleLoader__.load({
 
       function renderArm(arm, config, extraResult) {
         const equipped = arm.id === minimalDeliveryReplayArm.id
-        const reportable = arm.status === 'complete' && arm.materialState === 'verified' &&
-          arm.materialRead === true && Boolean(arm.summary) && typeof arm.originalAttached === 'boolean'
+        const reportable = canReportHeroHandoff(arm)
         return h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
           onStart: equipped ? undefined : open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
           onLessonTask: equipped ? item => setPersonalSource(item.lessonTaskSource) : undefined,
@@ -2012,6 +2023,7 @@ window.__ModuleLoader__.load({
       }
 
       const finished = value?.arms.length > 0 && value.arms.every(arm => arm.status === 'complete')
+      const verifiedHeroes = value?.arms.filter(canReportHeroHandoff) ?? []
       const focusSelector = focusReplay && minimalReplay ? '[data-comparison-arm="minimal-present"]' : '[data-hero-trial-results]'
       return h(Fragment, null, h(InstallDialog, { title: t(heroTrialTitle), busy, onCancel: onClose,
         className: setup ? 'moba-starter-dialog' : 'moba-lighthouse-comparison',
@@ -2042,7 +2054,8 @@ window.__ModuleLoader__.load({
               finished && h('p', { className: 'moba-lighthouse-note' }, t('交付是否符合需求依据工具、回复和附件记录。摘要内容可打开原会话核对。')),
               value.canShareHeroChallenge && h('div', { className: 'moba-comparison-previous' },
                 h('button', { type: 'button', ref: shareButton, className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
-                  onClick: () => setSharing(true) }, t('分享英雄试玩'))),
+                  onClick: () => setSharing(true) }, t('分享英雄试玩')),
+                verifiedHeroes.length === 1 && h('p', { className: 'moba-lighthouse-note' }, t('玩完这一局就能邀请朋友选英雄。打完再交换战报。'))),
               error && h('p', { role: 'alert', className: 'moba-alert' }, error),
               h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm => {
                 const config = heroTrialHeroes.find(item => item.id === arm.id)
@@ -2068,7 +2081,8 @@ window.__ModuleLoader__.load({
               !comparisonId && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: reset }, t('另开一组试玩'))))),
         replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: activeId, onBack: closeReplay,
           onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
-        sharing && h(LighthouseChallengeShare, { comparisonId: activeId, request, heroTrial: true, onBack: closeSharing }),
+        sharing && h(LighthouseChallengeShare, { comparisonId: activeId, request, heroTrial: true,
+          playedHero: verifiedHeroes.length === 1 ? verifiedHeroes[0].id : undefined, onBack: closeSharing }),
         handoffReport && h(HeroHandoffReport, { report: handoffReport, comparisonId: activeId, request, onBack: closeHandoffReport }),
         personalSource && h(LessonLoadoutTask, { source: personalSource, workspaces, request, backLabel: '返回试玩对照',
           onBack: closePersonalTask, onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }))

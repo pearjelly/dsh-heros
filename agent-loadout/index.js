@@ -1608,9 +1608,10 @@ export async function apply(ctx) {
 
   async function shareHeroChallenge({ comparisonId }, signal) {
     const record = heroTrials.read(comparisonId)
-    if (!record) throw new Error('请先完成并核验两位英雄的试玩。')
+    const unavailable = '请先完成并核验一局原装英雄试玩。'
+    if (!record) throw new Error(unavailable)
     const arms = await Promise.all(lighthouseHeroArms.map(arm => readHeroTrialArm(record, arm, signal)))
-    if (!arms.every(verifiedHeroHandoff)) throw new Error('请先完成并核验两位英雄的试玩。')
+    if (!arms.some(verifiedHeroHandoff)) throw new Error(unavailable)
     signal?.throwIfAborted()
     const language = record.task === lighthouseHeroTask(true) ? 'en' : 'zh'
     return { code: encodeLighthouseHeroChallenge(language, record.need) }
@@ -4943,7 +4944,7 @@ export async function apply(ctx) {
     const [standard, minimal, replay] = await Promise.all(heroTrials.arms.map(arm => readHeroTrialArm(record, arm, signal)))
     const lessonTaskSource = heroDeliveryLessonSource(record, minimal, replay)
     return { id, need, task, material: lighthouseHeroMaterial, arms: [standard, minimal],
-      ...([standard, minimal].every(verifiedHeroHandoff) && { canShareHeroChallenge: true }),
+      ...([standard, minimal].some(verifiedHeroHandoff) && { canShareHeroChallenge: true }),
       ...(replay.status !== 'unopened' ? { minimalReplay: { ...replay, ...(lessonTaskSource && { lessonTaskSource }) } }
         : canReplayHeroDelivery(record, minimal) && { canReplayMinimalDelivery: true }) }
   }

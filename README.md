@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.114.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.115.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -33,7 +33,7 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 
 ### Share the hero trial
 
-1. Once both stock heroes finish and the results pass verification, choose **Share hero trial**. Copy the code by itself, or choose **Copy challenge invitation** for a short message in your current interface language with the code included. The code identifies the public sample version and task language and carries the handoff need. Your replies, files, and workspaces stay in your profile.
+1. After one stock hero finishes a verified round, choose **Share hero trial**. **Copy challenge invitation** lets you ask a friend which hero they would pick for the same supply card. You can also copy the code alone. The code identifies the public sample version and task language and carries the handoff need. Your replies, files, and workspaces stay in your profile.
 2. In the Armory's Lighthouse section, choose **Join a Lighthouse challenge** and paste the whole message or a raw code into **Challenge invitation or code**. The plugin extracts one distinct supported code locally. If your paste contains different codes, keep the one you want to check. Choose **Check challenge code**, read the original task and handoff need, then choose your first hero and manually send the task in DSH. The same entry accepts shared Lighthouse evidence challenges.
 
 ### Compare a friend's trial report
