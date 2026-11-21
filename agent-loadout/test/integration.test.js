@@ -1795,6 +1795,8 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     const earned = await settlements()
     assert.equal(earned.length, 1)
     assert.ok(earned[0].awards.some(item => item.name === 'present' && item.xp > 0))
+    assert.deepEqual(proved.awards, earned[0].awards.filter(item => item.kind)
+      .map(({ id, name, kind, xp, sourceName }) => ({ id, name, kind, xp, ...(sourceName && { sourceName }) })))
     assert.ok(!JSON.stringify(proved).includes(await realpath(personal)))
     const readyToSave = await result(opened.sessionId, true)
     assert.deepEqual(new Set(readyToSave.draft.equipmentIds), new Set(['present', 'review']))
@@ -1826,6 +1828,11 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     const rejected = await result(edited.sessionId, true)
     assert.equal(rejected.reason, 'changed-task')
     assert.equal(rejected.draft, undefined)
+
+    await send({ sessionId: opened.sessionId, task: 'Read another unrelated note after the handoff.' })
+    const subsequent = (await invoke('match-settlements-page', { sessionId: opened.sessionId })).receipts
+    assert.ok(subsequent.some(item => !proved.receiptIds.includes(item.id)))
+    assert.deepEqual(await result(opened.sessionId), proved)
 
     const { draft } = await invoke('field-playbook-preview', { id: 'direct' })
     const legacyPlan = await invoke('plan-save', { name: 'Saved Direct plan', draft })

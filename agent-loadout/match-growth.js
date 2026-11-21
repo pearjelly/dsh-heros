@@ -650,6 +650,14 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
     return { recent, entries, read }
   }
 
+  async function settlementAwards(sessionId, receiptIds) {
+    if (invalid || !receiptIds.length) return []
+    await writes
+    const { read } = ownSettlementHistory(sessionId)
+    const receipts = await Promise.all(receiptIds.map(read))
+    return receipts.flatMap(receipt => receipt?.awards ?? [])
+  }
+
   async function provenLoadout(sessionId, receiptId) {
     if (invalid) throw new Error('成长记录暂时无法读取。')
     const { recent, entries, read } = ownSettlementHistory(sessionId)
@@ -1497,7 +1505,7 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
     equipmentHeroes, equipmentSourceProof, reportFollowUps,
     accept, settleQuest, read, flags, flagFor, displayFlag, signatureRules, signatureFor, signatureProgress, setSignature,
     teamTaskClaimed, teamQuest, recordTeamTask,
-    settlements, followUp, provenLoadout, notice, dismissReceipt, continuationOffer, relayLoadout, recordBlankContinuation, handoff, journal,
+    settlements, settlementAwards, followUp, provenLoadout, notice, dismissReceipt, continuationOffer, relayLoadout, recordBlankContinuation, handoff, journal,
     setFrame, validateQuest, comboPreview, flagPractice, recoverFlagPractice, nativeTrialMastered, openedWithQuest, openingQuest, questTask, questForAction,
     rewards, stagedLevel, relayGearLevel,
     get version() { return version }, settle: () => writes }

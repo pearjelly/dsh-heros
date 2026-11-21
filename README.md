@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.82.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.83.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -36,6 +36,12 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 1. Choose a verified run from the Lighthouse lesson. You can use the original direct delivery loadout or a rematch with Delivery Review. Choose **Use this loadout on my task** from the lesson or **Run history**. Saving a plan is optional.
 2. Choose one of your existing workspaces, use **Browse files** to pick your own material, and fill in **New task brief**. Choose **Review file and loadout** to check the preset, equipment sources, and prepared task, then choose **Confirm and open session**.
 3. Check the task in the DSH input box and send it yourself. With Delivery Review, answer the new session's question card to confirm delivery or request changes, then open any file actually delivered for this task.
+
+## Keep a loadout that worked on your task
+
+1. After running a personal task with a loadout from the Lighthouse lesson, choose **View task result** in that session. The result shows actual tool calls, any recorded answer, delivered files, and XP earned in this task. You can also review a matching task opened in v0.82.
+2. Choose **Open delivered file** when DSH offers it, or **View source session** to find the native attachment. A request to revise appears as a recorded choice. The result lists files once they have been delivered.
+3. Choose **Review this loadout** to check the equipment and sources used for this task. Choose **Save as a plan** and enter a name to reuse the loadout with new material.
 
 ## Try one gear change
 

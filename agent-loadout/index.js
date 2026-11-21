@@ -4007,8 +4007,13 @@ export async function apply(ctx) {
     const { windows = [], ...evidence } = observed
     const choices = comparisonChoices(evidence)
     const canReview = evidence.status === 'complete' && (evidence.materialDelivered || choices.length > 0)
+    const receiptIds = windows.map(({ endSeq }) => sessionId + ':' + endSeq)
+    const awards = (await growth.settlementAwards(sessionId, receiptIds))
+      .filter(item => item.kind)
+      .map(({ id, name, kind, xp, sourceName }) => ({ id, name, kind, xp, ...(sourceName && { sourceName }) }))
+    signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
-      receiptIds: windows.map(({ endSeq }) => sessionId + ':' + endSeq), ...(canReview && { canReview }) }
+      receiptIds, ...(awards.length && { awards }), ...(canReview && { canReview }) }
     if (review !== true || !canReview) return result
     try {
       const [checked, uploaded] = await Promise.all([verifiedLessonTaskSource(launch.source, signal), appearance.index()])

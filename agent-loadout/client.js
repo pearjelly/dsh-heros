@@ -6565,7 +6565,8 @@ window.__ModuleLoader__.load({
                 h(ItemArt, { item }), h('span', null, item.name), h('b', null, xp))
             }))),
         h('div', { className: 'moba-settlement-commands' },
-          h('button', { type: 'button', className: 'moba-settlement-button', 'aria-controls': controls, onClick: onDetails }, t('查看结算')),
+          h('button', { type: 'button', className: 'moba-settlement-button', 'aria-controls': controls, onClick: onDetails },
+            t(snapshot.lessonTaskResult ? '查看任务结果' : '查看结算')),
           quest && h('button', { type: 'button', className: 'moba-settlement-button moba-settlement-review',
             'aria-controls': controls, title: quest.title, onClick: onQuest }, t('验收委托')),
           h('button', { type: 'button', className: 'moba-settlement-hide', 'aria-label': t('隐藏结算提示'), title: t('隐藏结算提示'),
@@ -6696,7 +6697,159 @@ window.__ModuleLoader__.load({
         error && h('p', { className: 'moba-match-action-error', role: 'alert' }, error))
     }
 
-    function MatchSettlement({ sessionId, version, request, initialId, initialCursors = empty, focusGearId, quest, equipped,
+    function presentedFileHasCoordinates({ seq, index }) {
+      return Number.isSafeInteger(seq) && seq >= 0 && Number.isSafeInteger(index) && index >= 0
+    }
+
+    function LessonTaskFiles({ files, sessionId, complete, materialDelivered }) {
+      const [hostAvailable, setHostAvailable] = useState(false)
+      const [opening, setOpening] = useState('')
+      const [failed, setFailed] = useState(false)
+      const pending = useRef(null)
+      const addressable = files.some(presentedFileHasCoordinates)
+      useEffect(() => () => pending.current?.abort(), [])
+      useEffect(() => {
+        if (!addressable) return
+        const abort = new AbortController()
+        fetch('api/present.host', { signal: abort.signal })
+          .then(response => response.ok ? response.json() : undefined)
+          .then(host => { if (!abort.signal.aborted) setHostAvailable(host?.available === true) })
+          .catch(() => {})
+        return () => abort.abort()
+      }, [addressable])
+
+      async function openFile(file, key) {
+        if (pending.current || !hostAvailable || !presentedFileHasCoordinates(file)) return
+        const abort = pending.current = new AbortController()
+        setOpening(key)
+        setFailed(false)
+        const query = new URLSearchParams({ sessionId, seq: String(file.seq), index: String(file.index) })
+        try {
+          const response = await fetch('api/present.open?' + query, { method: 'POST', signal: abort.signal })
+          if (!abort.signal.aborted && !response.ok) setFailed(true)
+        } catch {
+          if (!abort.signal.aborted) setFailed(true)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setOpening('')
+        }
+      }
+
+      if (!files.length && !complete) return null
+      return h('section', { className: 'moba-proven-files moba-lesson-result-files' },
+        h('h4', null, t('已交付的文件') + ' · ' + files.length),
+        materialDelivered && h('p', { className: 'moba-match-action-note' }, t('已交付所选材料。')),
+        files.length > 0 && h('ul', null, files.map((file, index) => {
+          const key = String(index)
+          return h('li', { key },
+            h('div', null, h('strong', null, file.name),
+              file.turn && h('small', null, t('第 ') + file.turn + t(' 回合'))),
+            hostAvailable && presentedFileHasCoordinates(file) && h('button', { type: 'button', className: 'moba-text',
+              'aria-label': t('打开交付文件') + ' · ' + file.name, disabled: opening.length > 0,
+              onClick: () => openFile(file, key) }, t(opening === key ? '正在打开文件…' : '打开交付文件')))
+        })),
+        failed && h('p', { className: 'moba-match-action-error', role: 'alert' }, t('暂时无法打开这份交付文件。可在原会话查看。')))
+    }
+
+    const lessonTaskReasons = {
+      'changed-task': '发送的任务文字已改动。可到原会话查看处理过程。',
+      'changed-loadout': '任务使用的出装已变更。可到原会话查看处理过程。',
+      'changed-material': '发送任务时，所选材料已变更。',
+    }
+
+    function LessonTaskAwards({ awards }) {
+      if (!awards?.length) return null
+      return h('section', { className: 'moba-lesson-result-awards', 'aria-label': t('本次任务经验') },
+        h('h4', null, t('本次任务经验')),
+        h('ul', null, awards.map((award, index) => h('li', { key: index },
+          h('div', null, h('strong', null, award.name), award.sourceName && h('small', null, award.sourceName)),
+          h('span', null, '+' + award.xp + ' XP')))))
+    }
+
+    function LessonTaskResult({ sessionId, version, request, onSource, onUse }) {
+      const language = useLanguage()
+      const headingId = useId()
+      const [review, setReview] = useState(false)
+      const [state, setState] = useState({})
+      const [retry, setRetry] = useState(0)
+      const reviewHeading = useRef(null)
+      const reviewButton = useRef(null)
+      const returnFocus = useRef(false)
+      const action = 'lesson-task-result'
+      const pane = review ? 'review' : 'result'
+      const cached = state[pane]
+      const current = cached && cached.version === version && cached.retry === retry && cached.language === language ? cached : null
+      const result = current?.result
+      const source = result?.source
+      const sourceArm = source && comparisonKinds[source.kind]?.arms.find(item => item.id === source.arm)
+      const sourceLabel = source && [comparisonArmName(sourceArm, source), source.heroName].filter(Boolean).join(' · ')
+
+      useEffect(() => {
+        const abort = new AbortController()
+        let timer
+        function remember(value) {
+          if (!abort.signal.aborted) setState(previous => ({ ...previous, [pane]: { version, retry, language, ...value } }))
+        }
+        async function load() {
+          try {
+            const result = await request(action, { action, sessionId, ...(review && { review: true }) }, abort.signal, language)
+            if (abort.signal.aborted) return
+            remember(result ? { result } : { error: t('找不到本次任务的结果。') })
+            if (!review && (result?.status === 'running' || result?.status === 'waiting-choice')) timer = setTimeout(load, 1500)
+          } catch (reason) {
+            remember({ error: reason.message })
+          }
+        }
+        load()
+        return () => { abort.abort(); clearTimeout(timer) }
+      }, [request, sessionId, review, pane, version, retry, language])
+      useEffect(() => { if (review) reviewHeading.current?.focus() }, [review])
+      useEffect(() => {
+        if (review || !returnFocus.current || !current) return
+        returnFocus.current = false
+        const target = reviewButton.current ?? reviewHeading.current
+        target?.focus()
+      }, [review, current])
+
+      function returnToResult() {
+        returnFocus.current = true
+        setReview(false)
+      }
+
+      const issue = current?.error ?? result?.reason
+      return h('section', { className: 'moba-lesson-result', 'aria-labelledby': headingId,
+        onKeyDown: event => { if (review) closeDialogOnEscape(event, returnToResult) } },
+        h('h3', { id: headingId, ref: reviewHeading, tabIndex: -1 }, t(review ? '核对本次出装' : '本次任务结果')),
+        issue && h('p', { className: 'moba-match-action-error', role: 'alert' },
+          t(lessonTaskReasons[issue] ?? comparisonArmReasons[issue] ?? issue), current?.error && ' ',
+          current?.error && h('button', { type: 'button', className: 'moba-text', onClick: () => setRetry(value => value + 1) }, t('重试'))),
+        !current && h('p', { className: 'moba-match-action-note', role: 'status' }, t(review ? '正在核对本回合出装…' : '正在读取任务结果…')),
+        result && h(Fragment, null,
+          sourceLabel && h('p', { className: 'moba-match-action-note' }, t('练习出装') + ' · ' + sourceLabel),
+          review ? result.draft && h(Fragment, null,
+            h(PlanEquipment, { items: result.gear ?? empty, removed: result.removed ?? empty }),
+            h(SharedPlanCapabilities, { comparison: result.comparison }))
+            : h(Fragment, null,
+              h('p', { className: 'moba-match-action-note', role: 'status' }, [
+                t(result.status === 'unavailable' ? '暂不可核对' : comparisonArmStates[result.status] ?? result.status),
+                result.turn && t('第 ') + result.turn + t(' 回合'),
+              ].filter(Boolean).join(' · ')),
+              h(ObservedComparisonCalls, { entries: result.entries }),
+              h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
+                complete: result.status === 'complete', materialDelivered: result.materialDelivered }),
+              h(LessonTaskAwards, { awards: result.awards }))),
+        h('div', { className: 'moba-settlement-footer' },
+          review ? h(Fragment, null,
+            h('button', { type: 'button', className: 'moba-text', onClick: returnToResult }, t('返回任务结果')),
+            h('button', { type: 'button', className: 'moba-match-move', disabled: !result?.draft,
+              onClick: () => onUse(result, true) }, t('保存为方案')))
+            : h(Fragment, null,
+              h('button', { type: 'button', className: 'moba-text', onClick: onSource }, t('查看原会话')),
+              result?.canReview && h('button', { ref: reviewButton, type: 'button', className: 'moba-match-move',
+                onClick: () => setReview(true) }, t('核对本次出装'), h(Glyph, { kind: 'arrow', size: 16 })))))
+    }
+
+    function MatchSettlement({ sessionId, version, request, initialId, initialCursors = empty, focusGearId, quest, equipped, lessonTaskResult,
       onQuest, onReport, onOpenMatch, onOpenFlag, onPrepare, onUse, onInspect, onSignature }) {
       const [history, setHistory] = useState(null)
       const [cursors, setCursors] = useState(initialCursors)
@@ -6790,6 +6943,8 @@ window.__ModuleLoader__.load({
       const totalXp = receipt?.awards.reduce((sum, item) => sum + item.xp, 0)
       const review = quest && !receipts?.some(item => item.id === quest.id) ? quest : undefined
       return h('div', { className: 'moba-match-body moba-match-plan moba-settlement' },
+        lessonTaskResult && h(LessonTaskResult, { key: sessionId, sessionId, version, request, onSource: () => onOpenMatch(sessionId), onUse }),
+        lessonTaskResult && h('h3', { className: 'moba-session-settlement-title' }, t('会话结算记录')),
         collectionError && h('p', { className: 'moba-match-action-error', role: 'alert' }, collectionError),
         error && h('div', { className: 'moba-match-plan-error', role: 'alert' }, h('p', { className: 'moba-match-action-error' }, error),
           h('button', { type: 'button', className: 'moba-text', onClick: () => { setError(''); retry(value => value + 1) } }, t('重试'))),
@@ -7692,6 +7847,9 @@ window.__ModuleLoader__.load({
           onDetails: event => show(event, settlementAction), onQuest: event => show(event, growthAction),
           onGear: (event, focusGearId) => show(event, { ...settlementAction, focusGearId }),
           onDismiss: dismissReceipt, pending: receiptPending, error: receiptError?.id === receipt.id ? receiptError.message : undefined }),
+        !showReceipt && snapshot?.lessonTaskResult && h('div', { className: 'moba-settlement-commands moba-lesson-result-entry' },
+          h('button', { type: 'button', className: 'moba-settlement-button', 'aria-controls': id,
+            onClick: event => show(event, settlementAction) }, t('查看任务结果'))),
         !showReceipt && openingQuest && h('div', { className: 'moba-settlement-ribbon', role: 'group', 'aria-label': t('本局开局委托') },
           h(Glyph, { kind: 'report', size: 19 }),
           h('div', { className: 'moba-settlement-copy' }, h('strong', null, openingQuest.title),
@@ -7832,6 +7990,7 @@ window.__ModuleLoader__.load({
             onOpenMatch: nextId => { popover.current.hidePopover(); openContinuation(nextId) } })
           : settling ? h(MatchSettlement, { key: JSON.stringify([action.item.id, action.focusGearId]), sessionId, request, version: snapshot?.growthVersion,
             initialId: action.item.id, initialCursors: action.cursors, focusGearId: action.focusGearId, quest: questReady,
+            lessonTaskResult: snapshot?.lessonTaskResult,
             equipped: new Set(shortcuts.map(item => item.id)), onQuest: () => setAction(growthAction),
             onUse: reuseProvenLoadout,
             onReport: () => setAction({ kind: 'report', item: { name: t('对局战报') } }),
@@ -8318,6 +8477,17 @@ window.__ModuleLoader__.load({
       .moba-proven-files li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 8px;
         padding: 5px 7px; background: #171c27; border: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
       .moba-proven-files li small { color: var(--muted); }
+      .moba-lesson-result { display: grid; gap: 8px; min-width: 0; padding: 8px; border: 1px solid #705a3c; background: #201d26; }
+      .moba-lesson-result > h3 { margin: 0; color: var(--gold); font-size: 15px; overflow-wrap: anywhere; }
+      .moba-lesson-result .moba-lighthouse-results { margin: 0; }
+      .moba-lesson-result-files li > div { display: flex; flex-wrap: wrap; align-items: baseline; min-width: 0; gap: 3px 8px; }
+      .moba-lesson-result-awards h4, .moba-session-settlement-title { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
+      .moba-lesson-result-awards ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+      .moba-lesson-result-awards li { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+        padding: 5px 7px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+      .moba-lesson-result-awards small { display: block; color: var(--muted); }
+      .moba-lesson-result-awards li > span { flex: none; color: #f4cd86; font-variant-numeric: tabular-nums; }
+      .moba-lesson-result-entry { justify-content: flex-end; margin-block-end: 5px; }
       .moba-proven-gear { display: grid; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
       .moba-proven-gear label { display: grid; grid-template-columns: auto 30px minmax(0, 1fr); gap: 7px; align-items: start;
         padding: 6px; border: 1px solid var(--line); background: #161c28; overflow-wrap: anywhere; cursor: pointer; }
