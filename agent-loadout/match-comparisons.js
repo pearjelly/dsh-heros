@@ -10,6 +10,7 @@ export const comparisonIdValid = id => typeof id === 'string' && /^[a-f0-9]{32}$
 export const materialProofRecord = 'plugin:dsh-agent-loadout/comparison-material'
 
 export function validRematchReference({ kind, comparisonId, arm }) {
+  if (kind === 'personal') return arm === 'task' && comparisonIdValid(comparisonId) && comparisonId.startsWith('a076')
   return typeof kind === 'string' && Object.hasOwn(rematchBaselineArms, kind) &&
     rematchBaselineArms[kind].includes(arm) && comparisonIdValid(comparisonId)
 }
@@ -142,6 +143,7 @@ export function validRematchComparison(record) {
     /^[a-f0-9]{24}$/.test(item.identity)
   return validWorkspaceComparison(record) && pinned(baseline) && pinned(loadout) &&
     validRematchReference(baseline) && (baseline.kind !== 'rematch' || baseline.comparisonId !== record.id) &&
+    (baseline.kind !== 'personal' || baseline.sessionId === 'session-' + baseline.comparisonId) &&
     /^session-[a-f0-9]{32}$/.test(baseline.sessionId) && /^[a-f0-9]{64}$/.test(inputHash) && /^[a-f0-9]{64}$/.test(token) &&
     edit && change && (edit.addId !== undefined || edit.removeId !== undefined) &&
     (edit.removeId === undefined ? change.removed === undefined : label(change.removed) && change.removed.id === edit.removeId) &&
