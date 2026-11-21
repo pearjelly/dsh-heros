@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.81.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.82.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -30,6 +30,12 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 3. Choose **Try one gear change** and preview **Delivery Review**, shown as the **Lesson suggestion**. Open the rematch in its own DSH session and send the same task yourself. When the DSH question card appears, confirm delivery or request changes. Reopen the comparison to check the recorded choice and any delivered file.
 
 **Lighthouse Supply Run** also offers the original **Recon** and **Delivery** routes.
+
+## Use the lesson loadout on your own task
+
+1. Choose a verified run from the Lighthouse lesson. You can use the original direct delivery loadout or a rematch with Delivery Review. Choose **Use this loadout on my task** from the lesson or **Run history**. Saving a plan is optional.
+2. Choose one of your existing workspaces, use **Browse files** to pick your own material, and fill in **New task brief**. Choose **Review file and loadout** to check the preset, equipment sources, and prepared task, then choose **Confirm and open session**.
+3. Check the task in the DSH input box and send it yourself. With Delivery Review, answer the new session's question card to confirm delivery or request changes, then open any file actually delivered for this task.
 
 ## Try one gear change
 

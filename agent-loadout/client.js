@@ -1298,7 +1298,9 @@ window.__ModuleLoader__.load({
       return arm.canRematch && (kind === 'workspace' || kind === 'plans' || kind === 'rematch' && arm.id === 'rematch')
     }
 
-    function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart, onReuse, onRematch, outfit }) {
+    const lessonTaskLabel = '用这套出装做自己的任务'
+
+    function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart, onReuse, onRematch, onLessonTask, outfit }) {
       const files = arm.deliverables ?? empty
       const pendingQuestions = arm.pendingQuestions ?? empty
       return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status, 'data-comparison-arm': arm.id, tabIndex: -1,
@@ -1324,6 +1326,8 @@ window.__ModuleLoader__.load({
           h('h4', null, t('交付文件') + ' · ' + files.length),
           files.length > 0 && h('ul', null, files.map((file, index) => h('li', { key: index }, file.name)))),
         h('footer', null,
+          arm.lessonTaskSource && onLessonTask && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
+            'data-lesson-task-arm': arm.id, onClick: () => onLessonTask(arm) }, t(lessonTaskLabel)),
           arm.canRematch && onRematch && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
             'data-rematch-arm': arm.id, onClick: () => onRematch(arm) }, t('换一件再试')),
           arm.canReuse && onReuse && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
@@ -1384,7 +1388,7 @@ window.__ModuleLoader__.load({
           : h('button', { type: 'button', className: 'moba-text', onClick: () => onBrowse(path) }, name)))))
     }
 
-    function WorkspaceMaterialPicker({ workspace, workspaceLabel, request, onCancel, onSelect }) {
+    function WorkspaceMaterialPicker({ workspace, workspaceLabel, request, onCancel, onSelect, materialAction = 'workspace-materials' }) {
       const language = useLanguage()
       const [directory, setDirectory] = useState('')
       const [query, setQuery] = useState('')
@@ -1393,7 +1397,7 @@ window.__ModuleLoader__.load({
       const [attempt, retry] = useState(0)
       const searchInput = useRef(null)
       const search = query.trim()
-      const key = JSON.stringify([workspace.workspaceId, directory, search, language])
+      const key = JSON.stringify([materialAction, workspace.workspaceId, directory, search, language])
       const cursor = page?.key === key ? page.cursor : undefined
       const current = loaded?.key === key ? loaded : undefined
       const working = !current || current.cursor !== cursor || current.attempt !== attempt
@@ -1401,7 +1405,7 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         const abort = new AbortController()
-        const action = 'workspace-materials'
+        const action = materialAction
         const timer = setTimeout(async () => {
           try {
             const value = await request(action, { action, workspaceId: workspace.workspaceId,
@@ -1418,7 +1422,7 @@ window.__ModuleLoader__.load({
           }
         }, search && !cursor ? 180 : 0)
         return () => { abort.abort(); clearTimeout(timer) }
-      }, [request, workspace.workspaceId, directory, search, cursor, attempt, language, key])
+      }, [request, workspace.workspaceId, directory, search, cursor, attempt, language, key, materialAction])
 
       function browse(path, clearQuery = false) {
         setDirectory(path)
@@ -1461,7 +1465,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-roster-open', onClick: onCancel }, t('关闭'))))
     }
 
-    function WorkspaceFileFields({ workspaces, workspaceId, setWorkspaceId, material, setMaterial, busy, workspaceField, materialField, request }) {
+    function WorkspaceFileFields({ workspaces, workspaceId, setWorkspaceId, material, setMaterial, busy, workspaceField, materialField, request, materialAction }) {
       const helpId = useId()
       const [pickerFor, setPickerFor] = useState('')
       const defaultMaterialField = useRef(null)
@@ -1496,7 +1500,7 @@ window.__ModuleLoader__.load({
             disabled: busy || !workspace, onClick: () => setPickerFor(workspace.workspaceId) }, t('浏览文件'))),
         h('p', { id: helpId, className: 'moba-lighthouse-note' }, t('填入一个相对于工作区根目录的文件路径，例如 docs/brief.md。')),
         workspace && pickerFor === workspaceId && h(WorkspaceMaterialPicker, { workspace, workspaceLabel: workspaceFileLabel(workspace, workspaces),
-          request, onCancel: () => closePicker(browseButton), onSelect: selectMaterial }))
+          request, materialAction, onCancel: () => closePicker(browseButton), onSelect: selectMaterial }))
     }
 
     function workspaceMaterialIsRelative(path) {
@@ -1563,6 +1567,7 @@ window.__ModuleLoader__.load({
       const [launch, setLaunch] = useState('')
       const [reuse, setReuse] = useState(null)
       const [rematch, setRematch] = useState(null)
+      const [lessonTask, setLessonTask] = useState(null)
       const [lessonLaunchOpen, setLessonLaunchOpen] = useState(false)
       const starting = useRef(false)
       const launchIds = useRef(new Map())
@@ -1676,6 +1681,8 @@ window.__ModuleLoader__.load({
         onBack: () => { returnFocus.current = `[data-reuse-arm="${reuse.arm}"]`; setReuse(null) }, onClose, onUse })
       if (rematch) return h(RematchEditor, { kind, comparisonId: rematch.id, arm: rematch.arm, sourceSessionId: rematch.sessionId, request,
         lesson, onBack: () => { returnFocus.current = `[data-rematch-arm="${rematch.arm}"]`; setRematch(null) }, onVisit, onClose })
+      if (lessonTask) return h(LessonLoadoutTask, { source: lessonTask.lessonTaskSource, workspaces, initialWorkspaceId, request, onVisit,
+        onBack: () => { returnFocus.current = `[data-lesson-task-arm="${lessonTask.id}"]`; setLessonTask(null) } })
       if (lessonLaunchOpen) return h(LighthouseLessonLaunch, { request, onOpen: onVisit, onCancel: () => {
         returnFocus.current = '.moba-new-lesson'
         setLessonLaunchOpen(false)
@@ -1714,6 +1721,7 @@ window.__ModuleLoader__.load({
             h(ComparisonArm, { key: arm.id, arm, config: config.arms.find(item => item.id === arm.id), task: materialWarning ? undefined : task, sessionId,
               busy: Boolean(launch), canStart: !materialWarning && (!setup || Boolean(workspaces.length)), onStart: directLesson || kind === 'rematch' ? undefined : start, onVisit, putTask,
               onReuse: onUse && value.id ? arm => setReuse({ id: value.id, arm }) : undefined,
+              onLessonTask: lesson ? setLessonTask : undefined,
               onRematch: canRematchComparisonArm(kind, arm) && value.id && !(lesson && materialWarning)
                 ? arm => setRematch({ id: value.id, arm: arm.id, sessionId: arm.sessionId }) : undefined,
               onNotice: outcome => setNotice(t(comparisonDraftNotices[outcome] ?? comparisonDraftNotices.blocked)) }))),
@@ -1731,7 +1739,7 @@ window.__ModuleLoader__.load({
             onClick: onClose }, t('关闭同题对照'))))
     }
 
-    function ComparisonHistoryEntry({ item, onOpen, onSource, onReuse, onRematch, onPrevious, storeFocus }) {
+    function ComparisonHistoryEntry({ item, onOpen, onSource, onReuse, onRematch, onLessonTask, onPrevious, storeFocus }) {
       const config = comparisonKinds[item.kind]
       const title = item.lesson === lighthouseRematchLesson ? t(comparisonTitle(item.kind, item.lesson))
         : item.kind === 'lighthouse' ? t('灯塔补给行动') : !item.title || item.title === config.title ? t(config.title) : item.title
@@ -1760,6 +1768,9 @@ window.__ModuleLoader__.load({
             arm.choices?.length > 0 && h('p', null, t('你实际选择了 ') + arm.choices.join(' / ')),
             files.length > 0 && h('p', null, t('交付文件') + ' · ' + files.map(file => file.name).join(' / ')),
             h('div', { className: 'moba-history-actions' },
+              arm.lessonTaskSource && h('button', {
+                type: 'button', className: 'moba-text', ref: node => storeFocus('lesson-task:' + arm.id, node),
+                onClick: () => onLessonTask(item, arm), 'aria-label': t(lessonTaskLabel) + ' · ' + label }, t(lessonTaskLabel)),
               arm.sessionId && h('button', { type: 'button', className: 'moba-text', onClick: () => onSource(arm.sessionId),
                 'aria-label': t('查看原会话') + ' · ' + label }, t('查看原会话')),
               canRematchComparisonArm(item.kind, arm) && h('button', {
@@ -1823,12 +1834,17 @@ window.__ModuleLoader__.load({
         setSelection({ id: item.id, kind: item.kind, arm: arm.id, sessionId: arm.sessionId, rematch: true, lesson: item.lesson })
       }
 
+      function selectLessonTask(item, arm) {
+        setSelection({ id: item.id, kind: item.kind, arm: arm.id, lessonTaskSource: arm.lessonTaskSource })
+      }
+
       function selectPrevious(item) {
         setSelection({ id: item.id, kind: item.kind, previous: item.previous, lesson: item.lesson })
       }
 
       function back() {
-        const action = selection.rematch ? 'rematch:' + selection.arm : selection.previous ? 'previous' : selection.arm ?? 'board'
+        const action = selection.lessonTaskSource ? 'lesson-task:' + selection.arm
+          : selection.rematch ? 'rematch:' + selection.arm : selection.previous ? 'previous' : selection.arm ?? 'board'
         const target = [selection.kind, selection.id, action].join(':')
         setSelection(null)
         requestAnimationFrame(() => focus.current.get(target)?.focus())
@@ -1836,6 +1852,8 @@ window.__ModuleLoader__.load({
 
       if (selection?.rematch) return h(RematchEditor, { kind: selection.kind, comparisonId: selection.id, arm: selection.arm,
         sourceSessionId: selection.sessionId, request, lesson: selection.lesson === lighthouseRematchLesson, onBack: back, onClose, onVisit })
+      if (selection?.lessonTaskSource) return h(LessonLoadoutTask, { source: selection.lessonTaskSource, workspaces,
+        initialWorkspaceId, request, onBack: back, onVisit })
       if (selection?.arm) return h(ComparisonLoadoutReview, { kind: selection.kind, comparisonId: selection.id,
         arm: selection.arm, request, onBack: back, onClose, onUse })
       if (selection) return h(RunComparison, { kind: selection.kind, comparisonId: selection.id, request,
@@ -1856,7 +1874,7 @@ window.__ModuleLoader__.load({
             filters.outcome.map(([id, name]) => h('option', { key: id, value: id }, t(name)))))),
         current?.items.length > 0 && h('ul', { className: 'moba-history-list' }, current.items.map(item =>
           h(ComparisonHistoryEntry, { key: item.kind + ':' + item.id, item, onOpen: select, onReuse: select, onRematch: selectRematch,
-            onPrevious: selectPrevious,
+            onPrevious: selectPrevious, onLessonTask: selectLessonTask,
             onSource, storeFocus: (arm, node) => {
               const id = [item.kind, item.id, arm].join(':')
               if (node) focus.current.set(id, node)
@@ -2182,7 +2200,7 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { className: 'moba-lighthouse-anchor moba-plan-task-draft' },
-        h('div', null, h('strong', null, t('出装方案新任务')), h('span', null, plan.planName),
+          h('div', null, h('strong', null, t(plan.source ? '练习出装新任务' : '出装方案新任务')), h('span', null, plan.planName),
           plan.material && h('span', null, plan.material)),
         h('div', null,
           h('button', { type: 'button', className: 'moba-settlement-button',
@@ -3777,7 +3795,39 @@ window.__ModuleLoader__.load({
             adapted ? t('采用换装草稿') : t('采用分享出装'), h(Glyph, { kind: 'arrow', size: 17 }))))
     }
 
-    function SavedPlanTask({ plan, workspaces, initialWorkspaceId, request, onBack, onOpened, onOpeningChange }) {
+    function LessonLoadoutTask({ source, workspaces, initialWorkspaceId, request, onBack, onVisit }) {
+      const language = useLanguage()
+      const [loaded, setLoaded] = useState(null)
+      const [attempt, retry] = useState(0)
+      const [opening, setOpening] = useState(false)
+      const { kind, comparisonId, arm } = source
+      const current = loaded?.attempt === attempt ? loaded : null
+      const options = current?.value
+      const allowed = options ? workspaces.filter(item => options.workspaceIds.includes(item.workspaceId)) : empty
+
+      useEffect(() => {
+        const action = 'lesson-task-options'
+        const abort = new AbortController()
+        request(action, { action, kind, comparisonId, arm }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setLoaded({ value, attempt }) })
+          .catch(reason => { if (!abort.signal.aborted) setLoaded({ error: reason.message, attempt }) })
+        return () => abort.abort()
+      }, [request, kind, comparisonId, arm, attempt, language])
+
+      return h(InstallDialog, { title: t(lessonTaskLabel), className: 'moba-lighthouse-comparison', busy: opening,
+        onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
+        options ? h(LoadoutTaskForm, { lessonSource: options.source, workspaces: allowed, initialWorkspaceId, request,
+          onBack, onOpened: ({ sessionId, task }) => onVisit(sessionId, task), onOpeningChange: setOpening })
+          : h(Fragment, null, current?.error
+            ? h('p', { className: 'moba-alert', role: 'alert' }, current.error)
+            : h('p', { className: 'moba-empty', role: 'status' }, t('正在核对练习出装…')),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t('返回记录')),
+            current?.error && h('button', { className: 'moba-roster-open', type: 'button',
+              onClick: () => retry(value => value + 1) }, t('重试')))))
+    }
+
+    function LoadoutTaskForm({ plan, lessonSource, workspaces, initialWorkspaceId, request, onBack, onOpened, onOpeningChange }) {
       const language = useLanguage()
       const [version, setVersion] = useState(plan)
       const [chosenWorkspaceId, setWorkspace] = useState(initialWorkspaceId ?? '')
@@ -3795,6 +3845,10 @@ window.__ModuleLoader__.load({
       const reviewHeading = useRef(null)
       const workspace = workspaces.find(item => item.workspaceId === chosenWorkspaceId)
       const preview = reviewed?.value
+      const origin = preview?.source ?? lessonSource
+      const originArm = origin && comparisonKinds[origin.kind]?.arms.find(item => item.id === origin.arm)
+      const sourceLabel = origin && [comparisonArmName(originArm, origin), origin.heroName].filter(Boolean).join(' · ')
+      const actionPrefix = lessonSource ? 'lesson-task' : 'plan-task'
 
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => {
@@ -3815,16 +3869,18 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           let selected = version
-          if (refresh) {
+          if (refresh && !lessonSource) {
             const latest = await request('list', null, abort.signal, language)
             if (abort.signal.aborted) return
             selected = latest.plans.find(item => item.id === plan.id)
             if (!selected) throw new Error(t('这份出装方案已不可用。'))
             setVersion(selected)
           }
-          const input = { id: selected.id, revision: selected.revision, workspaceId: workspace.workspaceId,
+          const selector = lessonSource ? { kind: lessonSource.kind, comparisonId: lessonSource.comparisonId, arm: lessonSource.arm }
+            : { id: selected.id, revision: selected.revision }
+          const input = { ...selector, workspaceId: workspace.workspaceId,
             material: material.trim(), task: brief.trim() }
-          const action = 'plan-task-preview'
+          const action = actionPrefix + '-preview'
           const value = await request(action, { action, ...input }, abort.signal, language)
           if (!abort.signal.aborted) {
             setReviewed({ value, input, language })
@@ -3860,7 +3916,7 @@ window.__ModuleLoader__.load({
         setWorking('open')
         setError('')
         onOpeningChange(true)
-        const action = 'plan-task-open'
+        const action = actionPrefix + '-open'
         let result
         try {
           result = await request(action, { action, ...input, token: preview.token, launchId: launch.current.id }, abort.signal, reviewLanguage)
@@ -3885,26 +3941,32 @@ window.__ModuleLoader__.load({
 
       return !preview ? h('form', { className: 'moba-plan-form moba-plan-task', onSubmit: submit },
         h('div', { className: 'moba-plan-fields' },
-          h('p', { className: 'moba-plan-note' }, version.name),
+          origin ? h(Fragment, null, h(InstallFacts, { facts: [[t('练习出装'), sourceLabel]] }),
+            h(RematchChangeFacts, { change: origin.change })) : h('p', { className: 'moba-plan-note' }, version.name),
+          lessonSource && !workspaces.length &&
+            h('p', { className: 'moba-plan-note', role: 'status' }, t('请先在 DeepSeek Harness 中添加自己的工作区。')),
           h(WorkspaceFileFields, { workspaces, workspaceId: workspace?.workspaceId ?? '', setWorkspaceId: setWorkspace,
-            material, setMaterial, workspaceField, materialField, request, busy: Boolean(working) }),
+            material, setMaterial, workspaceField, materialField, request, busy: Boolean(working),
+            materialAction: lessonSource ? 'lesson-task-materials' : undefined }),
           h('label', null, t('新任务说明'),
             h('textarea', { ref: briefField, required: true, disabled: Boolean(working), value: brief, rows: 4, maxLength: 1200,
               onChange: event => { event.target.setCustomValidity(''); setBrief(event.target.value) } })), messages),
         h('footer', { className: 'moba-gallery-footer' },
-          h('button', { className: 'moba-roster-open', type: 'button', onClick: onBack }, t('返回方案库')),
+          h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack },
+            t(lessonSource ? '返回记录' : '返回方案库')),
           h('button', { className: 'moba-start', type: 'submit', disabled: Boolean(working) || !workspace },
             t('核对材料和出装'), h(Glyph, { kind: 'arrow', size: 16 }))))
         : h('section', { className: 'moba-plan-form moba-plan-task', onKeyDown: event => closeDialogOnEscape(event, editTask) },
           h('div', { className: 'moba-plan-fields' },
             h('h3', { ref: reviewHeading, tabIndex: -1 }, t('核对材料和出装')),
             h(InstallFacts, { facts: [
-              [t('出装方案'), preview.planName ?? version.name],
+              [t(origin ? '练习出装' : '出装方案'), sourceLabel ?? preview.planName ?? version?.name],
               [t('工作区'), workspace ? workspaceFileLabel(workspace, workspaces) : preview.workspaceTitle],
               [t('材料文件相对路径'), preview.material],
             ] }),
+            origin && h(RematchChangeFacts, { change: origin.change }),
             (preview.gear?.length || preview.token) && h(PlanEquipment, {
-              items: preview.gear ?? plan.items, removed: preview.removed ?? plan.removed }),
+              items: preview.gear ?? plan?.items ?? empty, removed: preview.removed ?? plan?.removed }),
             h(SharedPlanCapabilities, { comparison: preview.comparison }),
             preview.task && h('label', null, t('即将填入会话的任务'), h('textarea', { readOnly: true, rows: 5, value: preview.task })),
             h('p', { className: 'moba-plan-note' }, t('确认后打开新会话。检查输入栏的任务，再手动发送。')),
@@ -4206,7 +4268,7 @@ window.__ModuleLoader__.load({
             h(Glyph, { kind: 'close' }))),
         pairPlan ? h(SavedPlanComparison, { plan: pairPlan, plans, workspaces, initialWorkspaceId: workspaceId, request,
           onBack: closePair, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
-          : taskPlan ? h(SavedPlanTask, { plan: taskPlan, workspaces, initialWorkspaceId: workspaceId, request,
+          : taskPlan ? h(LoadoutTaskForm, { plan: taskPlan, workspaces, initialWorkspaceId: workspaceId, request,
             onBack: closeTask, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
           : sharing?.mode === 'export' ? h(ExportPlanShare, { plan: sharing.plan, request, onBack: closeSharing })
           : sharing?.mode === 'import' ? h(ImportPlanShare, { request, hasOpening, onBack: closeSharing,

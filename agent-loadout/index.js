@@ -461,6 +461,7 @@ export async function apply(ctx) {
   const comparisonStores = { lighthouse: lighthouseComparisons, workspace: workspaceComparisons, plans: planComparisons, rematch: rematchComparisons }
   const materialComparisonStores = [workspaceComparisons, planComparisons, rematchComparisons]
   const workspaceMaterials = workspaceMaterialPicker(() => ctx.get('workspaceRegistry'))
+  const personalTaskMaterials = workspaceMaterialPicker(() => ctx.get('workspaceRegistry'), personalTaskPathFilter)
   // Native session history is shared by profiles under the same DSH home.
   const receipts = matchReceipts(join(ctx.profileContext.home, 'agent-loadout', 'match-actions'))
   const pins = matchShortcutStore(join(directory, 'shortcuts'), saveEntry, key => {
@@ -1143,8 +1144,7 @@ export async function apply(ctx) {
     }
   }
 
-  async function previewPlanTask(selection, english, signal) {
-    const checked = await checkPlanTask(requestedPlanTask(selection, english), signal)
+  async function previewReviewedTask(checked, signal) {
     const { view, reason, draft, candidate, ecosystem, token } = checked
     if (!token) return { ...view, reason }
     try {
@@ -1176,16 +1176,18 @@ export async function apply(ctx) {
     }
   }
 
-  async function openPlanTask(selection, english, signal) {
+  async function openReviewedTask(selection, english, signal, lesson = false) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     const { launchId, token } = selection
     if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
       throw new Error('请先核对新任务的材料和出装。')
     }
-    const input = requestedPlanTask(selection, english)
+    const input = lesson ? requestedLessonTask(selection, english) : requestedPlanTask(selection, english)
     const controller = ctx.get('sessionController')
     const registry = ctx.get('workspaceRegistry')
-    if (!controller?.create || !ctx.get('sessionQuery') || !registry) throw new Error('当前 DSH 无法从出装方案开启新任务。')
+    if (!controller?.create || !ctx.get('sessionQuery') || !registry) {
+      throw new Error(lesson ? '当前 DSH 无法使用练习出装开启任务。' : '当前 DSH 无法从出装方案开启新任务。')
+    }
     const sessionId = planTaskSessionPrefix + createHash('sha256').update(JSON.stringify([planTaskOwner, launchId, token, input.hash])).digest('hex').slice(0, 28)
     if (openingMatches.has(sessionId)) return openingMatches.get(sessionId)
     const reply = { sessionId, task: input.task, workspaceId: input.workspaceId }
@@ -1193,11 +1195,16 @@ export async function apply(ctx) {
     const open = async () => {
       const existing = await planTaskSession(sessionId, signal)
       if (existing?.launch?.token === token && existing.launch.request === input.hash) return reply
-      const checked = await checkPlanTask(input, signal)
+      const checked = await (lesson ? checkLessonTask(input, signal) : checkPlanTask(input, signal))
       if (checked.token !== token) throw new Error('材料、任务或出装已变化，请重新核对。')
       const { presetId, verifyLive: verify } = await prepare(checked.draft, checked.candidate)
+      if (lesson) {
+        const target = await readPersonalTaskMaterial(input.workspaceId, input.material, signal)
+        if (target.digest !== checked.digest || target.workspace.path !== checked.cwd) {
+          throw new Error('材料、任务或出装已变化，请重新核对。')
+        }
+      } else buildPlans.read(input.id, input.revision)
       const workspace = registry.get(input.workspaceId)
-      buildPlans.read(input.id, input.revision)
       if (workspace?.path !== checked.cwd) throw new Error('请选择一个现有的工作区。')
       signal?.throwIfAborted()
       if (closed) throw new Error('配装服务正在关闭，请重试。')
@@ -1218,8 +1225,9 @@ export async function apply(ctx) {
         agent = result.agent
       }
       if (verify) verifyLive({ presetId, sessionId })
-      const { planName, material, task } = checked.view
-      appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task })
+      const { planName, material, task, source } = checked.view
+      appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
+        ...(source && { source }) })
       updates.notify(sessionId)
       return reply
     }
@@ -3480,8 +3488,8 @@ export async function apply(ctx) {
     return plan ? { planName: plan.planName, heroName: plan.heroName } : {}
   }
 
-  function comparisonLoadoutIdentity(draft, candidate, ecosystem, identity = loadoutIdentity(draft, candidate, ecosystem)) {
-    const capabilities = summarizeCapabilities(ecosystem, draft.presetId, candidate)
+  function comparisonLoadoutIdentity(draft, candidate, ecosystem, identity = loadoutIdentity(draft, candidate, ecosystem),
+    capabilities = summarizeCapabilities(ecosystem, draft.presetId, candidate)) {
     const sources = [...capabilities.keys()].sort().map(id => {
       const { sourceId, timing } = capabilities.get(id)
       return [id, sourceId ?? null, timing ?? null]
@@ -3492,6 +3500,25 @@ export async function apply(ctx) {
   async function verifiedPlanComparisonArm(saved, ecosystem) {
     const { draft, candidate, identity } = await verifySavedPlan(saved, ecosystem)
     return { draft, candidate, identity: comparisonLoadoutIdentity(draft, candidate, ecosystem, identity) }
+  }
+
+  function matchesLessonIdentity(pinned, identity, draft, candidate, ecosystem) {
+    if (pinned === identity) return true
+    if (draft.presetId !== 'standard') return false
+    // Some 0.2.1 hosts first discover the built-in subagent tool after a plain Standard session opens.
+    // Compare the original configuration and every other capability against the historical hash.
+    const delegation = ecosystem.unitsByPreset.get(draft.presetId)?.find(unit => unit.row.id === 'delegation' &&
+      unit.modules.includes('@deepseek-ai/dsh-tool-subagent'))
+    if (!delegation) return false
+    const capabilities = summarizeCapabilities(ecosystem, draft.presetId, candidate)
+    const standing = ecosystem.standingByPreset.get(draft.presetId)
+    const bindings = equippedToolBindings(candidate.record)
+    const observed = [...capabilities.values()].filter(item => item.kind === 'tool' && item.name === 'subagent' &&
+      item.timing === 'startup' && item.sourceId === delegation.id && !standing?.has(item.id) &&
+      !bindings.some(binding => binding.id === item.id))
+    if (observed.length !== 1) return false
+    capabilities.delete(observed[0].id)
+    return pinned === comparisonLoadoutIdentity(draft, candidate, ecosystem, undefined, capabilities)
   }
 
   async function checkPlanComparison(input, signal) {
@@ -3578,27 +3605,75 @@ export async function apply(ctx) {
     const heroId = pinned?.heroId ?? records.get(saved.presetId)?.baseId ?? saved.presetId
     const ecosystem = await discover()
     const { draft, candidate, identity } = await verifiedPlanComparisonArm({ presetId: saved.presetId, heroId }, ecosystem)
-    if (!identity || (pinned && (identity !== pinned.identity || pinned.presetId !== saved.presetId))) {
+    if (!identity || (pinned && (pinned.presetId !== saved.presetId ||
+      !matchesLessonIdentity(pinned.identity, identity, draft, candidate, ecosystem)))) {
       throw new Error('本机配置已变化，无法核对这局的原出装。')
     }
     const heroName = pinned?.heroName ?? matchHero(heroId, records.get(saved.presetId)).name
-    const proof = { kind, comparisonId: record.id, arm, sessionId: observed.sessionId, presetId: saved.presetId, identity }
+    const proof = { kind, comparisonId: record.id, arm, sessionId: observed.sessionId,
+      presetId: saved.presetId, identity: pinned?.identity ?? identity }
     const view = { kind, comparisonId: record.id, arm, sessionId: observed.sessionId, heroName,
       ...(record.change && { change: record.change }) }
     signal?.throwIfAborted()
     return { draft, candidate, ecosystem, proof, view }
   }
 
+  async function personalTaskPathFilter() {
+    const profileDirectory = await realpath(directory)
+    return path => !lighthousePracticeContains(profileDirectory, path)
+  }
+
   async function lessonTaskOptions(selection, signal) {
     const { view } = await verifiedLessonTaskSource(selection, signal)
-    const profileDirectory = await realpath(directory)
+    const includesPath = await personalTaskPathFilter()
     const workspaces = ctx.get('workspaceRegistry')?.list() ?? []
     const allowed = await Promise.all(workspaces.map(async workspace => {
       const path = await realpath(workspace.path).catch(() => undefined)
-      return path && path === workspace.path && !lighthousePracticeContains(profileDirectory, path) ? workspace.id : undefined
+      return path && path === workspace.path && includesPath(path) ? workspace.id : undefined
     }))
     signal?.throwIfAborted()
     return { source: view, workspaceIds: allowed.filter(Boolean) }
+  }
+
+  function requestedLessonTask(selection, english) {
+    const { kind, comparisonId, arm, workspaceId } = selection
+    const source = { kind, comparisonId, arm }
+    if (!validRematchReference(source)) throw new Error('请从已经核验的灯塔练习开始。')
+    if (typeof workspaceId !== 'string' || !workspaceId || workspaceId.length > 512) throw new Error('请选择一个现有的工作区。')
+    const fields = { source, workspaceId, ...planTaskPrompt(selection, english) }
+    const hash = createHash('sha256').update(JSON.stringify(fields)).digest('hex')
+    return { ...fields, hash, english }
+  }
+
+  async function readPersonalTaskMaterial(workspaceId, material, signal) {
+    const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
+    if (!workspace) throw new Error('请选择一个现有的工作区。')
+    const cwd = workspace.path
+    const includesPath = await personalTaskPathFilter()
+    const path = join(cwd, material)
+    const original = await realpath(path).catch(() => undefined)
+    if (!includesPath(cwd) || (original && !includesPath(original))) {
+      throw new Error('请选择自己的工作区和材料。练习文件保留在独立工作区。')
+    }
+    if (await realpath(cwd).catch(() => undefined) !== cwd || original !== path) {
+      throw new Error('无法读取所选材料，请核对工作区内的文件路径。')
+    }
+    const { workspace: current, digest } = await readWorkspaceMaterial(workspaceId, material, signal)
+    const resolved = await realpath(path).catch(() => undefined)
+    if (resolved !== path || current.path !== cwd) throw new Error('材料、任务或出装已变化，请重新核对。')
+    return { workspace: current, digest }
+  }
+
+  async function checkLessonTask(input, signal) {
+    const { workspaceId, material, task, hash, english } = input
+    const { draft, candidate, ecosystem, proof, view: source } = await verifiedLessonTaskSource(input.source, signal)
+    const { workspace, digest } = await readPersonalTaskMaterial(workspaceId, material, signal)
+    const cwd = workspace.path
+    const planName = english ? englishText('灯塔换装练习') : '灯塔换装练习'
+    const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task, source }
+    const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, proof])).digest('hex')
+    signal?.throwIfAborted()
+    return { view, cwd, digest, draft, candidate, ecosystem, token }
   }
 
   async function checkedRematchBaseline(selection, signal) {
@@ -3778,7 +3853,10 @@ export async function apply(ctx) {
       const canReuse = (!lessonBaseline || result.materialDelivered === true) && reusableComparisonArm(arm, result)
       const canRematch = canReuse && materialComparisonStores.includes(comparisons) &&
         (!comparison.baseline || Boolean(previousComparison(comparison)))
-      return { id: arm, ...labels, sessionId, ...result, canReuse, ...(canRematch && { canRematch }) }
+      const lessonTaskSource = canReuse && saved?.opened && comparison.lesson === lighthouseLesson
+        ? { kind: lessonBaseline ? 'workspace' : 'rematch', comparisonId: comparison.id, arm } : undefined
+      return { id: arm, ...labels, sessionId, ...result, canReuse, ...(canRematch && { canRematch }),
+        ...(lessonTaskSource && { lessonTaskSource }) }
     } catch {
       signal?.throwIfAborted()
       return { id: arm, ...labels, ...(saved?.opened && { sessionId }), status: 'unavailable', reason: 'session-unavailable' }
@@ -3879,10 +3957,10 @@ export async function apply(ctx) {
       const cards = await Promise.all(group.map(async ({ store, record, ...item }) => {
         const { arms: observed, previous } = await readComparisonArms(store, record, signal)
         const arms = observed.map(arm => {
-          const { id, status, sessionId, turn, deliverables, reason, continuationReason, canReuse, canRematch, planName, heroName } = arm
+          const { id, status, sessionId, turn, deliverables, reason, continuationReason, canReuse, canRematch, planName, heroName, lessonTaskSource } = arm
           const choices = comparisonChoices(arm)
           return { id, status, sessionId, turn, deliverables, choices, reason, continuationReason, planName, heroName, canReuse: Boolean(canReuse),
-            ...(canRematch && { canRematch }), pending: Boolean(arm.pendingQuestions?.length) }
+            ...(canRematch && { canRematch }), ...(lessonTaskSource && { lessonTaskSource }), pending: Boolean(arm.pendingQuestions?.length) }
         })
         return { ...item, arms, ...(previous && { previous }) }
       }))
@@ -4990,8 +5068,8 @@ export async function apply(ctx) {
         value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }) }
       }
       if (savedTask?.launch && !savedTask.started) {
-        const { planName, material, task } = savedTask.launch
-        value.planTask = { planName, material, task }
+        const { planName, material, task, source } = savedTask.launch
+        value.planTask = { planName, material, task, ...(source && { source }) }
       }
       return Response.json({ ok: true, value: englishRequest(request) ? localizeDisplay(value) : value },
         { headers: { 'Cache-Control': 'no-store' } })
@@ -5221,10 +5299,16 @@ export async function apply(ctx) {
           updates.notify()
         } else if (selection?.action === 'workspace-materials') {
           value = await workspaceMaterials(selection, request.signal)
+        } else if (selection?.action === 'lesson-task-materials') {
+          value = await personalTaskMaterials(selection, request.signal)
         } else if (selection?.action === 'plan-task-preview') {
-          value = await previewPlanTask(selection, english, request.signal)
+          value = await previewReviewedTask(await checkPlanTask(requestedPlanTask(selection, english), request.signal), request.signal)
         } else if (selection?.action === 'plan-task-open') {
-          value = await openPlanTask(selection, english, request.signal)
+          value = await openReviewedTask(selection, english, request.signal)
+        } else if (selection?.action === 'lesson-task-preview') {
+          value = await previewReviewedTask(await checkLessonTask(requestedLessonTask(selection, english), request.signal), request.signal)
+        } else if (selection?.action === 'lesson-task-open') {
+          value = await openReviewedTask(selection, english, request.signal, true)
         } else if (selection?.action === 'plan-share-export') {
           value = await exportBuildShare(selection)
         } else if (selection?.action === 'plan-share-preview') {

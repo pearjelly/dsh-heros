@@ -12,9 +12,10 @@ const browseOrder = (left, right) => nameOrder(left.kind, right.kind) || nameOrd
 const searchOrder = (left, right) => nameOrder(right.kind, left.kind) || nameOrder(left.name, right.name)
 const normalizeSearch = value => value.normalize('NFKC').toLowerCase().trim().replace(/\s+/gu, ' ')
 
-async function directoryEntries(root, directory, signal) {
+async function directoryEntries(root, directory, signal, includesPath) {
   const folder = join(root, directory)
   signal?.throwIfAborted()
+  if (includesPath && !includesPath(folder)) throw new Error('Directory is outside this file picker')
   // A discovered directory can be replaced by a link before the next page.
   if (await realpath(folder) !== folder) throw new Error('Cannot browse a noncanonical directory')
   const children = await readdir(folder, { withFileTypes: true })
@@ -23,7 +24,8 @@ async function directoryEntries(root, directory, signal) {
   return children.flatMap(entry => {
     const kind = entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : undefined
     const path = directory ? directory + '/' + entry.name : entry.name
-    return kind && workspaceMaterialPath(path) === path ? [{ name: entry.name, path, kind }] : []
+    return kind && workspaceMaterialPath(path) === path && (!includesPath || includesPath(join(folder, entry.name)))
+      ? [{ name: entry.name, path, kind }] : []
   })
 }
 
@@ -33,14 +35,14 @@ function indexAfter(entries, bookmark, order) {
   return index < 0 ? entries.length : index
 }
 
-async function browse(root, directory, bookmark, signal) {
-  const children = (await directoryEntries(root, directory, signal)).sort(browseOrder)
+async function browse(root, directory, bookmark, signal, includesPath) {
+  const children = (await directoryEntries(root, directory, signal, includesPath)).sort(browseOrder)
   const offset = indexAfter(children, bookmark, browseOrder)
   const entries = children.slice(offset, offset + pageSize)
   return { entries, bookmark: offset + entries.length < children.length ? entries.at(-1) : undefined }
 }
 
-async function search(root, directory, query, bookmark, signal) {
+async function search(root, directory, query, bookmark, signal, includesPath) {
   const words = query.split(' ')
   const frames = bookmark?.map(frame => ({ ...frame })) ?? [{ directory }]
   const entries = []
@@ -50,7 +52,7 @@ async function search(root, directory, query, bookmark, signal) {
     signal?.throwIfAborted()
     if (!frame.children) {
       try {
-        frame.children = (await directoryEntries(root, frame.directory, signal)).sort(searchOrder)
+        frame.children = (await directoryEntries(root, frame.directory, signal, includesPath)).sort(searchOrder)
         frame.index = indexAfter(frame.children, frame.after, searchOrder)
       } catch (error) {
         signal?.throwIfAborted()
@@ -81,7 +83,7 @@ async function search(root, directory, query, bookmark, signal) {
   return { entries, bookmark: frames.length ? frames.map(({ directory, after }) => ({ directory, after })) : undefined }
 }
 
-export function workspaceMaterialPicker(registry) {
+export function workspaceMaterialPicker(registry, pathFilter) {
   const cursors = new Map()
 
   function keepCursor(binding, bookmark) {
@@ -112,8 +114,9 @@ export function workspaceMaterialPicker(registry) {
     try {
       // The registry stores the real workspace path. Refuse a later replacement of that root by a link.
       if (await realpath(workspace.path) !== workspace.path) throw new Error('Workspace root changed')
-      const result = query ? await search(workspace.path, directory, query, bookmark, signal)
-        : await browse(workspace.path, directory, bookmark, signal)
+      const includesPath = pathFilter && await pathFilter()
+      const result = query ? await search(workspace.path, directory, query, bookmark, signal, includesPath)
+        : await browse(workspace.path, directory, bookmark, signal, includesPath)
       const next = result.bookmark && keepCursor(binding, result.bookmark)
       return { directory, entries: result.entries, searching: Boolean(query), ...(next && { next }) }
     } catch {

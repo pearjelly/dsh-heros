@@ -134,6 +134,7 @@ export async function apply(ctx) {
       const lastUser = users.at(-1)
       const latestText = lastUser?.content[0]?.text
       const comparisonMaterial = latestText?.match(/^(?:【工作区同题对照】|\[Workspace comparison\])\n(?:选定材料 |Selected material: )"(02-lighthouse\.md|materials\/workspace-fixture\.md)"\n/u)?.[1]
+      const taskMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(materials\/reuse-fixture\.md|案件 材料\/交接 记录\.md)"\n/u)?.[1]
       const results = messages.slice(messages.lastIndexOf(lastUser) + 1).filter(message => message.role === 'tool')
       let name
       let args
@@ -171,10 +172,8 @@ export async function apply(ctx) {
         name = sequence[results.length]
         args = name === 'glob' ? { pattern: '[0-9][0-9]-*.md' }
           : { files: [{ path: '02-lighthouse.md', description: 'Lighthouse supply card' }] }
-      } else if (comparisonMaterial || latestText === 'Hand off the workspace file handoff.md in this conversation.' ||
-        ((latestText?.startsWith('【出装任务】') || latestText?.startsWith('[Loadout task]')) &&
-          latestText.includes('materials/reuse-fixture.md'))) {
-        const intended = comparisonMaterial ?? (latestText.startsWith('Hand off') ? 'handoff.md' : 'materials/reuse-fixture.md')
+      } else if (comparisonMaterial || taskMaterial || latestText === 'Hand off the workspace file handoff.md in this conversation.') {
+        const intended = comparisonMaterial ?? taskMaterial ?? 'handoff.md'
         const file = intended === '02-lighthouse.md' && process.env.DSH_LOADOUT_TEST_WRONG_LIGHTHOUSE_CARD === '1'
           ? 'alternate/02-lighthouse.md' : intended
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)

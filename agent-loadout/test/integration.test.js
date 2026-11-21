@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -1607,6 +1607,191 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal(rejected.materialDelivered, false)
     assert.ok(!rejected.canRematch)
     await invoke('rematch-comparison-options', { ...root, comparisonId: wrong.id }, 422)
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('verified Lighthouse lesson gear carries into a new native task on personal material', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-lesson-task-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const personal = join(directory, 'personal-workspace')
+  const folder = '案件 材料'
+  const file = '交接 记录.md'
+  const material = folder + '/' + file
+  const body = '# Personal handoff record\n\nConfirm the attachment locally.\n'
+  const task = '核对项目交接人和接收日期。确认之后，把这份交接记录附到对话。'
+  let host
+  try {
+    await mkdir(join(personal, folder), { recursive: true })
+    await writeFile(join(personal, material), body)
+    await symlink(join(personal, material), join(personal, 'linked.md'))
+    await symlink(join(personal, folder), join(personal, 'linked-folder'))
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, fields, status) => (await host.request(endpoint, { action, ...fields }, status)).value
+    const workspace = '/api/loadout-fixture-session'
+    const register = workspacePath => host.request(workspace, { presetId: 'standard', workspacePath })
+    const history = id => host.request('/api/loadout-fixture-history?sessionId=' + id)
+    const members = async id => (await host.request(workspace, { inspectWorkspaceId: id })).sessionIds
+    const plans = async () => (await host.request(endpoint)).value.plans
+    const send = ({ sessionId, task, requestId }) => host.request(turnEndpoint, { sessionId, text: task, requestId })
+    const armOf = (view, arm) => view.arms.find(item => item.id === arm)
+    const direct = await invoke('lighthouse-rematch-open', { launchId: 'a'.repeat(32) })
+    const root = { kind: 'workspace', comparisonId: direct.id, arm: 'direct' }
+    const directView = () => invoke('workspace-comparison', { comparisonId: direct.id })
+    const options = (reference, status) => invoke('lesson-task-options', reference, status)
+    assert.equal(armOf(await directView(), 'direct').lessonTaskSource, undefined)
+    await options(root, 422)
+    await send(direct)
+    const directProof = await directView()
+    assert.deepEqual(armOf(directProof, 'direct').lessonTaskSource, root)
+    const directNative = await history(direct.sessionId)
+    const selectedPracticeMaterial = join(directNative.workspacePath, directProof.material)
+    const originalPracticeBytes = await readFile(selectedPracticeMaterial, 'utf8')
+    const change = { addId: 'review' }
+    const changePreview = await invoke('rematch-comparison-preview', { ...root, change })
+    const review = await invoke('rematch-comparison-open', { ...root, change, token: changePreview.token, launchId: 'b'.repeat(32) })
+    const reviewSource = { kind: 'rematch', comparisonId: review.id, arm: 'rematch' }
+    const reviewView = () => invoke('rematch-comparison', { comparisonId: review.id })
+    const waitingReview = await reviewView()
+    assert.deepEqual(armOf(waitingReview, 'baseline').lessonTaskSource, root)
+    assert.equal(armOf(waitingReview, 'rematch').lessonTaskSource, undefined)
+    await options(reviewSource, 422)
+    await options({ ...reviewSource, arm: 'baseline' }, 422)
+    const questionPath = '/api/loadout-fixture-handoff-question'
+    async function choose(attempt, answer) {
+      const turn = send(attempt)
+      turn.catch(() => {})
+      let question
+      try {
+        for (let count = 0; count < 100 && !question; count++) {
+          question = (await host.request(questionPath, { sessionId: attempt.sessionId })).question
+          if (!question) await delay(40)
+        }
+        assert.deepEqual(question?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
+        assert.ok(!(await history(attempt.sessionId)).events.some(event => event.type === 'deliverables/presented'))
+      } finally {
+        if (question) await host.request(questionPath, { sessionId: attempt.sessionId, choice: answer })
+        await turn
+      }
+      return history(attempt.sessionId)
+    }
+    const practiceReview = await choose(review, 'Revise draft')
+    assert.ok(!practiceReview.events.some(event => event.type === 'deliverables/presented'))
+    const reviewProof = await reviewView()
+    assert.deepEqual(armOf(reviewProof, 'rematch').lessonTaskSource, reviewSource)
+    assert.deepEqual(armOf(reviewProof, 'rematch').entries[0].choices, ['Revise draft'])
+    const baseOptions = await options(reviewSource)
+    assert.equal(baseOptions.source.sessionId, review.sessionId)
+    assert.equal(baseOptions.source.change.added.id, 'review')
+    assert.ok(!baseOptions.workspaceIds.includes(directNative.workspaceId))
+    assert.equal((await options(root)).source.sessionId, direct.sessionId)
+
+    const user = await register(personal)
+    const profileRoot = dirname(directNative.workspacePath)
+    const ancestor = await register(profileRoot)
+    const nearPath = join(profileRoot, 'lighthouse-supply-run-personal')
+    await mkdir(nearPath)
+    await writeFile(join(nearPath, 'personal.md'), '# Similar name, ordinary file')
+    const near = await register(nearPath)
+    const descendantPath = join(directNative.workspacePath, 'practice-subfolder')
+    await mkdir(descendantPath)
+    const descendant = await register(descendantPath)
+    const starter = await invoke('growth-starter-open', { route: 'recon', launchId: 'c'.repeat(32) })
+    const comparison = await invoke('lighthouse-comparison-open', { arm: 'delivery', launchId: 'd'.repeat(32) })
+    const legacyPractice = await Promise.all([history(starter.sessionId), history(comparison.sessionId)])
+    const personalOptions = await options(reviewSource)
+    assert.deepEqual(new Set(personalOptions.workspaceIds),
+      new Set([...baseOptions.workspaceIds, user.workspaceId, ancestor.workspaceId, near.workspaceId]))
+    for (const notPersonal of [directNative, descendant, ...legacyPractice]) assert.ok(!personalOptions.workspaceIds.includes(notPersonal.workspaceId))
+
+    const list = (fields, status) => invoke('lesson-task-materials', { ...reviewSource, workspaceId: user.workspaceId, ...fields }, status)
+    const found = await list({ query: '交接 记录' })
+    assert.deepEqual(found.entries, [{ name: file, path: material, kind: 'file' }])
+    const browse = await list({ directory: folder })
+    assert.deepEqual(browse.entries, found.entries)
+    const onAncestor = await list({ workspaceId: ancestor.workspaceId })
+    const practiceFolder = basename(directNative.workspacePath)
+    assert.ok(onAncestor.entries.some(item => item.path === basename(nearPath)))
+    assert.ok(!onAncestor.entries.some(item => item.path === practiceFolder))
+    await list({ workspaceId: directNative.workspaceId }, 422)
+    await list({ workspaceId: ancestor.workspaceId, directory: practiceFolder }, 422)
+    await list({ directory: 'linked-folder' }, 422)
+    const fields = { ...reviewSource, workspaceId: user.workspaceId, material: found.entries[0].path, task }
+    const preview = (override = {}, status) => invoke('lesson-task-preview', { ...fields, ...override }, status)
+    for (const value of [join(personal, material), '../escape.md', 'linked.md', 'linked-folder/' + file]) {
+      await preview({ material: value }, 422)
+    }
+    await preview({ workspaceId: directNative.workspaceId, material: directProof.material }, 422)
+    await preview({ workspaceId: ancestor.workspaceId, material: practiceFolder + '/' + directProof.material }, 422)
+    await preview({ task: '' }, 422)
+    const checked = await preview()
+    assert.ok(checked.token)
+    assert.equal(checked.material, material)
+    assert.equal(checked.workspaceId, user.workspaceId)
+    assert.deepEqual(checked.source, personalOptions.source)
+    assert.deepEqual(new Set(checked.gear.map(item => item.id)), new Set(['present', 'review']))
+    assert.match(checked.task, /^【出装任务】\n/u)
+    assert.ok(checked.task.includes(JSON.stringify(material)))
+    assert.ok(checked.task.includes(task))
+    assert.ok(!checked.task.includes('02-lighthouse.md'))
+    assert.ok(!checked.task.includes('北岸灯塔'))
+    assert.ok(!JSON.stringify(checked).includes(personal))
+    const beforePlans = await plans()
+    assert.deepEqual(beforePlans, [])
+    assert.deepEqual(await members(user.workspaceId), [user.sessionId])
+    const open = (token, status) => invoke('lesson-task-open', { ...fields, token, launchId: 'e'.repeat(32) }, status)
+    await appendFile(join(personal, material), '\nModified after checking.\n')
+    await open(checked.token, 422)
+    assert.deepEqual(await members(user.workspaceId), [user.sessionId])
+    await writeFile(join(personal, material), body)
+
+    const checkedAgain = await preview()
+    const [opened, repeated] = await Promise.all([open(checkedAgain.token), open(checkedAgain.token)])
+    assert.deepEqual(repeated, opened)
+    assert.notEqual(opened.sessionId, user.sessionId)
+    assert.notEqual(opened.sessionId, review.sessionId)
+    assert.equal(opened.task, checkedAgain.task)
+    const brandNew = await history(opened.sessionId)
+    assert.equal(brandNew.workspacePath, await realpath(personal))
+    assert.equal(brandNew.workspaceId, user.workspaceId)
+    assert.equal(brandNew.presetId, practiceReview.presetId)
+    assert.equal(brandNew.inherited, 0)
+    assert.ok(!brandNew.events.some(item => item.type === 'turn/start' || item.type === 'user/message'))
+    const marker = (await equipmentIn(host, opened.sessionId)).planTask
+    assert.deepEqual(marker, { planName: checkedAgain.planName, material, task: checkedAgain.task, source: checkedAgain.source })
+    assert.deepEqual(new Set(await members(user.workspaceId)), new Set([user.sessionId, opened.sessionId]))
+    assert.deepEqual(await plans(), beforePlans)
+    const played = await choose(opened, 'Confirm handoff')
+    const message = played.events.find(item => item.type === 'user/message' && item.data.source.kind === 'user')
+    assert.equal(message.data.content[0].text, checkedAgain.task)
+    assert.deepEqual(played.events.filter(item => item.type === 'tool/call').map(item => item.data.name), ['ask_user_question', 'present'])
+    assert.equal(played.events.find(item => item.type === 'deliverables/presented').data.files[0].path, join(await realpath(personal), material))
+    assert.equal((await equipmentIn(host, opened.sessionId)).planTask, undefined)
+    assert.deepEqual(await directView(), directProof)
+    assert.deepEqual(await reviewView(), reviewProof)
+    assert.deepEqual(await plans(), beforePlans)
+
+    const { draft } = await invoke('field-playbook-preview', { id: 'direct' })
+    const legacyPlan = await invoke('plan-save', { name: 'Saved Direct plan', draft })
+    const legacyFields = { id: legacyPlan.id, revision: legacyPlan.revision, workspaceId: user.workspaceId, material, task: 'Read this local file.' }
+    const legacyPreview = await invoke('plan-task-preview', legacyFields)
+    assert.ok(legacyPreview.token)
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual(await open(checkedAgain.token), opened)
+    assert.deepEqual(await options(reviewSource), personalOptions)
+    assert.deepEqual(await reviewView(), reviewProof)
+    const legacy = await invoke('plan-task-open', { ...legacyFields, token: legacyPreview.token, launchId: 'e'.repeat(32) })
+    assert.notEqual(legacy.sessionId, opened.sessionId)
+    const legacyMarker = (await equipmentIn(host, legacy.sessionId)).planTask
+    assert.deepEqual(legacyMarker, { planName: legacyPlan.name, material, task: legacyPreview.task })
+    assert.equal(await readFile(join(personal, material), 'utf8'), body)
+    assert.equal(await readFile(selectedPracticeMaterial, 'utf8'), originalPracticeBytes)
   } finally {
     await host?.stop()
     await rm(directory, { recursive: true, force: true })
