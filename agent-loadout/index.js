@@ -1330,7 +1330,7 @@ export async function apply(ctx) {
       const definition = ctx.tools.get(tool, scope)
       const origin = definition && origins?.get(definition, scope)
       if (origin?.moduleName !== standardTrialTools[tool]) return false
-      const actual = dispatchedToolDetails(ctx, scope, definition, agent.ctx)
+      const actual = dispatchedToolDetails(ctx, scope, definition, agent.ctx, records.get(presetId)?.definition.plugins)
       return actual.id === id && actual.sourceId === sourceId
     })
   }
@@ -3997,7 +3997,7 @@ export async function apply(ctx) {
   async function checkedPersonalRematchBaseline(selection, signal) {
     const original = await personalRematchEvidence(selection, signal)
     if (!original || !original.canReuse) throw new Error('请选择一局已核验的实战作为原局。')
-    const { target, hero, observed, sessionId, evidenceReplay } = original
+    const { target, hero, observed, sessionId, evidenceReplay, standardTrialTask } = original
     const { workspaceId, cwd, material, digest, task, presetId, identity } = target
     const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
     if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
@@ -4019,7 +4019,7 @@ export async function apply(ctx) {
     const view = { workspaceId, workspaceTitle, material, task, baseline: { sessionId, heroName: hero.name } }
     const brief = task.split('\n').slice(2, -1).join('\n').trim()
     signal?.throwIfAborted()
-    return { ecosystem, preset, draft, candidate, baseline, view, observed,
+    return { ecosystem, preset, draft, candidate, baseline, view, observed, standardTrialTask,
       fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
   }
 
@@ -4092,27 +4092,30 @@ export async function apply(ctx) {
     return { builtIn, removed, equipped }
   }
 
-  function sameRematchPresent({ ecosystem, draft, candidate: before }, after) {
-    const presentModule = equipmentById.get('present').module
-    const rows = build => flatten(build.record.definition.plugins)
-      .filter(row => row.disabled !== true && legacy.moduleName(row.name) === presentModule)
+  function retainedRematchTool({ ecosystem, draft, candidate: before }, after, name = 'present') {
+    const module = standardTrialTools[name]
+    const rows = build => flatten(build.record?.definition.plugins ?? ecosystem.definitions.get(draft.presetId) ?? [])
+      .filter(row => row.disabled !== true && legacy.moduleName(row.name) === module)
     const original = rows(before)
-    if (original.length !== 1 || !isDeepStrictEqual(original, rows(after))) return false
+    if (original.length !== 1 || !isDeepStrictEqual(original, rows(after))) return
     const tools = build => [...summarizeCapabilities(ecosystem, draft.presetId, build).values()]
-      .filter(item => item.kind === 'tool' && item.name === 'present')
+      .filter(item => item.kind === 'tool' && item.name === name)
     const beforeTools = tools(before)
     const afterTools = tools(after)
-    const [present] = beforeTools
-    return beforeTools.length === 1 && !present.timing && afterTools.length === 1 && afterTools[0].id === present.id &&
-      afterTools[0].timing === present.timing && afterTools[0].sourceId === present.sourceId
+    const [tool] = beforeTools
+    if (beforeTools.length === 1 && !tool.timing && afterTools.length === 1 && afterTools[0].id === tool.id &&
+      afterTools[0].timing === tool.timing && afterTools[0].sourceId === tool.sourceId) {
+      return { tool: name, id: tool.id, sourceId: tool.sourceId }
+    }
   }
 
   async function personalHandoffSuggestion(selection, checked, signal) {
-    const { observed, ecosystem, draft, personalReviewRematch } = checked
+    const { observed, ecosystem, draft, personalReviewRematch, standardTrialTask } = checked
+    const stock = standardTrialTask && draft.equipmentIds.length === 0
     if (observed?.status !== 'complete' || !observed.materialDelivered || observed.continuationReason ||
-      draft.presetId !== 'standard' || !draft.equipmentIds.includes('present') ||
+      draft.presetId !== 'standard' || (!stock && !draft.equipmentIds.includes('present')) ||
       !observed.entries.some(item => item.name === 'present' && item.state === 'completed')) return
-    const direct = draft.equipmentIds.length === 1 && !observed.entries.some(item => item.name === 'ask_user_question')
+    const direct = (stock || draft.equipmentIds.length === 1) && !observed.entries.some(item => item.name === 'ask_user_question')
     const reviewed = draft.equipmentIds.length === 2 && draft.equipmentIds.includes('review') && comparisonChoices(observed).length > 0
     if (!direct && !reviewed) return
     const change = direct ? { addId: 'review' } : { removeId: 'review' }
@@ -4122,7 +4125,7 @@ export async function apply(ctx) {
         if (!original.canReuse || !original.materialDelivered) return
       }
       const { candidate } = await checkRematch(requestedRematch({ ...selection, change }), signal, checked)
-      if (!sameRematchPresent(checked, candidate)) return
+      if (!retainedRematchTool(checked, candidate)) return
       const questions = [...summarizeCapabilities(ecosystem, draft.presetId, candidate).values()]
         .filter(item => item.kind === 'tool' && item.name === 'ask_user_question')
       if (reviewed || questions.length === 1 && !questions[0].timing) return change
@@ -4219,8 +4222,14 @@ export async function apply(ctx) {
       (!assembled.equipmentIds.includes(id) || checked.draft.equipmentSources[id] !== assembled.equipmentSources[id]))) {
       throw new Error('这次变更还会影响其他已装备项目或来源。')
     }
-    if (evidenceReplay && !sameRematchPresent(checked, candidate)) {
+    const stockReview = checked.standardTrialTask && addId === 'review' && removeId === undefined
+    const retainedDelivery = (evidenceReplay || stockReview) && retainedRematchTool(checked, candidate)
+    if ((evidenceReplay || stockReview) && !retainedDelivery) {
       throw new Error('原局的交付工具或来源已变化，请重新核对。')
+    }
+    const retainedReader = stockReview && retainedRematchTool(checked, candidate, 'read')
+    if (stockReview && (!retainedReader?.sourceId || !retainedDelivery.sourceId)) {
+      throw new Error('原局的读取或交付工具来源已变化，请重新核对。')
     }
     const identity = comparisonLoadoutIdentity(assembled, candidate, ecosystem)
     if (!identity) throw new Error('无法核对当前出装的配置。')
@@ -4232,7 +4241,8 @@ export async function apply(ctx) {
     signal?.throwIfAborted()
     return { view: { ...view, change, token, ...evidenceReplay },
       record: { ...fields, baseline, loadout, change, edit: input.change, inputHash, token },
-      draft, before, candidate, ecosystem, againstDraft: checked.draft }
+      draft, before, candidate, ecosystem, againstDraft: checked.draft,
+      ...(stockReview && { stockReviewBindings: [retainedReader, retainedDelivery] }) }
   }
 
   async function previewRematch(selection, signal) {
@@ -4271,7 +4281,8 @@ export async function apply(ctx) {
     const selection = { kind, comparisonId, arm, change: comparison.edit }
     const checked = await checkRematch(requestedRematch(selection), signal)
     if (checked.record.token !== comparison.token) throw new Error('材料、任务或出装已变化，请重新核对。')
-    return prepare(checked.draft, checked.candidate)
+    const prepared = await prepare(checked.draft, checked.candidate)
+    return { ...prepared, stockReviewBindings: checked.stockReviewBindings }
   }
 
   async function readComparisonArm(comparisons, comparison, arm, signal, verifyPersonalDelivery = false, linkedChoicesOnly = false) {
@@ -4563,7 +4574,8 @@ export async function apply(ctx) {
     const canReuse = evidence.status === 'complete' && (isHeroTrialTaskSource(original.launch.source)
       ? verifiedPresentHandoff(evidence) && evidence.materialDelivered
       : evidenceReplay ? !evidence.continuationReason && choices.length > 0 : evidence.materialDelivered || choices.length > 0)
-    return { sessionId, target, hero, observed: evidence, canReuse, ...(evidenceReplay && { evidenceReplay }) }
+    return { sessionId, target, hero, observed: evidence, canReuse, standardTrialTask: isStandardTrialSource(original.launch.source),
+      ...(evidenceReplay && { evidenceReplay }) }
   }
 
   async function readLessonTaskResult({ sessionId, review }, signal) {
@@ -5083,6 +5095,7 @@ export async function apply(ctx) {
       const pinned = comparison.plans?.[arm]
       let workspace = comparison.workspaceId && registry.get(comparison.workspaceId)
       let verify
+      let stockReviewBindings
       if (heroTrial) {
         const prepared = heroDelivery ? await prepare(heroReplay.draft, heroReplay.candidate) : undefined
         if (!heroDelivery && !await heroTrialAvailable()) throw new Error(heroTrialUnavailable)
@@ -5119,6 +5132,7 @@ export async function apply(ctx) {
           if (!saved) await comparisons.writeArm(id, arm, current)
           saved = current
           verify = prepared.verifyLive
+          stockReviewBindings = prepared.stockReviewBindings
         }
       }
       if (saved) {
@@ -5161,7 +5175,7 @@ export async function apply(ctx) {
         const created = await controller.create({ sessionId, workspaceId: workspace.id, agentPreset: saved.presetId })
         if (created.sessionId !== sessionId) throw new Error('新对局的会话标识已变化，请重新开局。')
       }
-      if (verify || heroTrial) {
+      if (verify || heroTrial || stockReviewBindings) {
         if (!ctx.get('agents')?.get(sessionId)) {
           const result = await controller.resolveAgent(sessionId)
           if (!result.agent) throw new Error(result.error?.message ?? '无法打开新对局。')
@@ -5169,7 +5183,10 @@ export async function apply(ctx) {
         if (heroTrial) {
           const agent = ctx.get('agents')?.get(sessionId)
           if (!heroTrialLive(arm, saved.presetId, agent)) throw new Error(heroTrialUnavailable)
-        } else verifyLive({ presetId: saved.presetId, sessionId })
+        } else if (verify) verifyLive({ presetId: saved.presetId, sessionId })
+        if (stockReviewBindings && !standardTrialLive(saved.presetId, ctx.get('agents')?.get(sessionId), stockReviewBindings)) {
+          throw new Error('原局的读取或交付工具来源已变化，请重新核对。')
+        }
       }
       await comparisons.writeArm(id, arm, { ...saved, opened: true })
       updates.notify(sessionId)

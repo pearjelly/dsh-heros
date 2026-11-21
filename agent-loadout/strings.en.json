@@ -1937,6 +1937,7 @@
   "原局没有可单独卸下的这件装备。": "This gear cannot be removed on its own from the original loadout.",
   "这次对照只能卸下证据核验。": "This comparison only removes Evidence Check.",
   "原局的交付工具或来源已变化，请重新核对。": "The original run's delivery tool or its source has changed. Review the loadout again.",
+  "原局的读取或交付工具来源已变化，请重新核对。": "The original run's file reading or delivery source has changed. Review the loadout again.",
   "这次变更还会卸下其他装备。请选择一件可单独调整的装备。": "This change would also remove other gear. Choose a piece that can be changed on its own.",
   "这次变更还会影响其他已装备项目或来源。": "This change would also affect other equipped gear or its source.",
   "请先核对这次装备变更。": "Review this gear change before starting the rematch.",

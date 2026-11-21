@@ -1907,6 +1907,70 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(stockResult.draft?.presetId, 'standard')
     assert.deepEqual(await read(trial.id), replayed)
 
+    const personalSource = stockResult.rematchSource
+    assert.deepEqual(personalSource, { kind: 'personal', comparisonId: standardOwn.sessionId.slice('session-'.length), arm: 'task' })
+    const personalOptions = await invoke('rematch-comparison-options', personalSource)
+    assert.deepEqual(personalOptions.personalSuggestedChange, { addId: 'review' })
+    assert.equal(personalOptions.workspaceId, workspaceId)
+    assert.equal(personalOptions.material, ownMaterial)
+    const change = personalOptions.personalSuggestedChange
+    const rematchPreview = await invoke('rematch-comparison-preview', { ...personalSource, change })
+    assert.equal(rematchPreview.task, standardOwn.task)
+    assert.equal(rematchPreview.change.added.id, 'review')
+    assert.equal(rematchPreview.change.removed, undefined)
+    assert.ok(!rematchPreview.comparison.lost.some(item => ['read', 'present'].includes(item.name)))
+    const checkedSource = { ...personalSource, change, token: rematchPreview.token }
+    const beforePersonalRematches = await nativeSessions()
+    await appendFile(ownPath, '\nMaterial edited after reviewing the rematch.\n')
+    await invoke('rematch-comparison-options', personalSource, 422)
+    await invoke('rematch-comparison-open', { ...checkedSource, launchId: launchId('3') }, 422)
+    await writeFile(ownPath, ownContent)
+    assert.deepEqual(await nativeSessions(), beforePersonalRematches)
+
+    const questions = '/api/loadout-fixture-handoff-question'
+    const rematchSessions = []
+    for (const [id, choice] of [['3', 'Confirm handoff'], ['4', 'Revise draft']]) {
+      const opened = await invoke('rematch-comparison-open', { ...checkedSource, launchId: launchId(id) })
+      assert.notEqual(opened.sessionId, standardOwn.sessionId)
+      assert.equal(opened.task, standardOwn.task)
+      rematchSessions.push(opened.sessionId)
+      const draft = await history(opened.sessionId)
+      assert.equal(draft.workspaceId, workspaceId)
+      assert.equal(draft.inherited, 0)
+      assert.ok(!draft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+      const turn = send(opened)
+      turn.catch(() => {})
+      let question
+      try {
+        for (let count = 0; count < 100 && !question; count++) {
+          question = (await host.request(questions, { sessionId: opened.sessionId })).question
+          if (!question) await delay(40)
+        }
+        assert.deepEqual(question?.options.map(option => option.label), ['Confirm handoff', 'Revise draft'])
+        const pending = await invoke('rematch-comparison', { comparisonId: opened.id })
+        assert.equal(pending.arms[1].status, 'waiting-choice')
+        assert.equal(pending.handoffOutcome, undefined)
+      } finally {
+        if (question) await host.request(questions, { sessionId: opened.sessionId, choice })
+        await turn
+      }
+      const confirmed = choice === 'Confirm handoff'
+      const completed = await invoke('rematch-comparison', { comparisonId: opened.id })
+      assert.equal(completed.arms[0].sessionId, standardOwn.sessionId)
+      assert.deepEqual(completed.handoffOutcome.arms.map(item => [item.style, item.choices, item.materialDelivered]),
+        [['direct', [], true], ['review', [choice], confirmed]])
+      const native = await history(opened.sessionId)
+      assert.deepEqual(traceTools(native).map(event => event.data.name),
+        confirmed ? ['read', 'ask_user_question', 'present'] : ['read', 'ask_user_question'])
+      for (const name of confirmed ? ['read', 'present'] : ['read']) {
+        assert.deepEqual(toolSource(native, name), toolSource(stockPersonal, name))
+      }
+      assert.deepEqual(traceFiles(native).map(file => file.path), confirmed ? [await realpath(ownPath)] : [])
+    }
+    assert.deepEqual(await nativeSessions(), [...beforePersonalRematches, ...rematchSessions].sort())
+    assert.equal(await readFile(ownPath, 'utf8'), ownContent)
+    assert.deepEqual((await host.request(endpoint)).value.plans, before.plans)
+
     const summary = await create(launchId('b'), 'summary', 200, 'zh')
     assert.equal(summary.task, trial.task)
     assert.equal(summary.need, 'summary')

@@ -165,10 +165,20 @@ export async function apply(ctx) {
       } else if (heroDeliveryMaterial) {
         const read = tools?.some(tool => tool.name === 'read') ? 'read' : 'bash'
         const canPresent = tools?.some(tool => tool.name === 'present')
-        sequence = [read, ...(canPresent ? ['present'] : [])]
+        const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
+          .map(block => block.text).join('\n')
+        const review = systemText.includes('whether to proceed with the handoff or revise the draft')
+        const confirmed = review && results[1] &&
+          JSON.parse(results[1].content[0].text).answers?.[0]?.selected?.includes('Confirm handoff')
+        sequence = [read, ...(review ? ['ask_user_question'] : []), ...(canPresent && (!review || confirmed) ? ['present'] : [])]
         name = sequence[results.length]
         if (name === 'read') args = { file_path: heroDeliveryMaterial }
         if (name === 'bash') args = { command: "cat -- '值班 材料/设备 台账.md'", description: 'Read the selected equipment ledger' }
+        if (name === 'ask_user_question') args = { questions: [{
+          id: 'fixture-delivery-review',
+          question: 'Deliver the equipment ledger or request changes?',
+          options: [{ label: 'Confirm handoff' }, { label: 'Revise draft' }],
+        }] }
         if (name === 'present') args = { files: [{ path: heroDeliveryMaterial, description: '夜班交接台账原件' }] }
         if (!name) {
           sequence = undefined

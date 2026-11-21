@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.117.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.118.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -47,6 +47,8 @@ Choose **Compare a friend's report** on a verified local run with the same publi
 ### Use Standard on your own task
 
 When Standard has read the bundled card and delivered the verified original, choose **Use Standard on my task** in that DSH session or on the Standard result. Select a workspace or **Add a materials folder**, choose your own file, and write a new brief. In **Review file and loadout**, check the stock Standard preset and its tool sources. Choose **Confirm and open session**, then manually send the new task in DSH.
+
+After verified delivery, [try a review step on the same task](#try-a-review-step-before-delivery).
 
 ### Give Minimal one more tool
 
@@ -116,7 +118,7 @@ Plans saved from a verified evidence comparison in v0.95 or later link to the ru
 
 ## Try a review step before delivery
 
-1. After a Standard Mode direct delivery run actually delivers your selected file, open **Try one gear change** from its task result. **Try Delivery Review** appears when the original material is still verified and the review gear can be added while keeping the original delivery tool and source.
+1. After a Standard Mode direct delivery run actually delivers your selected file, open **Try one gear change** from its task result. This includes personal tasks started with **Use Standard on my task** from the Lighthouse trial. **Try Delivery Review** appears when the material is still verified and adding review preserves the original delivery source. For the stock Standard loadout from the trial, the preview also checks the original file-reading source.
 2. Choose **Try Delivery Review** to preview adding just that piece of gear. Review the changes, then choose **Open rematch session** and manually send the same task in DSH.
 3. Compare the original delivery with the rematch. The rematch records what you chose on the DSH question card. A successful delivery after approval shows its actual attachment. If you request changes, check the recorded choice and whether a file was delivered in the rematch.
 
