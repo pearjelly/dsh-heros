@@ -772,8 +772,12 @@ export async function apply(ctx) {
       : '方案的英雄或阵容当前不可用。'
   }
 
+  function publicBuildPlan({ evidenceOrigin, ...plan }) {
+    return { ...plan, ...(evidenceOrigin && { hasEvidenceOrigin: true }) }
+  }
+
   function planCard(plan, art, unavailable) {
-    return { ...plan, heroArt: art('hero', plan.heroId), broken: unavailable(plan.presetId) }
+    return { ...publicBuildPlan(plan), heroArt: art('hero', plan.heroId), broken: unavailable(plan.presetId) }
   }
 
   async function list() {
@@ -4070,10 +4074,14 @@ export async function apply(ctx) {
     if (outcomes.find(arm => arm.style === 'review').choices.length) return { material, arms: outcomes }
   }
 
+  function verifiedEvidenceArm(arm) {
+    return arm.status === 'complete' && arm.sessionId && arm.materialState === 'verified' && !arm.continuationReason
+  }
+
   function observedEvidenceOutcome(arms) {
     const [baseline, replay] = arms
     if (arms.length !== 2 || baseline.id !== 'baseline' || replay.id !== 'rematch' ||
-      arms.some(arm => arm.status !== 'complete' || !arm.sessionId || arm.materialState !== 'verified' || arm.continuationReason) ||
+      arms.some(arm => !verifiedEvidenceArm(arm)) ||
       baseline.sessionId === replay.sessionId || !comparisonChoices(baseline).length) return
     return { arms: arms.map(arm => {
       const { id, deliverables, canReuse } = arm
@@ -4335,8 +4343,26 @@ export async function apply(ctx) {
         throw new Error('本机配置已变化，无法核对这局的原出装。')
       }
       signal?.throwIfAborted()
-      return { presetId: pinned.presetId, heroId: pinned.heroId, heroName: pinned.heroName }
+      return { presetId: pinned.presetId, heroId: pinned.heroId, heroName: pinned.heroName,
+        evidenceOrigin: { comparisonId, arm } }
     })
+  }
+
+  async function readPlanEvidenceOrigin({ id, revision }, signal) {
+    const saved = buildPlans.read(id, revision)
+    const unavailable = '这份方案的实测来源已不可查看。'
+    if (!saved.evidenceOrigin) throw new Error(unavailable)
+    const { comparisonId, arm } = saved.evidenceOrigin
+    const record = rematchComparisons.read(comparisonId)
+    const pinned = arm === 'baseline' ? record?.baseline : record?.loadout
+    if (!record?.baseline?.evidenceReplay || pinned?.presetId !== saved.presetId || pinned.heroId !== saved.heroId) throw new Error(unavailable)
+    const observed = arm === 'baseline' ? await readRematchBaseline(record, previousComparison(record), signal)
+      : await readComparisonArm(rematchComparisons, record, arm, signal)
+    if (!verifiedEvidenceArm(observed) || !(comparisonChoices(observed).length || observed.deliverables.length)) throw new Error(unavailable)
+    if (arm === 'rematch' && (await rematchComparisons.readArm(comparisonId, arm))?.presetId !== pinned.presetId) throw new Error(unavailable)
+    buildPlans.read(id, revision)
+    signal?.throwIfAborted()
+    return { comparisonId, arm, sessionId: observed.sessionId }
   }
 
   async function readComparison(comparisons, { comparisonId, sessionId, prototype }, english, signal) {
@@ -5572,7 +5598,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'comparison-history') value = await comparisonHistory(selection, request.signal)
         else if (selection?.action === 'comparison-loadout-preview') value = await comparisonLoadout(selection, request.signal)
         else if (selection?.action === 'evidence-replay-plan-save') {
-          value = await saveEvidenceReplayPlan(selection, request.signal)
+          value = publicBuildPlan(await saveEvidenceReplayPlan(selection, request.signal))
           updates.notify()
         }
         else if (selection?.action === 'lesson-task-options') value = await lessonTaskOptions(selection, request.signal)
@@ -5638,8 +5664,10 @@ export async function apply(ctx) {
           updates.notify()
         }
         else if (selection?.action === 'plan-save') {
-          value = await saveBuildPlan(selection)
+          value = publicBuildPlan(await saveBuildPlan(selection))
           updates.notify()
+        } else if (selection?.action === 'plan-evidence-origin') {
+          value = await readPlanEvidenceOrigin(selection, request.signal)
         } else if (selection?.action === 'workspace-materials') {
           value = await workspaceMaterials(selection, request.signal)
         } else if (selection?.action === 'lesson-task-materials') {

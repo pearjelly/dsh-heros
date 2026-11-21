@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.94.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.95.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -42,6 +42,8 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 ## Keep a loadout for next time
 
 In a completed **Evidence gear comparison**, **Keep a loadout for next time** shows the actual choices and attachments from both runs. On the side you prefer, choose **Keep this loadout**, review the gear and its sources, then name and save the plan. Saving leaves your current Armory draft in place. In **Loadout plans**, select the saved plan and choose **Start a task with this loadout** to use it on new material.
+
+Plans saved from a verified evidence comparison in v0.95 or later link to the run you chose. In **Loadout plans**, choose **View tested source** to return to that run and check the recorded choice and attachments in DSH. Renaming a plan, editing its notes, or changing the original material later keeps the link. Replacing the plan's gear clears the link. Share codes carry the reusable loadout and keep the evidence link in your local profile.
 
 ## Play your first rematch
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { workspaceMaterialPath } from './match-comparisons.js'
+import { comparisonIdValid, workspaceMaterialPath } from './match-comparisons.js'
 
 const planKey = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/
 
@@ -23,6 +23,12 @@ function metadata({ name, note = '' }) {
   return { name: name.trim(), note: note.trim() }
 }
 
+function evidenceOrigin(value) {
+  if (comparisonIdValid(value?.comparisonId) && (value.arm === 'baseline' || value.arm === 'rematch')) {
+    return { comparisonId: value.comparisonId, arm: value.arm }
+  }
+}
+
 export async function openBuildPlans(directory, saveEntry, warnings) {
   const plans = new Map()
   let writes = Promise.resolve()
@@ -39,7 +45,11 @@ export async function openBuildPlans(directory, saveEntry, warnings) {
         ![record.presetId, record.heroId, record.heroName].every(value => typeof value === 'string' && value)) {
         throw new Error('Invalid build plan')
       }
-      plans.set(id, { ...record, ...metadata(record) })
+      const { evidenceOrigin: storedOrigin, ...plan } = record
+      const origin = evidenceOrigin(storedOrigin)
+      const fields = metadata(plan)
+      if (storedOrigin !== undefined && !origin) warnings.push(file)
+      plans.set(id, { ...plan, ...fields, ...(origin && { evidenceOrigin: origin }) })
     } catch {
       warnings.push(file)
     }
@@ -70,8 +80,9 @@ export async function openBuildPlans(directory, saveEntry, warnings) {
       }
       const target = current && !updating ? current : await resolveDraft()
       const { presetId, heroId, heroName } = target
+      const origin = evidenceOrigin(target.evidenceOrigin)
       const record = { id: current?.id ?? randomUUID(), revision: randomUUID(), ...fields,
-        presetId, heroId, heroName, updatedAt: Date.now() }
+        presetId, heroId, heroName, updatedAt: Date.now(), ...(origin && { evidenceOrigin: origin }) }
       await saveEntry(directory, record.id, record)
       plans.set(record.id, record)
       return record

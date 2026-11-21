@@ -1372,7 +1372,7 @@ window.__ModuleLoader__.load({
     const rebaselineTaskLabel = '以当前材料重跑原局'
 
     function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart, onReuse, onRematch, onLessonTask, outfit,
-      evidenceReplay }) {
+      evidenceReplay, testedSource }) {
       const files = arm.deliverables ?? empty
       const pendingQuestions = arm.pendingQuestions ?? empty
       return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status, 'data-comparison-arm': arm.id, tabIndex: -1,
@@ -1382,6 +1382,7 @@ window.__ModuleLoader__.load({
             arm.heroName ? h('small', { className: 'moba-lighthouse-arm-hero' }, arm.heroName)
               : (config.tools || config.gear) && h('code', null, config.tools ?? t(config.gear))),
           h('strong', { className: 'moba-lighthouse-arm-state', role: 'status' }, t(comparisonArmStates[arm.status]))),
+        testedSource && h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t('此方案保存自这局'))),
         outfit ? h(PlanEquipment, { items: outfit, removed: arm.removed ?? empty })
           : arm.removed?.length > 0 && h(RemovedEquipment, { labels: arm.removed }),
         config.note && h('p', { className: 'moba-lighthouse-note' }, t(config.note)),
@@ -1643,8 +1644,8 @@ window.__ModuleLoader__.load({
       return item.path && duplicate ? title + ' · ' + item.path : title
     }
 
-    function RunComparison({ kind = 'lighthouse', comparisonId, initialPrevious, lessonHint, evidenceReplayHint, onBack, backLabel, ...props }) {
-      const origin = { kind, comparisonId }
+    function RunComparison({ kind = 'lighthouse', comparisonId, initialPrevious, lessonHint, evidenceReplayHint, testedSourceArm, onBack, backLabel, ...props }) {
+      const origin = { kind, comparisonId, arm: testedSourceArm }
       const [path, setPath] = useState(() => previousComparisonIsValid(initialPrevious) && !sameComparison(origin, initialPrevious) ? [initialPrevious] : [])
       const [returning, setReturning] = useState(false)
       const current = path.at(-1) ?? origin
@@ -1668,12 +1669,13 @@ window.__ModuleLoader__.load({
         kind: current.kind, comparisonId: current.comparisonId, lessonHint: path.length ? current.lesson : lessonHint,
         evidenceReplayHint: path.length ? current.evidenceReplay : evidenceReplayHint,
         focusArm: returning ? undefined : current.arm,
+        testedSourceArm: path.length ? undefined : testedSourceArm,
         focusPrevious: returning, canViewPrevious: canView, onPrevious: viewPrevious,
         backLabel: path.length ? t('返回后一组对照') : backLabel, onBack: path.length ? returnToNewer : onBack })
     }
 
     function ComparisonBoard({ kind, request, comparisonId, sessionId, onClose, onVisit, putTask, canViewPrevious, lessonHint, evidenceReplayHint,
-      workspaces = empty, initialWorkspaceId, onUse, onEvidenceSaved, onHistory, onBack, backLabel, onPrevious, focusArm, focusPrevious }) {
+      workspaces = empty, initialWorkspaceId, onUse, onEvidenceSaved, onHistory, onBack, backLabel, onPrevious, focusArm, focusPrevious, testedSourceArm }) {
       const language = useLanguage()
       const config = comparisonKinds[kind]
       const personal = kind !== 'lighthouse'
@@ -1721,7 +1723,7 @@ window.__ModuleLoader__.load({
       const value = view?.scope === scope ? view.result : undefined
       const evidenceReplay = kind === 'rematch' && (value?.evidenceReplay ?? evidenceReplayHint)
       const handoff = kind === 'rematch' && !evidenceReplay ? value?.handoffOutcome : undefined
-      const evidenceOutcome = evidenceReplay ? value?.evidenceOutcome : undefined
+      const evidenceOutcome = evidenceReplay && !testedSourceArm ? value?.evidenceOutcome : undefined
       const task = value?.task
       const lessonMarker = value?.lesson ?? lessonHint
       const lesson = lessonMarker === lighthouseRematchLesson
@@ -1857,6 +1859,7 @@ window.__ModuleLoader__.load({
             onPreserve: arm => setReuse({ id: value.id, arm, evidence: true }) }),
           h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm =>
             h(ComparisonArm, { key: arm.id, arm, config: comparisonArmConfig(kind, arm.id, evidenceReplay), evidenceReplay,
+              testedSource: testedSourceArm === arm.id,
               task: materialWarning ? undefined : task, sessionId,
               busy: Boolean(launch), canStart: !materialWarning && (!setup || Boolean(workspaces.length)),
               onStart: directLesson || evidence || kind === 'rematch' ? undefined : start, onVisit, putTask,
@@ -4414,8 +4417,50 @@ window.__ModuleLoader__.load({
             }, t(side.open), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
+    function PlanTestedSource({ plan, request, onVisit }) {
+      const language = useLanguage()
+      const [state, setState] = useState(null)
+      const trigger = useRef(null)
+      const pending = useRef(null)
+
+      useEffect(() => () => pending.current?.abort(), [])
+
+      async function open() {
+        if (pending.current) return
+        const abort = pending.current = new AbortController()
+        const action = 'plan-evidence-origin'
+        setState({ loading: true })
+        try {
+          const source = await request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
+          if (abort.signal.aborted) return
+          if (!source?.comparisonId || !['baseline', 'rematch'].includes(source.arm) || !source.sessionId) {
+            throw new Error(t('这份方案的实测来源已不可查看。'))
+          }
+          setState({ source })
+        } catch (reason) {
+          if (!abort.signal.aborted) setState({ error: reason.message })
+        } finally {
+          pending.current = null
+        }
+      }
+
+      function back() {
+        setState(null)
+        requestAnimationFrame(() => trigger.current?.focus())
+      }
+
+      const source = state?.source
+      return h(Fragment, null,
+        h('button', { type: 'button', className: 'moba-roster-open', ref: trigger, disabled: Boolean(state?.loading),
+          'aria-haspopup': 'dialog', onClick: open }, t('查看实战来源')),
+        state?.loading && h('p', { className: 'moba-plan-note', role: 'status' }, t('正在核对实战来源…')),
+        state?.error && h('p', { className: 'moba-alert', role: 'alert' }, state.error),
+        source && h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId, testedSourceArm: source.arm, evidenceReplayHint: true,
+          request, onVisit, onClose: back, onBack: back, backLabel: t('返回方案库') }))
+    }
+
     function BuildPlans({ plans, initialMode, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport,
-      workspaces, workspaceId, onOpenTask, evidenceSave }) {
+      workspaces, workspaceId, onOpenTask, onOpenSource, evidenceSave }) {
       const [editor, setEditor] = useState(initialMode === 'create' ? { mode: 'create' } : null)
       const [sharing, setSharing] = useState(null)
       const [taskPlan, setTaskPlan] = useState(null)
@@ -4596,6 +4641,8 @@ window.__ModuleLoader__.load({
                       onClick: () => setTaskPlan(plan) }, t('用这套出装开新任务'), h(Glyph, { kind: 'arrow', size: 16 })),
                     h('button', { className: 'moba-roster-open', type: 'button', ref: pairButton, disabled: Boolean(plan.broken) || !hasAlternative,
                       onClick: () => setPairPlan(plan) }, t('与另一份方案同题对照'))),
+                  plan.hasEvidenceOrigin && onOpenSource && h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
+                    onVisit: sessionId => { close(); onOpenSource(sessionId) } }),
                   !plan.broken && !hasAlternative && h('p', { className: 'moba-lighthouse-note' }, t('再保存一套可用出装方案，就能做同题对照。')),
                   h('div', { className: 'moba-plan-manage' },
                     h('button', { className: 'moba-text', type: 'button', ref: shareButton,
@@ -6042,7 +6089,7 @@ window.__ModuleLoader__.load({
           journalOpen && h(QuestJournal, { request, onClose: () => setJournalOpen(false), onOpenMatch: openSource }),
           data && planMode && h(BuildPlans, { initialMode: planMode, request, draft: loadoutDraft(), canSave: canCompare,
             workspaces: comparableWorkspaces, workspaceId: workspace?.workspaceId,
-            onOpenTask: ({ sessionId, task }) => openDraftSession(sessionId, task),
+            onOpenTask: ({ sessionId, task }) => openDraftSession(sessionId, task), onOpenSource: openSource,
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
             current: { hero: stagePreset, items: selections, removed: removedLabels },
             plans: plans.map(plan => {

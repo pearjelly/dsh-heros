@@ -1793,12 +1793,17 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
   const body = '# Studio equipment ledger\n\nVerified: two spare radios.\n'
   const questions = '/api/loadout-fixture-handoff-question'
   const labels = ['继续补证', '降级推荐', '暂缓提交']
+  const prior = { id: randomUUID(), revision: randomUUID(), name: 'Prior Standard plan', note: '', heroId: 'standard',
+    heroName: '标准模式', presetId: 'standard', updatedAt: 1 }
   let host
   try {
     await mkdir(join(personal, folder), { recursive: true })
     await writeFile(original, body)
     await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
     await installProfile(directory, env)
+    const plansDir = join(env.DSH_HOME, 'profiles/web/agent-loadouts/plans')
+    await mkdir(plansDir, { recursive: true })
+    await writeFile(join(plansDir, prior.id + '.json'), JSON.stringify(prior))
     host = await startHost(env, patch)
     const invoke = async (action, fields, status) => (await host.request(endpoint, { action, ...fields }, status)).value
     const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
@@ -1807,6 +1812,11 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     const evidenceHistory = options => invoke('comparison-history', { scope: 'evidence-replays', ...options })
     const saveEvidencePlan = (comparisonId, arm, name, extra = {}, status) =>
       invoke('evidence-replay-plan-save', { comparisonId, arm, name, ...extra }, status)
+    const planOrigin = ({ id, revision }, status) => invoke('plan-evidence-origin', { id, revision }, status)
+    const assertPublicOrigin = (plan, hasOrigin) => {
+      assert.equal(plan.hasEvidenceOrigin, hasOrigin ? true : undefined)
+      for (const key of ['evidenceOrigin', 'comparisonId', 'arm', 'sessionId']) assert.ok(!Object.hasOwn(plan, key), key)
+    }
     const assertNoEvidenceReplay = async () => {
       assert.deepEqual(await evidenceHistory({ probe: true }), { available: false })
       assert.deepEqual(await evidenceHistory(), { items: [] })
@@ -1837,6 +1847,9 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     const local = await host.request(workspace, { presetId: 'standard', workspacePath: personal })
     const { workspaceId } = local
     const initialPlans = (await host.request(endpoint)).value.plans
+    assert.deepEqual(initialPlans.map(plan => plan.id), [prior.id])
+    assertPublicOrigin(initialPlans[0], false)
+    await planOrigin(prior, 422)
     await assertNoEvidenceReplay()
     const practice = await invoke('lighthouse-evidence-open', { scenario: 'gap', launchId: launchId('a') })
     const source = { kind: 'workspace', comparisonId: practice.id, arm: 'evidence' }
@@ -2081,16 +2094,35 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     }
     const beforeSave = await planState()
     assert.deepEqual(beforeSave.plans, initialPlans)
-    const savedBaseline = await saveEvidencePlan(replay.id, 'baseline', 'Keep evidence check', {
+    const initialBaseline = await saveEvidencePlan(replay.id, 'baseline', 'Keep evidence check', {
       note: 'From the verified original', draft: { presetId: 'standard', equipmentIds: [] },
     })
     const savedReplay = await saveEvidencePlan(replay.id, 'rematch', 'Keep the tested delivery')
-    assert.equal(savedBaseline.presetId, qualified.presetId)
-    assert.equal(savedBaseline.note, 'From the verified original')
+    const baselineOrigin = { comparisonId: replay.id, arm: 'baseline', sessionId: qualifiedSession.sessionId }
+    const replayOrigin = { comparisonId: replay.id, arm: 'rematch', sessionId: replay.sessionId }
+    assert.equal(initialBaseline.presetId, qualified.presetId)
+    assert.equal(initialBaseline.note, 'From the verified original')
     assert.equal(savedReplay.presetId, replayNative.presetId)
+    assertPublicOrigin(initialBaseline, true)
+    assertPublicOrigin(savedReplay, true)
+    assert.deepEqual(await planOrigin(initialBaseline), baselineOrigin)
+    assert.deepEqual(await planOrigin(savedReplay), replayOrigin)
+    for (const [plan, arm] of [[initialBaseline, 'baseline'], [savedReplay, 'rematch']]) {
+      const stored = JSON.parse(await readFile(join(plansDir, plan.id + '.json'), 'utf8'))
+      assert.deepEqual(stored.evidenceOrigin, { comparisonId: replay.id, arm })
+    }
+    const savedBaseline = await invoke('plan-save', { id: initialBaseline.id, revision: initialBaseline.revision,
+      name: 'Keep evidence check for the next shift', note: 'Use this for equipment handover' })
+    assert.equal(savedBaseline.name, 'Keep evidence check for the next shift')
+    assert.equal(savedBaseline.note, 'Use this for equipment handover')
+    assertPublicOrigin(savedBaseline, true)
+    assert.notEqual(savedBaseline.revision, initialBaseline.revision)
+    await planOrigin(initialBaseline, 422)
+    assert.deepEqual(await planOrigin(savedBaseline), baselineOrigin)
     await saveEvidencePlan(replay.id, 'rematch', savedBaseline.name, {}, 422)
     const afterSave = await planState()
     assert.deepEqual(new Set(afterSave.plans.map(plan => plan.id)), new Set([...initialPlans.map(plan => plan.id), savedBaseline.id, savedReplay.id]))
+    for (const plan of afterSave.plans) assertPublicOrigin(plan, plan.id !== prior.id)
     assert.equal(afterSave.xp, beforeSave.xp)
     assert.deepEqual(afterSave.members, beforeSave.members)
     assert.deepEqual((await readReplay()).evidenceOutcome, replayProof.evidenceOutcome)
@@ -2098,6 +2130,22 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     await host.stop()
     host = await startHost(env, patch)
     await assertEvidenceReplay()
+    assert.notEqual(await readFile(original, 'utf8'), body)
+    await planOrigin(prior, 422)
+    await planOrigin(initialBaseline, 422)
+    assert.deepEqual(await planOrigin(savedBaseline), baselineOrigin)
+    assert.deepEqual(await planOrigin(savedReplay), replayOrigin)
+    for (const { id, revision, name } of [savedBaseline, savedReplay]) {
+      const exported = await invoke('plan-share-export', { id, revision })
+      assert.ok(exported.code?.startsWith('DSHH1.'), JSON.stringify(exported))
+      const portable = Buffer.from(exported.code.slice('DSHH1.'.length), 'base64url').toString('utf8')
+      assert.equal(JSON.parse(portable).name, name)
+      assert.doesNotMatch(portable, /"(?:evidenceOrigin|hasEvidenceOrigin|comparisonId|sessionId|workspaceId|material|choices)"\s*:/u)
+      for (const privateValue of [replay.id, practice.id, qualifiedSession.sessionId, replay.sessionId, workspaceId,
+        material, qualified.workspacePath, 'qualified-handoff.md', replayFile, labels[1], '简明摘要']) {
+        assert.ok(!portable.includes(privateValue), privateValue)
+      }
+    }
     await writeFile(original, body)
     assert.deepEqual((await planState()).plans, afterSave.plans)
     assert.deepEqual((await invoke('lesson-task-options', source)).source, options.source)
@@ -2148,6 +2196,20 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     assert.equal(pausedBoard.arms[0].sessionId, pausedReplay.opened.sessionId)
     assert.deepEqual(pausedBoard.evidenceOutcome.arms[0], { id: 'baseline', choices: [labels[2]], deliverables: [], canPreserve: true })
     assert.deepEqual((await planState()).plans, afterSave.plans)
+
+    const draft = { presetId: 'standard', equipmentIds: [] }
+    const forgery = { evidenceOrigin: { comparisonId: replay.id, arm: 'baseline' }, hasEvidenceOrigin: true }
+    const replaced = await invoke('plan-save', { id: savedBaseline.id, revision: savedBaseline.revision, name: savedBaseline.name, draft, ...forgery })
+    assert.notEqual(replaced.presetId, savedBaseline.presetId)
+    assertPublicOrigin(replaced, false)
+    await planOrigin(savedBaseline, 422)
+    await planOrigin(replaced, 422)
+    const ordinary = await invoke('plan-save', { name: 'Ordinary Standard plan', draft, ...forgery })
+    assertPublicOrigin(ordinary, false)
+    await planOrigin(ordinary, 422)
+    assert.deepEqual(await planOrigin(savedReplay), replayOrigin)
+    for (const plan of (await planState()).plans) assertPublicOrigin(plan, plan.id === savedReplay.id)
+    assert.deepEqual(await readReplay(), replayProof)
   } finally {
     await host?.stop()
     await rm(directory, { recursive: true, force: true })

@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.94.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.95.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -42,6 +42,8 @@ dsh web
 ## 挑一套留到下次
 
 在已完成的 **证据换装对照** 中，**挑一套留到下次** 会显示两局的实际选择和附件。在想留的一侧点 **保留这套出装**，核对装备及来源，再命名保存为方案。保存后可以继续编辑原备战草稿。下次在 **出装方案** 里选中它，点 **用这套出装开新任务**，就能选择新的材料。
+
+从 v0.95 起，在已核验的证据换装对照里保存方案，会关联当时选中的一局。在 **出装方案** 中点 **查看实战来源**，回到这局核对 DSH 里的实际选择和附件。改名、改说明或在后来修改原材料，都可以继续回看。点 **用当前出装更新** 会解除旧关联。分享码携带可复用的出装，实战链接留在自己的 Profile。
 
 ## 打完第一次换装复赛
 
