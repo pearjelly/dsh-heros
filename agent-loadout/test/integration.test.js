@@ -1834,6 +1834,8 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.equal(waitingReplay.publicEvidenceReplay, true)
     assert.equal(waitingReplay.evidenceOutcome, undefined)
     assert.equal(waitingReplay.arms[1].status, 'waiting')
+    const directSource = { kind: 'rematch', comparisonId: replay.id, arm: 'rematch' }
+    await invoke('lesson-task-options', directSource, 422)
     const privateHistory = () => invoke('comparison-history', { scope: 'evidence-replays', probe: true })
     assert.deepEqual(await privateHistory(), { available: false })
 
@@ -1862,8 +1864,8 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.deepEqual(replayed.arms.map(arm => [arm.id, arm.sessionId, arm.status]),
       [['baseline', lower.sessionId, 'complete'], ['rematch', replay.sessionId, 'complete']])
     assert.deepEqual(replayed.evidenceOutcome, { arms: [
-      { id: 'baseline', choices: ['降级推荐'], deliverables: replayed.arms[0].deliverables, canPreserve: false },
-      { id: 'rematch', choices: [], deliverables: replayed.arms[1].deliverables, canPreserve: false },
+      { id: 'baseline', choices: ['降级推荐'], deliverables: replayed.arms[0].deliverables, canPreserve: false, lessonTaskSource: source },
+      { id: 'rematch', choices: [], deliverables: replayed.arms[1].deliverables, canPreserve: false, lessonTaskSource: directSource },
     ] })
     assert.deepEqual(replayed.evidenceOutcome.arms.map(arm => arm.deliverables.map(item => item.name)),
       [['qualified-handoff.md'], ['direct-handoff.md']])
@@ -1895,6 +1897,83 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const { workspaceId: nativeWorkspaceId } = registered.result.value.workspace
     assert.deepEqual((await invoke('lesson-task-options', qualifiedSource)).workspaceIds, [nativeWorkspaceId])
     assert.deepEqual((await invoke('lesson-task-options', confirmedSource)).workspaceIds, [nativeWorkspaceId])
+    const directChoice = await invoke('lesson-task-options', directSource)
+    assert.deepEqual(directChoice.workspaceIds, [nativeWorkspaceId])
+    assert.equal(directChoice.source.sessionId, replay.sessionId)
+    assert.equal(directChoice.source.publicEvidenceReplay, true)
+    await invoke('lesson-task-options', { ...directSource, arm: 'baseline' }, 422)
+    await invoke('lesson-task-materials', { ...directSource, workspaceId: replayNative.workspaceId }, 422)
+    await invoke('lesson-task-materials', { ...directSource, workspaceId: baseNative.workspaceId }, 422)
+
+    const ownFolder = '证据 材料'
+    const ownFilename = '设备 台账.md'
+    const ownMaterial = ownFolder + '/' + ownFilename
+    const ownPath = join(plainPath, ownMaterial)
+    const ownContent = '# Studio equipment ledger\n\nVerified: two spare radios.\n'
+    await mkdir(join(plainPath, ownFolder))
+    await writeFile(ownPath, ownContent)
+    const selection = { workspaceId: nativeWorkspaceId, material: ownMaterial,
+      task: '根据台账核对两台备用对讲机，以及交班消息提到的一台备用充电器。准备一份交接说明。' }
+    const evidenceTask = await invoke('lesson-task-preview', { ...qualifiedSource, ...selection })
+    const directTask = await invoke('lesson-task-preview', { ...directSource, ...selection })
+    assert.deepEqual(directTask.source, directChoice.source)
+    assert.equal(directTask.task, evidenceTask.task)
+    assert.ok(directTask.task.includes(selection.task) && !directTask.task.includes(material))
+    assert.deepEqual(evidenceTask.gear.map(item => item.id).sort(), ['evidence', 'present'])
+    assert.deepEqual(directTask.gear.map(item => item.id), ['present'])
+    const directOpen = { ...directSource, ...selection, token: directTask.token, launchId: '3'.repeat(32) }
+    await invoke('lesson-task-open', { ...directOpen, token: evidenceTask.token }, 422)
+    await appendFile(ownPath, '\nChanged after review.\n')
+    await invoke('lesson-task-open', directOpen, 422)
+    await writeFile(ownPath, ownContent)
+
+    const ownEvidence = await invoke('lesson-task-open', {
+      ...qualifiedSource, ...selection, token: evidenceTask.token, launchId: '2'.repeat(32),
+    })
+    const ownDirect = await invoke('lesson-task-open', directOpen)
+    for (const [opened, native] of [[ownEvidence, baseNative], [ownDirect, replayNative]]) {
+      const prepared = await history(opened.sessionId)
+      assert.equal(prepared.presetId, native.presetId)
+      assert.notEqual(prepared.workspaceId, native.workspaceId)
+      assert.equal(prepared.workspaceId, nativeWorkspaceId)
+      assert.equal(prepared.inherited, 0)
+      assert.ok(!prepared.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    }
+
+    const ownEvidenceTurn = send(ownEvidence)
+    ownEvidenceTurn.catch(() => {})
+    let ownQuestion
+    try {
+      for (let attempt = 0; attempt < 100 && !ownQuestion; attempt++) {
+        ownQuestion = (await host.request(questions, { sessionId: ownEvidence.sessionId })).question
+        if (!ownQuestion) await delay(40)
+      }
+      assert.deepEqual(ownQuestion?.options.map(item => item.label), ['继续补证', '降级推荐', '暂缓提交'])
+    } finally {
+      if (ownQuestion) await host.request(questions, { sessionId: ownEvidence.sessionId, choice: '降级推荐' })
+      await ownEvidenceTurn
+    }
+    await send(ownDirect)
+    const ownEvidenceNative = await history(ownEvidence.sessionId)
+    const ownDirectNative = await history(ownDirect.sessionId)
+    assert.deepEqual(tools(ownEvidenceNative).map(event => event.data.name), ['read', 'ask_user_question', 'write', 'present'])
+    assert.deepEqual(tools(ownDirectNative).map(event => event.data.name), ['read', 'write', 'present'])
+    assert.equal(provider(ownDirectNative), provider(ownEvidenceNative))
+    assert.deepEqual(files(ownEvidenceNative).map(item => item.path), [join(ownEvidenceNative.workspacePath, 'qualified-handoff.md')])
+    assert.deepEqual(files(ownDirectNative).map(item => item.path), [join(ownDirectNative.workspacePath, 'direct-handoff.md')])
+    assert.match(await readFile(join(ownDirectNative.workspacePath, 'direct-handoff.md'), 'utf8'), /two spare radios/u)
+    const directResult = await invoke('lesson-task-result', { sessionId: ownDirect.sessionId, review: true })
+    assert.deepEqual(directResult.deliverables.map(({ name, turn }) => [name, turn]), [['direct-handoff.md', 1]])
+    assert.ok(Number.isSafeInteger(directResult.deliverables[0].seq))
+    assert.equal(directResult.materialState, 'verified')
+    assert.equal(directResult.canReview, true)
+    assert.equal(directResult.source.publicEvidenceReplay, true)
+    assert.deepEqual(directResult.draft.equipmentIds, ['present'])
+    assert.equal(directResult.rematchSource, undefined)
+    assert.equal(directResult.rebaseline, undefined)
+    assert.deepEqual(await privateHistory(), { available: false })
+    assert.equal(await readFile(ownPath, 'utf8'), ownContent)
+    assert.deepEqual(await readReplay(), replayed)
     const plain = await host.request('/api/loadout-fixture-session', { presetId: 'standard', workspacePath: plainPath })
     assert.equal(plain.workspaceId, nativeWorkspaceId)
     await send({ sessionId: plain.sessionId, task: gather.task })
