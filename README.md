@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.86.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.87.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -54,6 +54,12 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 1. After a Standard Mode direct delivery run actually delivers your selected file, open **Try one gear change** from its task result. **Try Delivery Review** appears when the original material is still verified and the review gear can be added while keeping the original delivery tool and source.
 2. Choose **Try Delivery Review** to preview adding just that piece of gear. Review the changes, then choose **Open rematch session** and manually send the same task in DSH.
 3. Compare the original delivery with the rematch. The rematch records what you chose on the DSH question card. A successful delivery after approval shows its actual attachment. If you request changes, check the recorded choice and whether a file was delivered in the rematch.
+
+## Try direct delivery after a reviewed run
+
+1. On a verified personal run with **Delivery Review**, open **Try one gear change**. A personal task or its first review rematch can offer **Try direct delivery** once DSH has recorded your choice and actually delivered the selected file. The original material and delivery source must still be verifiable.
+2. Choose **Try direct delivery** to preview removing just Delivery Review. Check the change, then choose **Open rematch session** and manually send the same task.
+3. Compare the recorded choice and attachment in the reviewed run with the actual calls, choices, and files in the new run. Open either source session to inspect the result, then decide whether you want review for future handoffs.
 
 ## Try one gear change
 
