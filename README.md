@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.116.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.117.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -30,6 +30,8 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 1. In the lobby's **Armory**, choose **Try both heroes**. You can also open it from **Standard** or **Minimal** in **Hero gallery**. Both supported stock presets need to be active in your profile.
 2. Choose **Openable original** or **Verifiable text summary**, then **Open Standard session** or **Open Minimal session** on the corresponding illustration. This opens one DSH draft. Review and manually send the prepared task.
 3. Choose **View the hero trial** from the session or **Continue the last trial** from the lobby. Open the other hero when ready. The two sessions use the same task and separate copies of the same bundled card. Compare actual replies and attachments, and open either source session to see the full result.
+
+[Hero selection](docs/media/lighthouse-choose-en.webp) · [Recorded handoff comparison](docs/media/lighthouse-results-en.webp)
 
 ### Share the hero trial
 

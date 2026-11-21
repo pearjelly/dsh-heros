@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.116.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.117.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -30,6 +30,8 @@ dsh web
 1. 在大厅的 **装备库** 点 **英雄同题试玩**，也可以从 **英雄图鉴** 的 **标准模式** 或 **极简模式** 进入。试玩需要当前 Profile 已启用这两个受支持的原装预设。
 2. 先选 **可打开的原件** 或 **可核对的文字摘要**，再从立绘卡片点 **打开标准模式会话** 或 **打开极简模式会话**。选中后只开这一局 DSH 草稿，检查并手动发送准备好的任务。
 3. 从会话点 **查看试玩对照**，也可从大厅点 **继续上一次试玩**。准备好时再开另一位英雄的会话。两局用同一道题和各自的内置补给卡副本，可核对实际回复和附件并打开各自的原会话。
+
+[英雄选择截图](docs/media/lighthouse-choose-zh.webp) · [实际交付对照截图](docs/media/lighthouse-results-zh.webp)
 
 ### 分享英雄试玩
 
