@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.87.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.88.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -60,6 +60,12 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 1. On a verified personal run with **Delivery Review**, open **Try one gear change**. A personal task or its first review rematch can offer **Try direct delivery** once DSH has recorded your choice and actually delivered the selected file. The original material and delivery source must still be verifiable.
 2. Choose **Try direct delivery** to preview removing just Delivery Review. Check the change, then choose **Open rematch session** and manually send the same task.
 3. Compare the recorded choice and attachment in the reviewed run with the actual calls, choices, and files in the new run. Open either source session to inspect the result, then decide whether you want review for future handoffs.
+
+## Keep the loadout you prefer after comparing results
+
+After a verified Standard Mode rematch on your own material that adds or removes **Delivery Review**, open the comparison and look for **Observed handoff results**. Each side shows your recorded DSH choices and whether it delivered the selected material, other files, or zero files. A same-named file in a different folder counts as another file. Use the original session links and call lists to inspect either run.
+
+Choose **Keep this loadout** on an eligible side. Check its original gear and sources, then choose **Save as a plan** and enter a name. You can start a new task from that plan with fresh material.
 
 ## Try one gear change
 
