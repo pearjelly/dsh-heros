@@ -186,8 +186,8 @@ export async function apply(ctx) {
           .map(block => block.text).join('\n')
         const foundEvidence = results[0]?.content.some(block => block.text?.includes(supportedFact))
         const hasEvidenceCheck = systemText.includes('If a material claim lacks evidence')
-        const replay = personalEvidence && evidenceGap && !hasEvidenceCheck
-        const asksFormat = replay && latestText.includes('交接格式') && tools?.some(tool => tool.name === 'ask_user_question')
+        const replay = evidenceGap && !hasEvidenceCheck && tools?.some(tool => tool.name === 'present')
+        const asksFormat = personalEvidence && replay && latestText.includes('交接格式') && tools?.some(tool => tool.name === 'ask_user_question')
         const title = personalEvidence ? 'Equipment handoff' : 'Lighthouse handoff'
         const file = replay ? 'direct-handoff.md' : evidenceGap ? 'qualified-handoff.md' : 'verified-handoff.md'
         sequence = ['read']

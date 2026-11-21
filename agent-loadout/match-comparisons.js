@@ -5,7 +5,7 @@ import { isAbsolute, join, relative, sep } from 'node:path'
 
 export const workspaceComparisonArms = ['direct', 'review']
 export const planComparisonArms = ['left', 'right']
-const rematchBaselineArms = { workspace: workspaceComparisonArms, plans: planComparisonArms, rematch: ['rematch'] }
+const rematchBaselineArms = { workspace: [...workspaceComparisonArms, 'evidence'], plans: planComparisonArms, rematch: ['rematch'] }
 export const comparisonIdValid = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id)
 export const materialProofRecord = 'plugin:dsh-agent-loadout/comparison-material'
 
@@ -71,7 +71,7 @@ export async function openMatchComparisons(directory, name, arms, saveEntry, war
     const id = launchRecordId(launchId)
     if (records.has(id)) return records.get(id)
     try {
-      const fields = await createFields()
+      const fields = await createFields(id)
       await saveEntry(recordDirectory, id, { ...fields, id, createdAt: Date.now() }, { exclusive: true })
     } catch (error) {
       if (error.code !== 'EEXIST') throw error
@@ -146,14 +146,16 @@ export function validRematchComparison(record) {
   const label = item => item && typeof item.id === 'string' && typeof item.name === 'string' && Boolean(item.name)
   const pinned = item => item && [item.presetId, item.heroId, item.heroName].every(value => typeof value === 'string' && Boolean(value)) &&
     /^[a-f0-9]{24}$/.test(item.identity)
+  const baselineEvidenceArm = baseline?.kind === 'workspace' && baseline.arm === 'evidence'
+  const evidenceRemoval = () => baseline.heroId === 'standard' && loadout.heroId === 'standard' &&
+    edit.removeId === 'evidence' && edit.addId === undefined && edit.sourceId === undefined
   return validWorkspaceComparison(record) && pinned(baseline) && pinned(loadout) &&
     validRematchReference(baseline) && (baseline.kind !== 'rematch' || baseline.comparisonId !== record.id) &&
     (baseline.kind !== 'personal' || baseline.sessionId === 'session-' + baseline.comparisonId) &&
     /^session-[a-f0-9]{32}$/.test(baseline.sessionId) && /^[a-f0-9]{64}$/.test(inputHash) && /^[a-f0-9]{64}$/.test(token) &&
     edit && change && (edit.addId !== undefined || edit.removeId !== undefined) &&
-    (baseline.evidenceReplay === undefined || (baseline.evidenceReplay === true && baseline.kind === 'personal' &&
-      baseline.heroId === 'standard' && loadout.heroId === 'standard' && edit.removeId === 'evidence' &&
-      edit.addId === undefined && edit.sourceId === undefined)) &&
+    (baseline.evidenceReplay === undefined || (baseline.evidenceReplay === true && baseline.kind === 'personal' && evidenceRemoval())) &&
+    (baselineEvidenceArm ? baseline.publicEvidenceReplay === true && evidenceRemoval() : baseline.publicEvidenceReplay === undefined) &&
     (edit.removeId === undefined ? change.removed === undefined : label(change.removed) && change.removed.id === edit.removeId) &&
     (edit.addId === undefined ? change.added === undefined : label(change.added) && change.added.id === edit.addId)
 }

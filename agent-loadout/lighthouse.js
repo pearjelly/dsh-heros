@@ -6,6 +6,7 @@ const supplyCard = '02-lighthouse.md'
 const openingId = /^[a-f0-9]{32}$/
 const rematchPrefix = 'lighthouse-rematch-'
 const evidencePrefix = 'lighthouse-evidence-'
+const evidenceReplayPrefix = 'lighthouse-evidence-replay-'
 export const lighthouseEvidenceScenarios = ['gap', 'confirmed']
 const cards = {
   '01-waystation.md': '# Mountain Waystation / 山口驿站\n\nCopper marker · Stone stairs\n\n铜色路标 · 补给在石阶旁\n',
@@ -78,6 +79,12 @@ export async function lighthouseEvidenceLesson(directory, registry, launchId, en
   return { workspace, material: supplyCard, task }
 }
 
+export const lighthouseEvidenceReplayDirectory = (directory, id) => join(directory, evidenceReplayPrefix + id)
+
+export function lighthouseEvidenceReplayWorkspace(directory, registry, id) {
+  return seedWorkspace(lighthouseEvidenceReplayDirectory(directory, id), registry, 'Lighthouse evidence replay · 灯塔证据复赛', true)
+}
+
 export const lighthouseArms = ['recon', 'delivery']
 
 export function lighthousePracticeContains(profileDataRoot, candidateCanonicalPath) {
@@ -85,7 +92,7 @@ export function lighthousePracticeContains(profileDataRoot, candidateCanonicalPa
   if (!path || path === '..' || path.startsWith('..' + sep) || isAbsolute(path)) return false
   const [folder, id, arm] = path.split(sep)
   return folder === 'lighthouse-supply-run' ||
-    [rematchPrefix, evidencePrefix].some(prefix => folder.startsWith(prefix) && openingId.test(folder.slice(prefix.length))) ||
+    [rematchPrefix, evidencePrefix, evidenceReplayPrefix].some(prefix => folder.startsWith(prefix) && openingId.test(folder.slice(prefix.length))) ||
     (folder === 'lighthouse-comparisons' && openingId.test(id) && lighthouseArms.includes(arm))
 }
 

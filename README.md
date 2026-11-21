@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.104.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.105.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -45,6 +45,12 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 1. Complete the public **Missing key evidence** exercise and open **View evidence run**. After the run passes verification, choose **Share a Lighthouse challenge** and copy the code. The code carries the packaged sample version and a portable recipe for the standard loadout. Your choices, results, and files stay in your own profile.
 2. To play a shared challenge, choose **Join a Lighthouse challenge** from the Lighthouse entry in the Armory and paste the code. After checking the sample and equipment sources, you can record your own optional opening choice and open a fresh session. Manually send the task and decide on the native DSH question card.
 3. If the sample and stock loadout match and only the source package versions differ, choose **Review the local Standard loadout**. Check the original DSH version alongside the gear and sources this session will actually use. You can then record an opening choice and manually send the task in a new DSH session. A missing stock source or a different loadout blocks this option, while exact matches continue to open from the original check.
+
+### Replay a public challenge with one gear change
+
+1. Finish a public **Missing key evidence** run with a recorded native choice. In **View evidence run**, choose **Replay without Evidence Check**, then **Review Evidence Check removal**. Check the one gear change and the retained Deliverable Preview source.
+2. Choose **Open rematch session** and manually send the identical task. The replay runs against a fresh copy of the same packaged sample. Each session keeps its own output files.
+3. In **Observed handoff results**, compare the choices and attachments actually recorded in each run and open either source session. Use the personal replay path above to build a history of evidence gear tested on your own files and keep a loadout there as a plan.
 
 ## Keep a loadout for next time
 
