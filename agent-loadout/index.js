@@ -3681,7 +3681,7 @@ export async function apply(ctx) {
     const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task, source }
     const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, proof])).digest('hex')
     signal?.throwIfAborted()
-    return { view, cwd, digest, draft, candidate, ecosystem, token, identity: loadoutIdentity(draft, candidate, ecosystem) }
+    return { view, cwd, digest, draft, candidate, ecosystem, token, identity: proof.identity }
   }
 
   function personalTaskTarget(launch, header) {
@@ -3716,8 +3716,10 @@ export async function apply(ctx) {
     const heroId = hero.id
     const preset = ecosystem.presets.find(item => item.id === heroId && !item.broken)
     if (!preset) throw new Error('当前英雄的基础阵容不可用。')
-    const { draft, candidate, identity: current } = await verifySavedPlan({ presetId, heroId }, ecosystem)
-    if (identity !== current) throw new Error('本机配置已变化，无法核对这局的原出装。')
+    const { draft, candidate, identity: current } = await verifiedPlanComparisonArm({ presetId, heroId }, ecosystem)
+    if (!matchesLessonIdentity(identity, current, draft, candidate, ecosystem)) {
+      throw new Error('本机配置已变化，无法核对这局的原出装。')
+    }
     const { kind, comparisonId, arm } = selection
     const baseline = { kind, comparisonId, arm, sessionId, presetId, heroId, heroName: hero.name, identity }
     const { title: workspaceTitle } = workspace
@@ -4055,7 +4057,7 @@ export async function apply(ctx) {
       const target = personalTaskTarget(launch, header)
       if (strict && !target) return
       const evidence = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
-        verifyMaterialProof: strict, verifyMaterialDelivery: true, includeWindows: !strict }, receipts)
+        verifyMaterialProof: strict, verifyMaterialDelivery: true, exactMessages: true, includeWindows: !strict }, receipts)
       return { launch, cwd, presetId, evidence, target }
     } finally {
       source[Symbol.dispose]()

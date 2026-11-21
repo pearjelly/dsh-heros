@@ -339,7 +339,7 @@ function activeComparisonQuestions(asks, body, live, projection) {
   })
 }
 
-function answeredComparisonTurns(events, after, asks, live, presetId, verifyMaterialProof) {
+function answeredComparisonTurns(events, after, asks, live, presetId, verifyMaterialProof, exactMessages) {
   const turns = []
   let start
   let linked = false
@@ -362,7 +362,7 @@ function answeredComparisonTurns(events, after, asks, live, presetId, verifyMate
     } else if (verifyMaterialProof && start !== undefined && event.type === materialProofRecord && event.ignorable === true &&
       event.data.turn === events[start].data.turn && Array.isArray(event.data.replies)) {
       proof = event.data
-    } else if (start !== undefined && event.type === 'user/message' && (event.surfaceOp === 'append' || !verifyMaterialProof)) {
+    } else if (start !== undefined && event.type === 'user/message' && (event.surfaceOp === 'append' || exactMessages)) {
       const { source } = event.data
       if (event.surfaceOp === 'append' && source.kind === 'user-question-reply' && asks.has(source.callId)) {
         linked = true
@@ -378,11 +378,11 @@ function answeredComparisonTurns(events, after, asks, live, presetId, verifyMate
       start = undefined
     }
   }
-  return { turns, continuationReason, running: live && start !== undefined && linked && !unrelated && (verifyMaterialProof || !reason) }
+  return { turns, continuationReason, running: live && start !== undefined && linked && !unrelated && (!exactMessages || !reason) }
 }
 
 export async function comparisonEvidence(source, { cwd, presetId, task, material, verifyMaterialDelivery,
-  verifyMaterialProof = true, includeWindows }, receipts) {
+  verifyMaterialProof = true, exactMessages = !verifyMaterialProof, includeWindows }, receipts) {
   const unavailable = reason => ({ status: 'unavailable', reason })
   if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
     return unavailable('session-unavailable')
@@ -398,11 +398,11 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     body.some(event => event.type === 'agent-preset/selected' && event.data.agentPreset !== presetId)) {
     return unavailable('changed-loadout')
   }
-  const messages = body.filter(event => event.type === 'user/message' && (event.surfaceOp === 'append' || !verifyMaterialProof) &&
-    event.data.source.kind === 'user')
+  const messages = body.filter(event => event.type === 'user/message' && (event.surfaceOp === 'append' || exactMessages) &&
+    (event.data.source.kind === 'user' || (exactMessages && event.data.source.kind === 'agent-message')))
   const content = messages[0]?.data.content
-  if (messages.length && (messages.length !== 1 || messages[0].surfaceOp !== 'append' || content?.length !== 1 ||
-    content[0].type !== 'text' || content[0].text !== task)) {
+  if (messages.length && (messages.length !== 1 || messages[0].surfaceOp !== 'append' || messages[0].data.source.kind !== 'user' ||
+    content?.length !== 1 || content[0].type !== 'text' || content[0].text !== task)) {
     return unavailable('changed-task')
   }
   const live = source.source === 'live'
@@ -426,10 +426,10 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     .map(event => [event.data.callId, event]) : [])
   const projection = source.projections?.values.userQuestions
   const pendingQuestions = activeComparisonQuestions(asks, body, live && end < 0, projection)
-  const followUps = end >= 0 && asks.size ? answeredComparisonTurns(events, end + 1, asks, live, presetId, verifyMaterialProof) : { turns: [] }
+  const followUps = end >= 0 && asks.size ? answeredComparisonTurns(events, end + 1, asks, live, presetId, verifyMaterialProof, exactMessages) : { turns: [] }
   const turns = [[start, end], ...followUps.turns]
   // A settled projection includes replies outside the accepted turns. Only use linked replies in this task.
-  const replies = !verifyMaterialProof && new Set(turns.flatMap(([from, finish]) => finish < 0 ? []
+  const replies = exactMessages && new Set(turns.flatMap(([from, finish]) => finish < 0 ? []
     : events.slice(from + 1, finish).flatMap(event => event.type === 'user/message' && event.surfaceOp === 'append' &&
       event.data.source.kind === 'user-question-reply' ? [event.data.source.callId] : [])))
   const settled = new Map((projection?.settled ?? []).filter(entry => asks.has(entry.callId) && (!replies || replies.has(entry.callId)))
@@ -456,7 +456,7 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
       if (type !== 'tool') continue
       const answer = name === 'ask_user_question' && settled.get(events[seq]?.data.callId)
       const selected = answer && answer.flatMap(item => item.selected ?? []).filter(label => typeof label === 'string' && label.length <= 200)
-      const linkedReply = !verifyMaterialProof && selected?.length && state === 'unfinished'
+      const linkedReply = exactMessages && selected?.length && state === 'unfinished'
       entries.push({ type, name, state: linkedReply ? 'completed' : state, sourceNames, choices: selected?.length ? selected : choices, nested })
     }
   }
