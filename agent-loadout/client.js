@@ -512,7 +512,7 @@ window.__ModuleLoader__.load({
     }
 
     function HeroGallery({ presets, items, roles, current, initialHero, initialEquipment, gear, sources, currentDraft, baseOnly, request, signatureRules, onSignature,
-      onRegistered, onClose, onSelect, onInspectGear, onOpenMatch, onPrepareRound, onPrepareDelivery, heroTrialAvailable, onOpenTrial, workspaces }) {
+      onRegistered, onClose, onSelect, onInspectGear, onOpenMatch, onPrepareRound, onPrepareDelivery, trialHeroes, onOpenTrial, workspaces }) {
       const [query, setQuery] = useState('')
       const [role, setRole] = useState('')
       const [choice, setChoice] = useState(initialHero ?? current)
@@ -620,7 +620,7 @@ window.__ModuleLoader__.load({
                           h('dd', null, h('ul', null, group.map(item =>
                             h('li', { key: item.id }, h(ItemArt, { item }), h('span', null, item.name)))))))),
                   hero.id !== current && h(HeroSwitchPreview, { hero, currentDraft, baseOnly, change, sources, request }),
-                  heroTrialAvailable && heroTrialHeroes.some(item => item.id === hero.id) && h('div', { className: 'moba-gallery-comparison' },
+                  trialHeroes.length === 2 && trialHeroes.some(item => item.id === hero.id) && h('div', { className: 'moba-gallery-comparison' },
                     h('button', { ref: trialButton, className: 'moba-roster-open', type: 'button', 'aria-haspopup': 'dialog',
                       onClick: () => setTrialOpen(true) }, t(heroTrialTitle)),
                     h('p', null, t('让标准模式和极简模式处理同一张补给卡，看看哪种交付适合接班人。'))),
@@ -647,7 +647,7 @@ window.__ModuleLoader__.load({
               close()
               if (hero.id !== current) onSelect(hero.id)
             } }, hero?.id === current ? t('返回当前阵容') : t('选择英雄'), h(Glyph, { kind: 'arrow', size: 17 }))))),
-        trialOpen && h(HeroTrial, { request, workspaces, onClose: () => {
+        trialOpen && h(HeroTrial, { request, workspaces, firstHeroes: trialHeroes, onClose: () => {
           setTrialOpen(false)
           requestAnimationFrame(() => trialButton.current?.focus())
         }, onVisit: (sessionId, task) => { close(); onOpenTrial(sessionId, task) } }))
@@ -1484,7 +1484,7 @@ window.__ModuleLoader__.load({
                 h('p', { className: 'moba-lighthouse-note' }, t(evidenceScenarios[0].note)),
                 h(EvidenceOpeningChoice, { value: openingChoice, disabled: Boolean(busy), onChange: setOpeningChoice }))),
             canOpen && (heroTrial ? h(Fragment, null,
-              h(HeroTrialFirstHero, { heroes: firstHeroes, disabled: Boolean(busy), onChoose: start }),
+              h(HeroTrialFirstHero, { heroes: firstHeroes, need: need?.id, disabled: Boolean(busy), onChoose: start }),
               h('p', { className: 'moba-starter-note', role: busy === 'start' ? 'status' : undefined },
                 t(busy === 'start' ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。')))
               : h('p', { className: 'moba-starter-note' }, t('手动发送练习任务。如果出现证据取舍卡，请在会话里选择。')))),
@@ -1658,8 +1658,10 @@ window.__ModuleLoader__.load({
     const standardTrialTaskLabel = '用标准模式做自己的任务'
     const minimalDeliveryReplayLabel = '给极简模式装上交付物预览'
     const heroTrialNeeds = [
-      { id: 'original', icon: 'report', name: '可打开的原件', note: '接班人要在会话里打开原件核对。' },
-      { id: 'summary', icon: 'report', name: '可核对的文字摘要', note: '接班人只要拿到补给卡的要点。' },
+      { id: 'original', icon: 'report', name: '可打开的原件', note: '接班人要在会话里打开原件核对。',
+        heroHints: { standard: '可附上原件', minimal: '先交文字。可在复赛加装交付物预览。' } },
+      { id: 'summary', icon: 'report', name: '可核对的文字摘要', note: '接班人只要拿到补给卡的要点。',
+        heroHints: { standard: '可写摘要，也可附上原件', minimal: '可从终端读取并写摘要' } },
     ]
     const heroTrialHeroes = [
       { id: 'standard', icon: 'report', name: '标准模式', open: '打开标准模式会话', visit: '查看标准模式原会话',
@@ -1672,13 +1674,17 @@ window.__ModuleLoader__.load({
       note: '同一位英雄，只加一件交付物预览。',
     }
 
-    function HeroTrialFirstHero({ heroes = heroTrialHeroes, disabled, onChoose }) {
+    function HeroTrialFirstHero({ heroes = heroTrialHeroes, need, disabled, onChoose }) {
+      const heroHints = heroTrialNeeds.find(item => item.id === need)?.heroHints
       return h('fieldset', { className: 'moba-hero-trial-picks', disabled },
         h('legend', null, t('选一位英雄先开局')),
-        heroes.map(hero => h('button', { key: hero.id, type: 'button', className: 'moba-hero-trial-pick',
-          'aria-label': t(hero.open), 'aria-description': t(hero.choiceNote), onClick: () => onChoose(hero.id) },
-          h(HeroArt, { id: hero.id, art: hero.art, className: 'moba-starter-hero' }),
-          h('span', null, h('strong', null, t(hero.name)), h('small', null, t(hero.choiceNote))))))
+        heroes.map(hero => {
+          const hint = t(heroHints?.[hero.id] ?? hero.choiceNote)
+          return h('button', { key: hero.id, type: 'button', className: 'moba-hero-trial-pick',
+            'aria-label': t(hero.open), 'aria-description': hint, onClick: () => onChoose(hero.id) },
+            h(HeroArt, { id: hero.id, art: hero.art, className: 'moba-starter-hero' }),
+            h('span', null, h('strong', null, t(hero.name)), h('small', null, hint)))
+        }))
     }
 
     function HeroTrialResult({ arm }) {
@@ -1944,7 +1950,7 @@ window.__ModuleLoader__.load({
       }
 
       function start(firstArm) {
-        if (!need) return
+        if (!need || !firstHeroes?.some(hero => hero.id === firstArm)) return
         return launch(async () => {
           const action = 'hero-trial-create'
           if (!launchIds.current.has(need)) {
@@ -1955,7 +1961,7 @@ window.__ModuleLoader__.load({
           launchIds.current.delete(need)
           setBoard(created)
           try {
-            if (firstArm) await openArm(created.id, firstArm)
+            await openArm(created.id, firstArm)
           } finally {
             setActiveId(created.id)
           }
@@ -2037,7 +2043,7 @@ window.__ModuleLoader__.load({
         className: setup ? 'moba-starter-dialog' : 'moba-lighthouse-comparison',
         initialFocus: setup ? 'input[type="radio"]' : value ? focusSelector : 'h2',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!busy) onClose() }) },
-        setup ? h('form', { onSubmit: event => { event.preventDefault(); if (!firstHeroes) start() } },
+        setup ? h(Fragment, null,
           h('p', null, t('同一张内置补给卡，两种交接。先为接班人选好交付要求。')),
           h('fieldset', { className: 'moba-starter-routes', disabled: busy },
             h('legend', null, t('接班人需要什么？')),
@@ -2045,15 +2051,13 @@ window.__ModuleLoader__.load({
               h('input', { type: 'radio', name: group, required: true, value: item.id, checked: need === item.id,
                 onChange: event => setNeed(event.currentTarget.value) }),
               h('span', null, h('strong', null, h(Glyph, { kind: item.icon, size: 16 }), t(item.name)), h('small', null, t(item.note)))))),
-          firstHeroes && h(HeroTrialFirstHero, { heroes: firstHeroes, disabled: busy || !need, onChoose: start }),
-          firstHeroes && busy && h('p', { role: 'status' }, t('正在打开试玩会话…')),
+          h(HeroTrialFirstHero, { heroes: firstHeroes, need, disabled: busy || !need, onChoose: start }),
+          busy && h('p', { role: 'status' }, t('正在打开试玩会话…')),
           error && h('p', { role: 'alert', className: 'moba-alert' }, error),
           h('div', { className: 'moba-install-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-text', disabled: busy, onClick: onClose }, t(backLabel)),
             latest?.id && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
-              onClick: () => { setBoard(latest); setError(''); setActiveId(latest.id) } }, t('继续上一次试玩')),
-            !firstHeroes && h('button', { type: 'submit', className: 'moba-start', disabled: busy || !need },
-              t(busy ? '正在准备试玩…' : '开始同题试玩'), h(Glyph, { kind: 'arrow', size: 16 }))))
+              onClick: () => { setBoard(latest); setError(''); setActiveId(latest.id) } }, t('继续上一次试玩'))))
           : h(Fragment, null,
             value ? h(Fragment, null,
               h('p', { ref: heading, tabIndex: -1, 'data-hero-trial-results': true }, h('strong', null, t('接班人需要什么？')), ' ',
@@ -7339,7 +7343,7 @@ window.__ModuleLoader__.load({
               saved: value.saved.map(item => item.baseId === id ? { ...item, heroSignature: signature } : item) })),
             onClose: () => setGalleryOpen(false), onSelect: changePreset, onInspectGear: inspectGalleryEquipment,
             onOpenMatch: openSource, onPrepareRound: prepareHeroRound,
-            heroTrialAvailable: data?.heroTrialAvailable === true, onOpenTrial: openDraftSession, workspaces: comparableWorkspaces,
+            trialHeroes, onOpenTrial: openDraftSession, workspaces: comparableWorkspaces,
             onPrepareDelivery: pending || !canCompare ? undefined : prepareHeroDelivery }),
           flagsOpen && h(FlagCollection, { request, heroId: stagePreset?.id, initialFlagId: flagsOpen.id, onClose: () => setFlagsOpen(null),
             onDisplay: () => setLoadAttempt(attempt => attempt + 1), onOpenMatch: openSource, onPrepare: applyFlagLoadout }),
@@ -10834,6 +10838,9 @@ window.__ModuleLoader__.load({
       .moba-hero-trial-pick small { color: var(--muted); font-size: 11px; line-height: 1.35; }
       .moba-hero-trial-pick:hover:not(:disabled) { border-color: var(--gold); background: #273840; }
       .moba-hero-trial-pick:disabled { border-color: var(--line); background: #161c27; opacity: .85; }
+      @media (max-width: 360px) {
+        .moba-hero-trial-pick { grid-template-columns: minmax(0, 1fr); align-content: start; }
+      }
       .moba-starter-actions { flex-wrap: wrap; }
       .moba-starter-actions .moba-roster-open { min-height: 44px; }
       .moba-playbook-button { border-color: #677d70; background: #182c2a; color: #bfe3d5 !important; }

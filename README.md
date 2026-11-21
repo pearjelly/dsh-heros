@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.118.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.119.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -27,8 +27,8 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 
 ## Try two heroes on the same task
 
-1. In the lobby's **Armory**, choose **Try both heroes**. You can also open it from **Standard** or **Minimal** in **Hero gallery**. Both supported stock presets need to be active in your profile.
-2. Choose **Openable original** or **Verifiable text summary**, then **Open Standard session** or **Open Minimal session** on the corresponding illustration. This opens one DSH draft. Review and manually send the prepared task.
+1. Choose **Lighthouse hero trial** from the lobby's **Armory** or from **Standard** or **Minimal** in **Hero gallery**. Both supported stock presets need to be active in your profile.
+2. Choose **Openable original** or **Verifiable text summary**. For an original, Standard can attach the file and Minimal can hand off text, with Deliverable Preview available for a replay. For a summary, both can write one, and Minimal reads the card in the terminal. Choose **Open Standard session** or **Open Minimal session** to open that hero’s DSH draft. Review and manually send the prepared task.
 3. Choose **View the hero trial** from the session or **Continue the last trial** from the lobby. Open the other hero when ready. The two sessions use the same task and separate copies of the same bundled card. Compare actual replies and attachments, and open either source session to see the full result.
 
 [Hero selection](docs/media/lighthouse-choose-en.webp) · [Recorded handoff comparison](docs/media/lighthouse-results-en.webp)
@@ -36,7 +36,7 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 ### Share the hero trial
 
 1. After one stock hero finishes a verified round, choose **Share hero trial**. **Copy challenge invitation** lets you ask a friend which hero they would pick for the same supply card. You can also copy the code alone. The code identifies the public sample version and task language and carries the handoff need. Your replies, files, and workspaces stay in your profile.
-2. In the Armory's Lighthouse section, choose **Join a Lighthouse challenge** and paste the whole message or a raw code into **Challenge invitation or code**. The plugin extracts one distinct supported code locally. If your paste contains different codes, keep the one you want to check. Choose **Check challenge code**, read the original task and handoff need, then choose your first hero and manually send the task in DSH. The same entry accepts shared Lighthouse evidence challenges.
+2. In the Armory's Lighthouse section, choose **Join a Lighthouse challenge** and paste the whole message or a raw code into **Challenge invitation or code**. The plugin extracts one distinct supported code locally. If your paste contains different codes, keep the one you want to check. Choose **Check challenge code**, read the original task, handoff need, and what each hero can deliver, then choose your first hero and manually send the task in DSH. The same entry accepts shared Lighthouse evidence challenges.
 
 ### Compare a friend's trial report
 
