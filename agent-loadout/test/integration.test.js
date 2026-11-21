@@ -2594,11 +2594,17 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.deepEqual(replayed.arms.map(arm => [arm.id, arm.sessionId, arm.status]),
       [['baseline', lower.sessionId, 'complete'], ['rematch', replay.sessionId, 'complete']])
     assert.deepEqual(replayed.evidenceOutcome, { arms: [
-      { id: 'baseline', choices: ['降级推荐'], deliverables: replayed.arms[0].deliverables, canPreserve: false, lessonTaskSource: source },
-      { id: 'rematch', choices: [], deliverables: replayed.arms[1].deliverables, canPreserve: false, lessonTaskSource: directSource },
+      { id: 'baseline', sessionId: lower.sessionId, choices: ['降级推荐'], deliverables: replayed.arms[0].deliverables,
+        canPreserve: false, lessonTaskSource: source },
+      { id: 'rematch', sessionId: replay.sessionId, choices: [], deliverables: replayed.arms[1].deliverables,
+        canPreserve: false, lessonTaskSource: directSource },
     ] })
-    assert.deepEqual(replayed.evidenceOutcome.arms.map(arm => arm.deliverables.map(item => item.name)),
-      [['qualified-handoff.md'], ['direct-handoff.md']])
+    for (const [index, native, name] of [[0, baseNative, 'qualified-handoff.md'], [1, replayNative, 'direct-handoff.md']]) {
+      const offered = replayed.evidenceOutcome.arms[index]
+      const delivered = native.events.find(event => event.type === 'deliverables/presented')
+      assert.deepEqual(offered.deliverables, [{ name, turn: 1, seq: delivered.seq, index: 0 }])
+      assert.equal(replayed.arms[index].windows, undefined)
+    }
     assert.deepEqual(await privateHistory(), { available: false })
     assert.deepEqual((await invoke('comparison-history', { scope: 'evidence-replays' })).items, [])
     const publicHistory = (await invoke('comparison-history', { kind: 'rematch' })).items.find(item => item.id === replay.id)

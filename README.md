@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.125.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.126.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -85,7 +85,7 @@ After **Minimal + Deliverable Preview** delivers the original sample card and pa
 
 1. Finish a public **Missing key evidence** run with a recorded native choice. Choose **Replay without Evidence Check** from that conversation or its evidence record, then **Review Evidence Check removal**. Check the one gear change and the retained Deliverable Preview source.
 2. Choose **Open rematch session** and manually send the identical task. The replay runs against a fresh copy of the same packaged sample. Each session keeps its own output files.
-3. In **Observed handoff results**, compare the choices and attachments recorded in each run. Open either source conversation to see what happened. When a side is ready to carry forward, choose **Use this loadout on my task** on that side.
+3. In **Observed handoff results**, open each actual delivered file or its original conversation and compare the recorded choices. Apply the side you want with **Use Evidence Check on my task** or **Use direct delivery on my task**.
 4. Select or add your own material folder, pick a file, and write a new task. Review the equipment and its sources, then manually send the task in a new DSH conversation.
 
 ## Keep a loadout for next time

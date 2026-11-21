@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.125.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.126.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -85,7 +85,7 @@ dsh web
 
 1. 完成公开的 **关键证据缺失** 练习，在原生提问卡留下选择。从原会话或取舍记录点 **卸下证据核验再试一局**，再点 **核对卸下证据核验**，确认只改一件装备，并保留交付物预览的原来源。
 2. 点 **打开换装会话**，在新的 DSH 会话里手动发送原任务。复赛使用同一份内置样例的新副本，两局各自生成和交付文件。
-3. 在 **两局实测结果** 核对实际记录的选择和附件，也可以打开各自的原会话。选中已有实战依据的一侧，点 **用这套出装做自己的任务**。
+3. 在 **两局实测结果** 打开各局实际交付的文件，也可回到各自的原会话。对照记录的选择和交付，再点 **带证据核验做自己的任务** 或 **用直接交付出装做自己的任务**。
 4. 选择或添加自己的材料文件夹，选好文件，填写新任务。核对装备和来源后，在新的 DSH 会话手动发送。
 
 ## 挑一套留到下次

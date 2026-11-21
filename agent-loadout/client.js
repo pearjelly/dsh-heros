@@ -2242,25 +2242,29 @@ window.__ModuleLoader__.load({
         })))
     }
 
-    function EvidenceOutcomeSummary({ outcome, onPreserve, publicReplay, onLessonTask, busy }) {
+    function EvidenceOutcomeSummary({ outcome, onPreserve, publicReplay, onLessonTask, onVisit, busy }) {
       const heading = useId()
       return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading },
-        h('h3', { id: heading }, t(publicReplay ? '两局实测结果' : '挑一套留到下次')),
-        onLessonTask && outcome.arms.some(arm => arm.lessonTaskSource) &&
-          h('p', { className: 'moba-lighthouse-note' }, t('带哪套出装去做自己的任务？')),
+        h('h3', { id: heading, tabIndex: publicReplay ? -1 : undefined, 'data-public-evidence-outcome': publicReplay || undefined },
+          t(publicReplay ? '两局实测结果' : '挑一套留到下次')),
         h('div', { className: 'moba-lighthouse-arms' }, outcome.arms.map(arm => {
           const label = comparisonArmName(comparisonArmConfig('rematch', arm.id, true), arm)
+          const name = t(arm.id === 'baseline' ? '带证据核验做自己的任务' : '用直接交付出装做自己的任务')
           return h('section', { key: arm.id, className: 'moba-lighthouse-arm', 'aria-label': label },
             h('h4', null, label),
             h(ObservedChoiceSummary, { choices: arm.choices }),
-            arm.deliverables.length > 0 ? h('div', { className: 'moba-lighthouse-artifacts' },
-              h('h5', null, t('交付文件') + ' · ' + arm.deliverables.length),
-              h('ul', null, arm.deliverables.map((file, index) => h('li', { key: index }, file.name))))
+            arm.deliverables.length > 0 ? publicReplay
+              ? h(LessonTaskFiles, { files: arm.deliverables, sessionId: arm.sessionId, headingTag: 'h5' })
+              : h('div', { className: 'moba-lighthouse-artifacts' },
+                h('h5', null, t('交付文件') + ' · ' + arm.deliverables.length),
+                h('ul', null, arm.deliverables.map((file, index) => h('li', { key: index }, file.name))))
               : h('p', { className: 'moba-lighthouse-note' }, t('本局没有交付文件。')),
-            arm.lessonTaskSource && onLessonTask && h('footer', null,
+            publicReplay && h('footer', null,
+              arm.sessionId && onVisit && h('button', { type: 'button', className: 'moba-text', disabled: busy,
+                'aria-label': t('查看原会话') + ' · ' + label, onClick: () => onVisit(arm.sessionId) }, t('查看原会话')),
+              arm.lessonTaskSource && onLessonTask &&
               h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, 'aria-haspopup': 'dialog',
-                'data-lesson-task-arm': arm.id, 'aria-label': t(lessonTaskLabel) + ' · ' + label,
-                onClick: () => onLessonTask(arm) }, t(lessonTaskLabel))),
+                'data-lesson-task-arm': arm.id, onClick: () => onLessonTask(arm) }, name)),
             arm.canPreserve && onPreserve && h('footer', null,
               h('button', { type: 'button', className: 'moba-roster-open', 'data-evidence-preserve': arm.id,
                 'aria-label': t('保留这套出装') + ' · ' + label, onClick: () => onPreserve(arm.id) }, t('保留这套出装'))))
@@ -2749,7 +2753,7 @@ window.__ModuleLoader__.load({
       const handoff = kind === 'rematch' && !evidenceReplay ? value?.handoffOutcome : undefined
       const evidenceOutcome = evidenceReplay && !testedSourceArm ? value?.evidenceOutcome : undefined
       const evidenceSummary = evidenceOutcome && h(EvidenceOutcomeSummary, { outcome: evidenceOutcome, publicReplay: publicEvidenceReplay,
-        busy: Boolean(launch), onLessonTask: publicEvidenceReplay ? arm => setLessonTask({ id: arm.id,
+        busy: Boolean(launch), onVisit, onLessonTask: publicEvidenceReplay ? arm => setLessonTask({ id: arm.id,
           lessonTaskSource: arm.lessonTaskSource, publicReplay: true }) : undefined,
         onPreserve: publicEvidenceReplay ? undefined : arm => setReuse({ id: value.id, arm, evidence: true }) })
       const retestOutcome = kind === 'plans' ? value?.evidenceRetestOutcome : undefined
@@ -2766,7 +2770,8 @@ window.__ModuleLoader__.load({
       const previous = kind === 'rematch' && canViewPrevious(value?.previous) ? value.previous : null
       const retestSource = retestOutcome && canViewPrevious(retestOutcome.source) ? retestOutcome.source : undefined
       const focusSelector = focusPrevious && (previous || retestSource) ? '[data-comparison-previous]'
-        : value?.arms.some(arm => arm.id === focusArm) ? `[data-comparison-arm="${focusArm}"]` : ''
+        : value?.arms.some(arm => arm.id === focusArm) ? `[data-comparison-arm="${focusArm}"]`
+          : publicEvidenceReplay && evidenceOutcome ? '[data-public-evidence-outcome]' : ''
       const workspaceId = workspaces.some(item => item.workspaceId === selectedWorkspaceId) ? selectedWorkspaceId : ''
       const defaultBrief = value?.defaultTask ?? t('根据这份材料准备一份可交接的成果，简要说明重点，并按当前交付流程处理。')
       const brief = customBrief ?? defaultBrief
@@ -2868,7 +2873,8 @@ window.__ModuleLoader__.load({
         setChallengeShareId('')
       } })
 
-      return h(InstallDialog, { title: t(comparisonTitle(kind, lessonMarker, evidenceReplay, publicEvidenceReplay)), className: 'moba-lighthouse-comparison', busy: Boolean(launch),
+      return h(InstallDialog, { title: t(comparisonTitle(kind, lessonMarker, evidenceReplay, publicEvidenceReplay)),
+        className: 'moba-lighthouse-comparison' + (publicEvidenceReplay ? ' moba-public-evidence-comparison' : ''), busy: Boolean(launch),
         onCancel: onBack ?? onClose, initialFocus: returnFocus.current || focusSelector || '.moba-lighthouse-close',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!starting.current) (onBack ?? onClose)() }) },
         h('p', { className: 'moba-lighthouse-note' }, t(publicEvidenceReplay
@@ -8416,11 +8422,11 @@ window.__ModuleLoader__.load({
       return { hostAvailable: addressable && hostAvailable, opening, failed, openFile }
     }
 
-    function LessonTaskFiles({ files, sessionId, complete, materialDelivered }) {
+    function LessonTaskFiles({ files, sessionId, complete, materialDelivered, headingTag = 'h4' }) {
       const { hostAvailable, opening, failed, openFile } = usePresentedFileOpener(files.some(presentedFileHasCoordinates))
       if (!files.length && !complete) return null
       return h('section', { className: 'moba-proven-files moba-lesson-result-files' },
-        h('h4', null, t('已交付的文件') + ' · ' + files.length),
+        h(headingTag, null, t('已交付的文件') + ' · ' + files.length),
         materialDelivered && h('p', { className: 'moba-match-action-note' }, t('已交付所选材料。')),
         files.length > 0 && h('ul', null, files.map((file, index) => {
           const key = String(index)
@@ -10207,7 +10213,7 @@ window.__ModuleLoader__.load({
       .moba-follow-up-title { margin: 0; color: var(--gold); font-size: 16px; }
       .moba-proven-hero { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
       .moba-proven-hero p { margin: 2px 0 0; }
-      .moba-proven-files h4, .moba-proven-gear legend { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
+      .moba-proven-files :is(h4, h5), .moba-proven-gear legend { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
       .moba-proven-files ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
       .moba-proven-files li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 8px;
         padding: 5px 7px; background: #171c27; border: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
@@ -10882,6 +10888,7 @@ window.__ModuleLoader__.load({
       .moba-handoff-report-side[data-met="true"] dd:last-child { color: #afddc0; }
       .moba-handoff-report-side[data-met="false"] dd:last-child { color: #efc3a4; }
       .moba-lighthouse-comparison > .moba-market-actions { position: sticky; inset-block-end: 0; background: #171c27; padding-block: 4px; }
+      .moba-public-evidence-comparison { scroll-padding-block-end: 80px; }
       .moba-lighthouse-anchor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
         gap: 3px 7px; padding: 6px 8px; margin-block-end: 5px; border: 1px solid #607d78; background: #192c33; color: #f3e9d2; font-size: 12px; }
       .moba-lighthouse-anchor div { display: flex; flex-wrap: wrap; gap: 1px 7px; overflow-wrap: anywhere; }

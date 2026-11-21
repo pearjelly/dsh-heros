@@ -382,7 +382,8 @@ function answeredComparisonTurns(events, after, asks, live, presetId, verifyMate
 }
 
 export async function comparisonEvidence(source, { cwd, presetId, task, material, verifyMaterialDelivery,
-  verifyMaterialProof = true, exactMessages = !verifyMaterialProof, linkedChoicesOnly = false, includeWindows }, receipts) {
+  verifyMaterialProof = true, exactMessages = !verifyMaterialProof, linkedChoicesOnly = false,
+  includeWindows, includeFileCoordinates }, receipts) {
   const unavailable = reason => ({ status: 'unavailable', reason })
   if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
     return unavailable('session-unavailable')
@@ -454,7 +455,7 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     if (includeWindows && finish >= 0) windows.push({ endSeq: events[finish].seq, turn: number })
     for (const event of events.slice(from + 1, finish < 0 ? undefined : finish)) {
       if (finish >= 0 && event.type === 'deliverables/presented' && event.data.turn === number) {
-        noteDeliveredFiles(files, event.data, includeWindows ? event.seq : undefined)
+        noteDeliveredFiles(files, event.data, includeWindows || includeFileCoordinates ? event.seq : undefined)
       }
       if (event.type !== 'request/header') continue
       const { provider, model } = event.data.header?.config ?? {}

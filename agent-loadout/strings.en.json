@@ -2241,6 +2241,8 @@
   "核对换装": "Review gear change",
   "核对卸下证据核验": "Review Evidence Check removal",
   "卸下证据核验再试一局": "Replay without Evidence Check",
+  "带证据核验做自己的任务": "Use Evidence Check on my task",
+  "用直接交付出装做自己的任务": "Use direct delivery on my task",
   "灯塔证据换装对照": "Lighthouse evidence replay",
   "原局工作区": "Original workspace",
   "换装局在独立的练习工作区使用同一份内置灯塔样例，只卸下证据核验。": "The rematch uses the same built-in Lighthouse sample in a separate practice workspace, with Evidence Check removed.",

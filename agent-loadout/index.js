@@ -1547,7 +1547,7 @@ export async function apply(ctx) {
     const record = workspaceComparisons.read(comparisonId)
     const unavailable = '请先完成一局已核验的灯塔缺证挑战。'
     if (record?.lesson !== evidenceLesson || record.scenario !== 'gap') throw new Error(unavailable)
-    const observed = await readComparisonArm(workspaceComparisons, record, 'evidence', signal, false, true)
+    const observed = await readComparisonArm(workspaceComparisons, record, 'evidence', signal, { linkedChoicesOnly: true })
     if (!completedLighthouseChallenge(record, observed)) throw new Error(unavailable)
     const { proof, ecosystem } = await verifiedLessonTaskSource({ kind: 'workspace', comparisonId, arm: 'evidence' }, signal)
     const expected = await plan(standardDeliveryDraft(ecosystem, ['present', 'evidence']), ecosystem)
@@ -4039,7 +4039,8 @@ export async function apply(ctx) {
       record.baseline?.kind === 'personal' && record.edit.addId === 'review' &&
       record.edit.removeId === undefined && record.edit.sourceId === undefined
     const [observed, saved] = await Promise.all([
-      readComparisonArm(comparisons, record, arm, signal, personalReviewRematch, publicEvidenceReplay),
+      readComparisonArm(comparisons, record, arm, signal,
+        { verifyPersonalDelivery: personalReviewRematch, linkedChoicesOnly: publicEvidenceReplay }),
       comparisons.readArm(record.id, arm),
     ])
     if (!saved?.opened || !(publicEvidenceReplay ? completedLighthouseChallenge(record, observed) : observed.canRematch)) {
@@ -4292,7 +4293,8 @@ export async function apply(ctx) {
     return { ...prepared, stockReviewBindings: checked.stockReviewBindings }
   }
 
-  async function readComparisonArm(comparisons, comparison, arm, signal, verifyPersonalDelivery = false, linkedChoicesOnly = false) {
+  async function readComparisonArm(comparisons, comparison, arm, signal,
+    { verifyPersonalDelivery = false, linkedChoicesOnly = false, includeFileCoordinates = false } = {}) {
     const { sessionId } = comparisons.identity(comparison.id, arm)
     const labels = comparison.loadout ? { heroName: comparison.loadout.heroName } : planComparisonLabels(comparison, arm)
     let saved
@@ -4310,7 +4312,7 @@ export async function apply(ctx) {
       const evidenceReplay = Boolean(evidenceReplayView(comparison.baseline))
       const strictEvidence = evidenceReplay || comparison.evidenceRetest === true
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material,
-        verifyMaterialDelivery: lessonBaseline || verifyPersonalDelivery,
+        verifyMaterialDelivery: lessonBaseline || verifyPersonalDelivery, includeFileCoordinates,
         ...((verifyPersonalDelivery || evidencePractice || strictEvidence) && { exactMessages: true }),
         linkedChoicesOnly: linkedChoicesOnly || strictEvidence || (evidencePractice && comparison.scenario === 'gap') }, receipts)
       if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
@@ -4372,7 +4374,8 @@ export async function apply(ctx) {
     }
     const { comparisons, original } = previous
     const publicReplay = comparison.baseline.publicEvidenceReplay
-    const result = await readComparisonArm(comparisons, original, arm, signal, verifyPersonalDelivery, publicReplay)
+    const result = await readComparisonArm(comparisons, original, arm, signal,
+      { verifyPersonalDelivery, linkedChoicesOnly: publicReplay, includeFileCoordinates: publicReplay })
     if (sessionId !== result.sessionId) return missing
     const { lessonTaskSource, ...observed } = result
     return { ...observed, id, heroName, planName, canRematch: false,
@@ -4421,10 +4424,11 @@ export async function apply(ctx) {
       arms.some(arm => !verifiedEvidenceArm(arm)) ||
       baseline.sessionId === replay.sessionId || !comparisonChoices(baseline).length) return
     return { arms: arms.map(arm => {
-      const { id, deliverables, canReuse } = arm
+      const { id, sessionId, deliverables, canReuse } = arm
       const choices = comparisonChoices(arm)
       const lessonTaskSource = sources?.[id] && (id === 'baseline' || completedPresentDelivery(arm)) ? sources[id] : undefined
       return { id, choices, deliverables, canPreserve: Boolean(canReuse && (choices.length || deliverables.length)),
+        ...(sources && { sessionId }),
         ...(lessonTaskSource && { lessonTaskSource }) }
     }) }
   }
@@ -4433,11 +4437,12 @@ export async function apply(ctx) {
     const previous = previousComparison(record)
     const styles = comparisons === rematchComparisons && personalHandoffStyles(record, previous)
     const verifyPersonalDelivery = Boolean(styles)
-    const pending = comparisons.armsFor(record).map(arm => readComparisonArm(comparisons, record, arm, signal, verifyPersonalDelivery))
+    const evidenceReplay = evidenceReplayView(record.baseline)
+    const pending = comparisons.armsFor(record).map(arm => readComparisonArm(comparisons, record, arm, signal,
+      { verifyPersonalDelivery, includeFileCoordinates: evidenceReplay?.publicEvidenceReplay }))
     if (record.baseline) pending.unshift(readRematchBaseline(record, previous, signal, verifyPersonalDelivery))
     const arms = await Promise.all(pending)
     const handoffOutcome = styles && observedHandoffOutcome(record.material, arms, styles)
-    const evidenceReplay = evidenceReplayView(record.baseline)
     const publicTaskSources = evidenceReplay?.publicEvidenceReplay && previous?.original && {
       baseline: { kind: 'workspace', comparisonId: previous.original.id, arm: 'evidence' },
       rematch: { kind: 'rematch', comparisonId: record.id, arm: 'rematch' },
