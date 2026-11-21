@@ -1362,6 +1362,26 @@ window.__ModuleLoader__.load({
       return h(InstallFacts, { facts: [[t('卸下的装备'), rematchGearName(change.removed)], [t('装上的装备'), rematchGearName(change.added)]] })
     }
 
+    function HandoffOutcomeSummary({ outcome, onPreserve, busy }) {
+      const heading = useId()
+      return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading },
+        h('h3', { id: heading }, t('两局实测结果')),
+        h('div', { className: 'moba-lighthouse-arms' }, outcome.arms.map(arm => {
+          const style = t(arm.style === 'review' ? '复核后交付' : '直接交付')
+          return h('section', { key: arm.id, className: 'moba-lighthouse-arm', 'aria-label': style },
+            h('div', null, h('h4', null, style), h('small', { className: 'moba-lighthouse-arm-hero' },
+              t(arm.id === 'baseline' ? '原局' : '换装复赛'))),
+            h('p', { className: 'moba-lighthouse-note' }, arm.choices.length
+              ? t('你实际选择了 ') + arm.choices.join(' / ') : t('本局没有记录提问卡选择。')),
+            h('p', { className: 'moba-lighthouse-note' }, arm.materialDelivered
+              ? h(Fragment, null, t('所选材料已交付') + ' · ', h('strong', null, outcome.material))
+              : arm.deliveredCount > 0 ? t('其他交付文件') + ' · ' + arm.deliveredCount : t('本局没有交付文件。')),
+            arm.canPreserve && onPreserve && h('footer', null,
+              h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, 'data-handoff-preserve': arm.id,
+                'aria-label': t('保留这套出装') + ' · ' + style, onClick: () => onPreserve(arm.id) }, t('保留这套出装'))))
+        })))
+    }
+
     function previousComparisonIsValid(reference) {
       if (!reference?.comparisonId || typeof reference.comparisonId !== 'string') return false
       const { kind, arm } = reference
@@ -1602,6 +1622,7 @@ window.__ModuleLoader__.load({
       }, [request, scope, language, attempt, config.action])
 
       const value = view?.scope === scope ? view.result : undefined
+      const handoff = kind === 'rematch' ? value?.handoffOutcome : undefined
       const task = value?.task
       const lessonMarker = value?.lesson ?? lessonHint
       const lesson = lessonMarker === lighthouseRematchLesson
@@ -1679,7 +1700,11 @@ window.__ModuleLoader__.load({
       }
 
       if (reuse) return h(ComparisonLoadoutReview, { kind, comparisonId: reuse.id, arm: reuse.arm, request,
-        onBack: () => { returnFocus.current = `[data-reuse-arm="${reuse.arm}"]`; setReuse(null) }, onClose, onUse })
+        onBack: () => {
+          const handoffButton = reuse.handoff ? `[data-handoff-preserve="${reuse.arm}"], ` : ''
+          returnFocus.current = handoffButton + `[data-reuse-arm="${reuse.arm}"], .moba-lighthouse-close`
+          setReuse(null)
+        }, onClose, onUse })
       if (rematch) return h(RematchEditor, { kind, comparisonId: rematch.id, arm: rematch.arm, sourceSessionId: rematch.sessionId, request,
         lesson, onBack: () => { returnFocus.current = `[data-rematch-arm="${rematch.arm}"]`; setRematch(null) }, onVisit, onClose })
       if (lessonTask) return h(LessonLoadoutTask, { source: lessonTask.lessonTaskSource, workspaces, initialWorkspaceId, request, onVisit,
@@ -1718,6 +1743,8 @@ window.__ModuleLoader__.load({
               h('textarea', { ref: taskField, readOnly: true, value: task, rows: 4 })),
             h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制任务')),
             notice && h('p', { className: 'moba-lighthouse-note', role: 'status' }, notice)),
+          handoff && h(HandoffOutcomeSummary, { outcome: handoff, busy: Boolean(launch),
+            onPreserve: onUse && value.id ? arm => setReuse({ id: value.id, arm, handoff: true }) : undefined }),
           h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm =>
             h(ComparisonArm, { key: arm.id, arm, config: config.arms.find(item => item.id === arm.id), task: materialWarning ? undefined : task, sessionId,
               busy: Boolean(launch), canStart: !materialWarning && (!setup || Boolean(workspaces.length)), onStart: directLesson || kind === 'rematch' ? undefined : start, onVisit, putTask,
@@ -9231,6 +9258,11 @@ window.__ModuleLoader__.load({
       .moba-history-reuse > .moba-proven-hero { margin-block: 8px; }
       .moba-history-reuse > .moba-history-gear, .moba-history-reuse > .moba-lighthouse-results { margin-block-end: 8px; }
       .moba-lighthouse-arm footer { display: flex; flex-wrap: wrap; gap: 5px; justify-content: end; }
+      .moba-handoff-outcome { margin: 10px 0; }
+      .moba-handoff-outcome h3, .moba-handoff-outcome h4 { margin: 0; color: var(--ink); font-size: 13px; }
+      .moba-handoff-outcome .moba-lighthouse-arms { margin: 6px 0 0; }
+      .moba-handoff-outcome .moba-lighthouse-note { margin: 0; }
+      .moba-handoff-outcome .moba-lighthouse-arm footer { justify-content: start; align-self: end; }
       .moba-lighthouse-comparison > .moba-market-actions { position: sticky; inset-block-end: 0; background: #171c27; padding-block: 4px; }
       .moba-lighthouse-anchor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
         gap: 3px 7px; padding: 6px 8px; margin-block-end: 5px; border: 1px solid #607d78; background: #192c33; color: #f3e9d2; font-size: 12px; }

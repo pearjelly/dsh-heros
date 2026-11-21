@@ -1887,11 +1887,13 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     assert.deepEqual(await members(user.workspaceId), membersBeforeHint)
     await writeFile(join(personal, material), body)
     const ownReviews = [['3', 'Confirm handoff'], ['2', 'Revise draft']]
+    let pickedFromHandoff
     for (const [id, label] of ownReviews) {
       const trial = await invoke('rematch-comparison-open', { ...suggestedChange, token: suggestedPreview.token, launchId: id.repeat(32) })
       assert.equal(trial.task, directPersonal.task)
       assert.notEqual(trial.sessionId, directPersonal.sessionId)
       assert.ok(!(await history(trial.sessionId)).events.some(item => item.type === 'user/message'))
+      assert.equal((await invoke('rematch-comparison', { comparisonId: trial.id })).handoffOutcome, undefined)
       const observed = await choose(trial, label)
       assert.equal(presentSource(observed), label === 'Confirm handoff' ? originalPresentSource : undefined)
       const view = await invoke('rematch-comparison', { comparisonId: trial.id })
@@ -1899,7 +1901,12 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
       assert.equal(armOf(view, 'baseline').deliverables[0].name, file)
       const arm = armOf(view, 'rematch')
       assert.deepEqual(arm.entries[0].choices, [label])
-      assert.deepEqual(arm.deliverables.map(item => item.name), label === 'Confirm handoff' ? [file] : [])
+      const attached = label === 'Confirm handoff'
+      assert.deepEqual(arm.deliverables.map(item => item.name), attached ? [file] : [])
+      assert.deepEqual(view.handoffOutcome, { material, arms: [
+        { id: 'baseline', style: 'direct', choices: [], materialDelivered: true, deliveredCount: 1, canPreserve: true },
+        { id: 'rematch', style: 'review', choices: [label], materialDelivered: attached, deliveredCount: attached ? 1 : 0, canPreserve: true },
+      ] })
 
       const child = { kind: 'rematch', comparisonId: trial.id, arm: 'rematch' }
       const followUp = await invoke('rematch-comparison-options', child)
@@ -1926,14 +1933,46 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
       assert.equal(book.previous.sessionId, trial.sessionId)
       assert.deepEqual(armOf(book, 'baseline').entries[0].choices, [label])
       assert.equal(armOf(book, 'rematch').deliverables[0].name, file)
+      assert.deepEqual(book.handoffOutcome, { material, arms: [
+        { id: 'baseline', style: 'review', choices: [label], materialDelivered: true, deliveredCount: 1, canPreserve: true },
+        { id: 'rematch', style: 'direct', choices: [], materialDelivered: true, deliveredCount: 1, canPreserve: true },
+      ] })
+      const reviewArms = await Promise.all(book.handoffOutcome.arms.map(side =>
+        invoke('comparison-loadout-preview', { kind: 'rematch', comparisonId: directReplay.id, arm: side.id })))
+      assert.deepEqual(new Set(reviewArms[0].draft.equipmentIds), new Set(['present', 'review']))
+      assert.deepEqual(reviewArms[1].draft.equipmentIds, ['present'])
+      assert.deepEqual(await plans(), [])
+      pickedFromHandoff = reviewArms[0]
     }
     assert.deepEqual(await history(directPersonal.sessionId), directPlayed)
+
+    const alternate = 'alternate/' + material
+    await mkdir(join(personal, 'alternate', folder), { recursive: true })
+    await writeFile(join(personal, alternate), '# A different file with the same name')
+    const collisionFields = { ...directFields, task: 'Check the alternate handoff file.' }
+    const collisionDraft = await invoke('lesson-task-preview', collisionFields)
+    const collisionDirect = await invoke('lesson-task-open', { ...collisionFields, token: collisionDraft.token, launchId: '0'.repeat(32) })
+    await send(collisionDirect)
+    const collisionBaseline = (await result(collisionDirect.sessionId)).rematchSource
+    const collisionEdit = { ...collisionBaseline, change: { addId: 'review' } }
+    const collisionPreview = await invoke('rematch-comparison-preview', collisionEdit)
+    const collision = await invoke('rematch-comparison-open', { ...collisionEdit, token: collisionPreview.token, launchId: '0'.repeat(32) })
+    const wrongFile = await choose(collision, 'Confirm handoff')
+    assert.equal(wrongFile.events.find(event => event.type === 'deliverables/presented').data.files[0].path,
+      join(await realpath(personal), alternate))
+    const collisionView = await invoke('rematch-comparison', { comparisonId: collision.id })
+    assert.deepEqual(collisionView.handoffOutcome.arms[1], {
+      id: 'rematch', style: 'review', choices: ['Confirm handoff'], materialDelivered: false, deliveredCount: 1, canPreserve: true,
+    })
+    const collisionOptions = await invoke('rematch-comparison-options', { kind: 'rematch', comparisonId: collision.id, arm: 'rematch' })
+    assert.equal(collisionOptions.personalSuggestedChange, undefined)
 
     const readyToSave = await result(opened.sessionId, true)
     assert.deepEqual(new Set(readyToSave.draft.equipmentIds), new Set(['present', 'review']))
     assert.deepEqual(readyToSave.gear.find(item => item.id === 'review')?.evidence, 'decision')
     assert.deepEqual(await plans(), [])
-    const personalPlan = await invoke('plan-save', { name: 'Personal Review plan', draft: readyToSave.draft })
+    assert.deepEqual(pickedFromHandoff.draft, readyToSave.draft)
+    const personalPlan = await invoke('plan-save', { name: 'Personal Review plan', draft: pickedFromHandoff.draft })
     assert.equal(personalPlan.presetId, played.presetId)
 
     const freshFile = '会签 文件.md'

@@ -174,11 +174,12 @@ export async function apply(ctx) {
           : { files: [{ path: '02-lighthouse.md', description: 'Lighthouse supply card' }] }
       } else if (comparisonMaterial || taskMaterial || latestText === 'Hand off the workspace file handoff.md in this conversation.') {
         const intended = comparisonMaterial ?? taskMaterial ?? 'handoff.md'
-        const file = intended === '02-lighthouse.md' && process.env.DSH_LOADOUT_TEST_WRONG_LIGHTHOUSE_CARD === '1'
-          ? 'alternate/02-lighthouse.md' : intended
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')
         const review = systemText.includes('whether to proceed with the handoff or revise the draft')
+        const wrongMaterial = intended === '02-lighthouse.md' && process.env.DSH_LOADOUT_TEST_WRONG_LIGHTHOUSE_CARD === '1' ||
+          review && latestText?.includes('Check the alternate handoff file.')
+        const file = wrongMaterial ? 'alternate/' + intended : intended
         const confirmed = review && results.length > 0 &&
           JSON.parse(results[0].content[0].text).answers?.[0]?.selected?.includes('Confirm handoff')
         const canPresent = tools?.some(tool => tool.name === 'present')

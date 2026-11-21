@@ -3983,7 +3983,7 @@ export async function apply(ctx) {
       ...(original.change && { change: original.change }), ...(original.lesson && { lesson: original.lesson }) } }
   }
 
-  async function readRematchBaseline(comparison, previous, signal) {
+  async function readRematchBaseline(comparison, previous, signal, verifyPersonalDelivery = false) {
     const { arm, sessionId, heroName, planName } = comparison.baseline
     const id = 'baseline'
     const missing = { id, sessionId, heroName, planName, status: 'unavailable', reason: 'session-unavailable' }
@@ -3998,16 +3998,44 @@ export async function apply(ctx) {
       return { id, sessionId, heroName, planName, ...observed, canReuse, canRematch: false }
     }
     const { comparisons, original } = previous
-    const result = await readComparisonArm(comparisons, original, arm, signal)
+    const result = await readComparisonArm(comparisons, original, arm, signal, verifyPersonalDelivery)
     if (sessionId !== result.sessionId) return missing
     return { ...result, id, heroName, planName, canRematch: false }
   }
 
+  function personalHandoffStyles(record, previous) {
+    const { edit, baseline, loadout } = record
+    if (baseline?.heroId !== 'standard' || loadout?.heroId !== 'standard' || edit.sourceId !== undefined) return
+    const fromOwnTask = baseline.kind === 'personal'
+    if (fromOwnTask && edit.addId === 'review' && edit.removeId === undefined) return ['direct', 'review']
+    const parent = previous?.original
+    const fromOwnReviewRematch = baseline.kind === 'rematch' && parent?.baseline?.kind === 'personal' &&
+      parent.edit.addId === 'review' && parent.edit.removeId === undefined && parent.edit.sourceId === undefined
+    if ((fromOwnTask || fromOwnReviewRematch) && edit.removeId === 'review' && edit.addId === undefined) return ['review', 'direct']
+  }
+
+  function observedHandoffOutcome(material, arms, styles) {
+    if (arms.length !== styles.length || arms.some(arm => arm.status !== 'complete' || arm.continuationReason ||
+      typeof arm.materialDelivered !== 'boolean')) return
+    const outcomes = arms.map((arm, index) => {
+      const choices = comparisonChoices(arm)
+      const style = styles[index]
+      const { id, materialDelivered, deliverables, canReuse } = arm
+      const canPreserve = canReuse && (materialDelivered || choices.length > 0)
+      return { id, style, choices, materialDelivered, deliveredCount: deliverables.length, canPreserve: Boolean(canPreserve) }
+    })
+    if (outcomes.find(arm => arm.style === 'review').choices.length) return { material, arms: outcomes }
+  }
+
   async function readComparisonArms(comparisons, record, signal) {
     const previous = previousComparison(record)
-    const arms = comparisons.armsFor(record).map(arm => readComparisonArm(comparisons, record, arm, signal))
-    if (record.baseline) arms.unshift(readRematchBaseline(record, previous, signal))
-    return { arms: await Promise.all(arms), ...(previous?.view && { previous: previous.view }) }
+    const styles = comparisons === rematchComparisons && personalHandoffStyles(record, previous)
+    const verifyPersonalDelivery = Boolean(styles)
+    const pending = comparisons.armsFor(record).map(arm => readComparisonArm(comparisons, record, arm, signal, verifyPersonalDelivery))
+    if (record.baseline) pending.unshift(readRematchBaseline(record, previous, signal, verifyPersonalDelivery))
+    const arms = await Promise.all(pending)
+    const handoffOutcome = styles && observedHandoffOutcome(record.material, arms, styles)
+    return { arms, ...(previous?.view && { previous: previous.view }), ...(handoffOutcome && { handoffOutcome }) }
   }
 
   function comparisonChoices({ entries = [] }) {
