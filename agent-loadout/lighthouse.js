@@ -5,6 +5,7 @@ const pattern = '[0-9][0-9]-*.md'
 const supplyCard = '02-lighthouse.md'
 const openingId = /^[a-f0-9]{32}$/
 const rematchPrefix = 'lighthouse-rematch-'
+const evidencePrefix = 'lighthouse-evidence-'
 const cards = {
   '01-waystation.md': '# Mountain Waystation / 山口驿站\n\nCopper marker · Stone stairs\n\n铜色路标 · 补给在石阶旁\n',
   [supplyCard]: '# North Shore Lighthouse / 北岸灯塔\n\n**Marker / 徽记** · Gold beacon / 金色航标\n\n**Supply point / 补给点** · Second-floor lookout / 二层瞭望台\n\n**Supplies / 可领取** · 2 cans of lamp oil, 1 signal flag / 灯油 × 2、信号旗 × 1\n',
@@ -62,6 +63,16 @@ export async function lighthouseRematchLesson(directory, registry, launchId, eng
   return { workspace, material: supplyCard, task }
 }
 
+export async function lighthouseEvidenceLesson(directory, registry, launchId, english) {
+  if (typeof launchId !== 'string' || !openingId.test(launchId)) throw new Error('开局请求无效，请重试。')
+  const path = join(directory, evidencePrefix + launchId)
+  const workspace = await seedWorkspace(path, registry, 'Lighthouse evidence choices · 灯塔证据取舍', true)
+  const task = english
+    ? 'Read the North Shore Lighthouse supply card. A dispatch note reports two spare batteries for the next shift. Check what the selected card actually supports before recommending what to hand off. If a recommendation is ready, write it separately and attach it in this conversation.'
+    : '阅读北岸灯塔补给卡。一条调度消息说还为下一班准备了两节备用电池。先核对所选补给卡实际支持哪些说法，再建议本次交接内容。准备好交接稿时，另存一份并在当前对话交付。'
+  return { workspace, material: supplyCard, task }
+}
+
 export const lighthouseArms = ['recon', 'delivery']
 
 export function lighthousePracticeContains(profileDataRoot, candidateCanonicalPath) {
@@ -69,7 +80,7 @@ export function lighthousePracticeContains(profileDataRoot, candidateCanonicalPa
   if (!path || path === '..' || path.startsWith('..' + sep) || isAbsolute(path)) return false
   const [folder, id, arm] = path.split(sep)
   return folder === 'lighthouse-supply-run' ||
-    (folder.startsWith(rematchPrefix) && openingId.test(folder.slice(rematchPrefix.length))) ||
+    [rematchPrefix, evidencePrefix].some(prefix => folder.startsWith(prefix) && openingId.test(folder.slice(prefix.length))) ||
     (folder === 'lighthouse-comparisons' && openingId.test(id) && lighthouseArms.includes(arm))
 }
 
