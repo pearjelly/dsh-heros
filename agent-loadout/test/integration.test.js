@@ -1724,6 +1724,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
           assert.deepEqual(arm.pendingQuestions[0].options, options)
           assert.deepEqual(arm.deliverables, [])
           assert.deepEqual(files(await history(opened.sessionId)), [])
+          assert.equal((await equipmentIn(host, opened.sessionId)).workspaceComparison.lessonTaskSource, undefined)
         } finally {
           if (question) await host.request(questions, { sessionId: opened.sessionId, choice: decision })
           await turn
@@ -1749,6 +1750,9 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       assert.deepEqual(arm.entries.map(entry => [entry.name, entry.state]), calls.map(name => [name, 'completed']))
       assert.deepEqual(arm.entries.flatMap(entry => entry.choices ?? []), decision ? [decision] : [])
       assert.deepEqual(arm.deliverables, file ? [{ name: file, turn: 1 }] : [])
+      const transfer = { kind: 'workspace', comparisonId: opened.id, arm: 'evidence' }
+      assert.deepEqual(arm.lessonTaskSource, transfer)
+      assert.deepEqual((await equipmentIn(host, opened.sessionId)).workspaceComparison.lessonTaskSource, transfer)
       const openingResult = openingChoice && { choice: openingChoice, actualChoices: [decision] }
       assert.deepEqual(completed.evidenceOpeningChoice, openingResult)
       proved.push({ filter, arm, openingResult })
@@ -1757,12 +1761,28 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const plainPath = join(directory, 'plain-workspace')
     await mkdir(plainPath)
     await cp(join((await history(gather.sessionId)).workspacePath, material), join(plainPath, material))
+    const qualifiedSource = (await equipmentIn(host, lower.sessionId)).workspaceComparison.lessonTaskSource
+    const confirmedSource = (await equipmentIn(host, confirmed.sessionId)).workspaceComparison.lessonTaskSource
+    const beforeWorkspace = await invoke('lesson-task-options', qualifiedSource)
+    assert.deepEqual(beforeWorkspace.workspaceIds, [])
+    const method = 'workspace/create'
+    const rpcId = randomUUID()
+    const registered = await host.request('/api/' + method, { type: 'client-request', rpcId, method,
+      payload: { args: { request: { path: await realpath(plainPath) } } } })
+    assert.equal(registered.rpcId, rpcId)
+    assert.equal(registered.result.ok, true, JSON.stringify(registered.result))
+    assert.equal(registered.result.value.created, true)
+    const { workspaceId: nativeWorkspaceId } = registered.result.value.workspace
+    assert.deepEqual((await invoke('lesson-task-options', qualifiedSource)).workspaceIds, [nativeWorkspaceId])
+    assert.deepEqual((await invoke('lesson-task-options', confirmedSource)).workspaceIds, [nativeWorkspaceId])
     const plain = await host.request('/api/loadout-fixture-session', { presetId: 'standard', workspacePath: plainPath })
+    assert.equal(plain.workspaceId, nativeWorkspaceId)
     await send({ sessionId: plain.sessionId, task: gather.task })
     const plainHistory = await history(plain.sessionId)
     assert.deepEqual(tools(plainHistory).map(event => event.data.name), ['read'])
     assert.deepEqual(files(plainHistory), [])
     assert.equal(await read({ sessionId: plain.sessionId }), null)
+    assert.equal((await equipmentIn(host, plain.sessionId)).workspaceComparison, undefined)
 
     const edited = await predict('e'.repeat(32), 'gather')
     await send({ ...edited, task: 'Use a different handoff task.' })
@@ -1772,6 +1792,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.equal(wrongChoice.reason, 'changed-task')
     assert.ok(!wrongChoice.deliverables?.length)
     assert.equal(rejected.evidenceOpeningChoice, undefined)
+    assert.equal((await equipmentIn(host, edited.sessionId)).workspaceComparison.lessonTaskSource, undefined)
     const changed = await openEnglish('confirmed', 'f'.repeat(32))
     const changedNative = await history(changed.sessionId)
     await appendFile(join(changedNative.workspacePath, material), '\nAn unexpected change to this isolated supply card.\n')
@@ -1780,6 +1801,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.equal(changedView.materialState, 'changed')
     assert.equal(changedView.arms[0].reason, 'changed-material')
     assert.ok(!changedView.arms[0].deliverables?.length)
+    assert.equal((await equipmentIn(host, changed.sessionId)).workspaceComparison.lessonTaskSource, undefined)
 
     assert.deepEqual(await plans(), normal)
     await host.stop()
@@ -1793,7 +1815,9 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       const restored = await read(filter)
       assert.deepEqual(restored.arms[0], arm)
       assert.deepEqual(restored.evidenceOpeningChoice, openingResult)
+      assert.deepEqual((await equipmentIn(host, arm.sessionId)).workspaceComparison.lessonTaskSource, arm.lessonTaskSource)
     }
+    assert.deepEqual((await invoke('lesson-task-options', qualifiedSource)).workspaceIds, [nativeWorkspaceId])
     const chronicle = await invoke('comparison-history', { kind: 'workspace', query: material })
     for (const { filter } of proved) {
       const item = chronicle.items.find(item => item.id === filter.comparisonId)

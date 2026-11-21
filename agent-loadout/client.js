@@ -1,7 +1,8 @@
 window.__ModuleLoader__.load({
   id: 'dsh-agent-loadout',
   factory(require) {
-    const { createElement: h, Fragment, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } = require('react')
+    const { createElement: h, createContext, useContext, Fragment, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } = require('react')
+    const WorkspaceSetupContext = createContext(null)
     const panelId = 'agent-loadout'
     let activeLanguage = { getSnapshot: () => 'zh', subscribe: () => () => {} }
     let english = Object.create(null)
@@ -1701,7 +1702,136 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-roster-open', onClick: onCancel }, t('关闭'))))
     }
 
-    function WorkspaceFileFields({ workspaces, workspaceId, setWorkspaceId, material, setMaterial, busy, workspaceField, materialField, request, materialAction }) {
+    function WorkspaceFolderPicker({ list, adding, error, onCancel, onSelect, onPickNative }) {
+      const [target, setTarget] = useState({})
+      const [loaded, setLoaded] = useState(null)
+      const [path, setPath] = useState('')
+      const pathInput = useRef(null)
+      const current = loaded?.target === target ? loaded : null
+      const directory = current?.directory
+      const canPickNative = Boolean(onPickNative)
+
+      useEffect(() => {
+        const abort = new AbortController()
+        async function read() {
+          try {
+            const directory = await list(target.path, abort.signal)
+            if (abort.signal.aborted) return
+            setLoaded({ target, directory })
+            setPath(draft => draft === (target.path ?? '') ? directory.path : draft)
+          } catch (reason) {
+            if (abort.signal.aborted) return
+            const needsNative = canPickNative && target.path === undefined && reason.rpcError?.code === 'directory-picker/unavailable'
+            setLoaded(needsNative ? { target, needsNative } : { target, error: reason.message })
+          }
+        }
+        void read()
+        return () => abort.abort()
+      }, [list, target, canPickNative])
+
+      function browse(next) {
+        setTarget({ path: next })
+        setPath(next)
+        pathInput.current?.focus()
+      }
+
+      const dialog = { title: t('选择材料所在的文件夹'), className: 'moba-lighthouse-comparison moba-material-dialog',
+        busy: adding, onCancel, initialFocus: current?.needsNative ? '.moba-start' : '.moba-material-search input',
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!adding) onCancel() }) }
+      if (current?.needsNative) return h(InstallDialog, dialog,
+        h('p', { className: 'moba-lighthouse-note' }, t('此连接使用系统文件夹选择器。')),
+        error && h('p', { className: 'moba-alert', role: 'alert' }, t(error)),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: onCancel, disabled: adding }, t('关闭')),
+          h('button', { type: 'button', className: 'moba-start', disabled: adding, onClick: onPickNative },
+            t(adding ? '正在添加材料文件夹…' : '打开系统文件夹选择器'))))
+
+      return h(InstallDialog, dialog,
+        h('div', { className: 'moba-material-input' },
+          h('label', { className: 'moba-search moba-material-search' }, h(Glyph, { kind: 'folder', size: 17 }),
+            h('input', { ref: pathInput, type: 'text', value: path, disabled: adding, autoComplete: 'off', spellCheck: false,
+              'aria-label': t('文件夹路径'), placeholder: t('文件夹路径'),
+              onChange: event => setPath(event.target.value), onKeyDown: event => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                if (path.trim()) browse(path.trim())
+              } })),
+          h('button', { type: 'button', className: 'moba-roster-open', disabled: adding || !path.trim(),
+            onClick: () => browse(path.trim()) }, t('前往文件夹'))),
+        directory && h(Fragment, null,
+          h('nav', { className: 'moba-material-crumbs', 'aria-label': t('文件夹路径') }, h('ol', null,
+            directory.crumbs.map(crumb => h('li', { key: crumb.path }, crumb.path === directory.path
+              ? h('span', { 'aria-current': 'location' }, crumb.name)
+              : h('button', { type: 'button', className: 'moba-text', disabled: adding,
+                onClick: () => browse(crumb.path) }, crumb.name))))),
+          h('ul', { className: 'moba-material-entries', 'aria-label': t('子文件夹') },
+            directory.entries.filter(entry => !entry.hidden).map(entry => h('li', { key: entry.path },
+              h('button', { type: 'button', disabled: adding, 'aria-label': t('打开文件夹 ') + entry.name,
+                onClick: () => browse(entry.path) }, h(Glyph, { kind: 'folder', size: 20 }),
+              h('span', null, h('strong', null, entry.name)), h(Glyph, { kind: 'arrow', size: 15 }))))),
+          directory.truncated && h('p', { className: 'moba-lighthouse-note' }, t('只显示部分文件夹。也可以输入路径。'))),
+        !current && h('p', { className: 'moba-empty', role: 'status' }, t('正在读取文件夹…')),
+        current?.error && h('p', { className: 'moba-alert', role: 'alert' }, t(current.error)),
+        error && h('p', { className: 'moba-alert', role: 'alert' }, t(error)),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: onCancel, disabled: adding }, t('关闭')),
+          h('button', { type: 'button', className: 'moba-start', disabled: adding || !directory || path.trim() !== directory.path,
+            onClick: () => onSelect(directory.path) }, t(adding ? '正在添加材料文件夹…' : '使用此文件夹'))))
+    }
+
+    function AddMaterialsFolder({ setup, disabled, onAdded }) {
+      const [pickerOpen, setPickerOpen] = useState(false)
+      const [adding, setAdding] = useState(false)
+      const [error, setError] = useState('')
+      const trigger = useRef(null)
+      const pending = useRef(null)
+      useEffect(() => () => { pending.current = null }, [])
+
+      function close() {
+        setPickerOpen(false)
+        setError('')
+        requestAnimationFrame(() => trigger.current?.focus())
+      }
+
+      async function add(path, pick = setup.pick) {
+        if (pending.current) return
+        const operation = {}
+        pending.current = operation
+        setAdding(true)
+        setError('')
+        try {
+          const directory = path ?? await pick()
+          if (pending.current !== operation) return
+          if (!directory) {
+            close()
+            return
+          }
+          const { workspaceId } = await setup.add(directory)
+          if (pending.current !== operation) return
+          onAdded(workspaceId)
+          close()
+        } catch (reason) {
+          if (pending.current === operation) setError(reason.message)
+        } finally {
+          if (pending.current === operation) {
+            pending.current = null
+            setAdding(false)
+            if (!path) requestAnimationFrame(() => trigger.current?.focus())
+          }
+        }
+      }
+
+      return h(Fragment, null,
+        h('button', { ref: trigger, type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+          disabled: disabled || adding, onClick: () => setup.pick ? void add() : setPickerOpen(true) },
+        t(adding && !pickerOpen ? '正在添加材料文件夹…' : '添加材料文件夹')),
+        pickerOpen ? h(WorkspaceFolderPicker, { list: setup.list, adding, error, onCancel: close, onSelect: add,
+          onPickNative: setup.pickHost ? () => void add(undefined, setup.pickHost) : undefined })
+          : error && h('p', { className: 'moba-alert', role: 'alert' }, t(error)))
+    }
+
+    function WorkspaceFileFields({ workspaces, workspaceId, setWorkspaceId, material, setMaterial, busy, workspaceField, materialField, request, materialAction,
+      workspaceSetup, onWorkspaceAdded }) {
       const helpId = useId()
       const [pickerFor, setPickerFor] = useState('')
       const defaultMaterialField = useRef(null)
@@ -1722,11 +1852,13 @@ window.__ModuleLoader__.load({
         closePicker(pathInput)
       }
 
-      return h(Fragment, null,
-        h('label', null, t('工作区'), h('select', { ref: workspaceField, value: workspaceId, disabled: busy || !workspaces.length,
+      const workspaceSelect = h('label', null, t('工作区'), h('select', { ref: workspaceField, value: workspaceId, disabled: busy || !workspaces.length,
           required: true, onChange: event => setWorkspaceId(event.target.value) },
         h('option', { value: '' }, t(workspaces.length ? '选择材料所在的工作区' : '请先添加工作区')),
-        workspaces.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceFileLabel(item, workspaces))))),
+        workspaces.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceFileLabel(item, workspaces)))))
+      return h(Fragment, null,
+        workspaceSetup ? h('div', { className: 'moba-material-input' }, workspaceSelect,
+          h(AddMaterialsFolder, { setup: workspaceSetup, disabled: busy, onAdded: onWorkspaceAdded })) : workspaceSelect,
         h('div', { className: 'moba-material-input' },
           h('label', null, t('材料文件相对路径'),
             h('input', { ref: pathInput, required: true, disabled: busy, 'aria-describedby': helpId, value: material, maxLength: 1024,
@@ -2529,33 +2661,47 @@ window.__ModuleLoader__.load({
       const draftNotices = evidence ? evidenceDraftNotices : comparisonDraftNotices
       const title = comparisonTitle(kind, member?.lesson, evidenceReplay)
       const [open, setOpen] = useState(false)
+      const [lessonTaskSource, setLessonTaskSource] = useState(null)
       const [draftStatus, setDraftStatus] = useState('')
       const trigger = useRef(null)
+      const lessonTaskTrigger = useRef(null)
+      const availableLessonTask = evidence && member.lessonTaskSource
       useEffect(() => {
         if (!member?.id) return
         const outcome = consumeDraft(sessionId)
         if (outcome) setDraftStatus(outcome)
       }, [member?.id, sessionId, consumeDraft])
-      useEffect(() => { if (hasTurn) setDraftStatus('') }, [hasTurn])
+      useEffect(() => { if (hasTurn || availableLessonTask) setDraftStatus('') }, [hasTurn, availableLessonTask])
 
       if (!member) return null
       function close() {
         setOpen(false)
         requestAnimationFrame(() => trigger.current?.focus())
       }
+
+      function closeLessonTask() {
+        setLessonTaskSource(null)
+        requestAnimationFrame(() => (lessonTaskTrigger.current ?? trigger.current)?.focus())
+      }
+
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor' },
           h('div', null, h('strong', null, t(title)),
             h('span', null, scenario ? t(scenario.name) : comparisonArmName(comparisonArmConfig(kind, member.arm, evidenceReplay), member))),
-          h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
-            onClick: () => setOpen(true) }, t(evidenceReplay ? title : evidence ? '查看取舍记录' : lesson ? '查看练习记录' : config.entry)),
+          h('div', { className: 'moba-lighthouse-anchor-actions' },
+            h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
+              onClick: () => setOpen(true) }, t(evidenceReplay ? title : evidence ? '查看取舍记录' : lesson ? '查看练习记录' : config.entry)),
+            availableLessonTask && h('button', { ref: lessonTaskTrigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
+              onClick: () => setLessonTaskSource(availableLessonTask) }, t(lessonTaskLabel))),
           draftStatus && h('p', { role: 'status' }, t(draftNotices[draftStatus])),
-          evidence && h('p', null, t(hasTurn
+          evidence && !availableLessonTask && h('p', null, t(hasTurn
             ? '可以在取舍记录里回看本局的实际选择和交付。'
             : '手动发送练习任务。如果出现证据取舍卡，请在会话里选择。')),
           lesson && kind === 'workspace' && h('p', null, t(hasTurn
             ? '首局交付补给卡后，可在练习记录里换一件再试。'
             : '请手动发送补给卡任务。完成首局后，在练习记录里换一件再试。'))),
+        lessonTaskSource && h(LessonLoadoutTask, { source: lessonTaskSource, workspaces, request, onBack: closeLessonTask,
+          backLabel: '返回练习会话', onVisit: (next, task) => { setLessonTaskSource(null); onVisit(next, task) } }),
         open && h(RunComparison, { kind, request, comparisonId: member.id, sessionId, onClose: close, workspaces, lessonHint: member.lesson,
           evidenceReplayHint: evidenceReplay,
           putTask: task => putTask(sessionId, task),
@@ -4262,38 +4408,59 @@ window.__ModuleLoader__.load({
             adapted ? t('采用换装草稿') : t('采用分享出装'), h(Glyph, { kind: 'arrow', size: 17 }))))
     }
 
-    function LessonLoadoutTask({ source, workspaces, initialWorkspaceId, rebaseline, request, onBack, onVisit }) {
+    function LessonLoadoutTask({ source, workspaces, initialWorkspaceId, rebaseline, request, onBack, onVisit,
+      backLabel = rebaseline ? '返回任务结果' : '返回记录' }) {
       const language = useLanguage()
+      const workspaceSetup = useContext(WorkspaceSetupContext)
       const [loaded, setLoaded] = useState(null)
       const [attempt, retry] = useState(0)
       const [opening, setOpening] = useState(false)
+      const [addedWorkspace, setAddedWorkspace] = useState(null)
       const { kind, comparisonId, arm } = source
-      const current = loaded?.attempt === attempt ? loaded : null
+      const reference = JSON.stringify([kind, comparisonId, arm])
+      const membership = JSON.stringify(workspaces.map(item => item.workspaceId).sort())
+      const current = loaded?.reference === reference ? loaded : null
+      const refreshed = current?.membership === membership && current?.attempt === attempt
       const options = current?.value
       const allowed = options ? workspaces.filter(item => options.workspaceIds.includes(item.workspaceId)) : empty
+      const addedVisible = addedWorkspace && workspaces.some(item => item.workspaceId === addedWorkspace.id)
+      const addedAllowed = refreshed && !current.error && addedWorkspace && allowed.some(item => item.workspaceId === addedWorkspace.id)
+      const waitingForWorkspace = addedWorkspace && !addedAllowed && (!refreshed || !addedVisible)
+      const unavailableWorkspace = addedWorkspace && !addedAllowed && refreshed && addedVisible && !current.error
+      const setup = workspaceSetup?.add && (workspaceSetup.pick || workspaceSetup.list) ? workspaceSetup : null
 
       useEffect(() => {
         const action = 'lesson-task-options'
         const abort = new AbortController()
         request(action, { action, kind, comparisonId, arm }, abort.signal, language)
-          .then(value => { if (!abort.signal.aborted) setLoaded({ value, attempt }) })
-          .catch(reason => { if (!abort.signal.aborted) setLoaded({ error: reason.message, attempt }) })
+          .then(value => { if (!abort.signal.aborted) setLoaded({ value, reference, membership, attempt }) })
+          .catch(reason => {
+            if (!abort.signal.aborted) setLoaded(previous => ({
+              value: previous?.reference === reference ? previous.value : undefined,
+              error: reason.message, reference, membership, attempt,
+            }))
+          })
         return () => abort.abort()
-      }, [request, kind, comparisonId, arm, attempt, language])
+      }, [request, kind, comparisonId, arm, attempt, language, reference, membership])
 
-      const backLabel = rebaseline ? '返回任务结果' : '返回记录'
       return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : lessonTaskLabel), className: 'moba-lighthouse-comparison', busy: opening,
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t('用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
         options ? h(LoadoutTaskForm, { lessonSource: options.source, workspaces: allowed, request,
           initialWorkspaceId: rebaseline?.workspaceId ?? initialWorkspaceId, initialMaterial: rebaseline?.material, initialBrief: rebaseline?.brief, backLabel,
+          workspaceSetup: setup, addedWorkspace: addedAllowed ? addedWorkspace : undefined,
+          onWorkspaceAdded: id => { setAddedWorkspace({ id }); retry(value => value + 1) },
+          onWorkspaceApplied: applied => setAddedWorkspace(current => current === applied ? null : current),
+          workspaceStatus: !current?.error && (waitingForWorkspace ? '正在核对新增的工作区…'
+            : unavailableWorkspace ? '无法用新添加的文件夹开启此任务。' : ''),
+          workspaceError: refreshed ? current?.error : undefined, retryWorkspaces: () => retry(value => value + 1),
           onBack, onOpened: ({ sessionId, task }) => onVisit(sessionId, task), onOpeningChange: setOpening })
-          : h(Fragment, null, current?.error
+          : h(Fragment, null, refreshed && current?.error
             ? h('p', { className: 'moba-alert', role: 'alert' }, current.error)
             : h('p', { className: 'moba-empty', role: 'status' }, t('正在核对练习出装…')),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t(backLabel)),
-            current?.error && h('button', { className: 'moba-roster-open', type: 'button',
+            refreshed && current?.error && h('button', { className: 'moba-roster-open', type: 'button',
               onClick: () => retry(value => value + 1) }, t('重试')))))
     }
 
@@ -4303,13 +4470,17 @@ window.__ModuleLoader__.load({
     }
 
     function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, lessonSource, workspaces, initialWorkspaceId,
-      initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange }) {
+      initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange,
+      workspaceSetup, addedWorkspace, onWorkspaceAdded, onWorkspaceApplied, workspaceStatus, workspaceError, retryWorkspaces }) {
       const language = useLanguage()
       const [choices, setChoices] = useState(() => plan ? [plan, ...testedAlternatives] : empty)
       const [selectedPlanId, setSelectedPlanId] = useState(plan?.id)
       const planGroup = useId()
       const version = choices.find(item => item.id === selectedPlanId)
-      const [chosenWorkspaceId, setWorkspace] = useState(initialWorkspaceId ?? '')
+      const [chosenWorkspaceId, setWorkspace] = useState(() => {
+        if (!lessonSource || workspaces.some(item => item.workspaceId === initialWorkspaceId)) return initialWorkspaceId ?? ''
+        return !initialMaterial && workspaces.length === 1 ? workspaces[0].workspaceId : ''
+      })
       const [material, setMaterial] = useState(initialMaterial)
       const [brief, setBrief] = useState(initialBrief)
       const [reviewed, setReviewed] = useState(null)
@@ -4318,6 +4489,7 @@ window.__ModuleLoader__.load({
       const [needsRefresh, setNeedsRefresh] = useState(false)
       const pending = useRef(null)
       const launch = useRef(null)
+      const appliedWorkspace = useRef(null)
       const workspaceField = useRef(null)
       const materialField = useRef(null)
       const briefField = useRef(null)
@@ -4330,6 +4502,14 @@ window.__ModuleLoader__.load({
       const actionPrefix = lessonSource ? 'lesson-task' : 'plan-task'
 
       useEffect(() => () => pending.current?.abort(), [])
+      useEffect(() => {
+        if (addedWorkspace && appliedWorkspace.current !== addedWorkspace) {
+          appliedWorkspace.current = addedWorkspace
+          setWorkspace(addedWorkspace.id)
+          setError('')
+          onWorkspaceApplied(addedWorkspace)
+        }
+      }, [addedWorkspace, onWorkspaceApplied])
       useEffect(() => {
         if (!planCatalog) return
         const abort = new AbortController()
@@ -4464,10 +4644,14 @@ window.__ModuleLoader__.load({
               : version && h('div', { className: 'moba-plan-save-preview' }, h('strong', null, version.name),
                 version.note && h('p', { className: 'moba-plan-note' }, version.note)),
           lessonSource && !workspaces.length &&
-            h('p', { className: 'moba-plan-note', role: 'status' }, t('请先在 DeepSeek Harness 中添加自己的工作区。')),
+            h('p', { className: 'moba-plan-note', role: 'status' }, t(workspaceSetup
+              ? '选择含有任务材料的文件夹，即可继续。' : '请先在 DeepSeek Harness 中添加自己的工作区。')),
           h(WorkspaceFileFields, { workspaces, workspaceId: workspace?.workspaceId ?? '', setWorkspaceId: setWorkspace,
             material, setMaterial, workspaceField, materialField, request, busy: Boolean(working),
-            materialAction: lessonSource ? 'lesson-task-materials' : undefined }),
+            materialAction: lessonSource ? 'lesson-task-materials' : undefined, workspaceSetup, onWorkspaceAdded }),
+          workspaceStatus && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t(workspaceStatus)),
+          workspaceError && h('p', { className: 'moba-alert', role: 'alert' }, t(workspaceError), ' ',
+            h('button', { type: 'button', className: 'moba-text', onClick: retryWorkspaces }, t('重试'))),
           h('label', null, t('新任务说明'),
             h('textarea', { ref: briefField, required: true, disabled: Boolean(working), value: brief, rows: 4, maxLength: 1200,
               onChange: event => { event.target.setCustomValidity(''); setBrief(event.target.value) } })), messages),
@@ -9801,6 +9985,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
         gap: 3px 7px; padding: 6px 8px; margin-block-end: 5px; border: 1px solid #607d78; background: #192c33; color: #f3e9d2; font-size: 12px; }
       .moba-lighthouse-anchor div { display: flex; flex-wrap: wrap; gap: 1px 7px; overflow-wrap: anywhere; }
+      .moba-lighthouse-anchor .moba-lighthouse-anchor-actions { justify-content: flex-end; gap: 4px 7px; }
+      .moba-lighthouse-anchor-actions .moba-settlement-button { white-space: normal; }
       .moba-lighthouse-anchor span { color: #b8ded4; }
       .moba-lighthouse-anchor p { grid-column: 1 / -1; margin: 0; color: #ccdcd8; font-size: 11px; }
       .moba-plan-task-draft textarea { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 5px; resize: vertical;
@@ -10155,6 +10341,13 @@ window.__ModuleLoader__.load({
         } catch {
           // The host can still expose the source-language UI while reconnecting.
         }
+        const picker = globalThis.__DSH_DIRECTORY_PICKER__
+        const workspaceSetup = typeof ctx.workspaces.create === 'function' ? {
+          ...(typeof picker?.pick === 'function' && { pick: () => picker.pick() }),
+          ...(typeof ctx.uiWorkspace.listDirectory === 'function' && { list: (path, signal) => ctx.uiWorkspace.listDirectory(path, signal) }),
+          ...(typeof ctx.uiWorkspace.pickDirectory === 'function' && { pickHost: () => ctx.uiWorkspace.pickDirectory() }),
+          add: path => ctx.workspaces.create({ path }),
+        } : null
         let returnDraft
         let sessionTaskDraft
         function consumeReturnDraft(draft) {
@@ -10248,9 +10441,10 @@ window.__ModuleLoader__.load({
           { name: 'conversation.input.dock', id: panelId, order: 5 },
           ({ sessionId, session }) => {
             const id = sessionId ?? session?.sessionId
-            return id ? h(MatchEquipment, { key: id, sessionId: id, request, openLobby, send, openDraftSession,
-              consumeTaskDraft, putTaskDraft, workspaces: ctx.workspaces.list,
-              openContinuation: next => ctx.uiWorkspace.openSession(next) }) : null
+            return id ? h(WorkspaceSetupContext.Provider, { value: workspaceSetup },
+              h(MatchEquipment, { key: id, sessionId: id, request, openLobby, send, openDraftSession,
+                consumeTaskDraft, putTaskDraft, workspaces: ctx.workspaces.list,
+                openContinuation: next => ctx.uiWorkspace.openSession(next) })) : null
           }))
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
           { name: 'conversation.session.header.utilities', id: panelId, order: -20 },
@@ -10274,7 +10468,7 @@ window.__ModuleLoader__.load({
               if (verifyLive) await request('verify-live', { action: 'verify-live', presetId: agentPreset, sessionId }, navigation)
               if (!navigation?.aborted) ctx.uiWorkspace.openSession(sessionId)
             },
-          }) }, Lobby))
+          }) }, props => h(WorkspaceSetupContext.Provider, { value: workspaceSetup }, h(Lobby, props))))
       },
     }
   },

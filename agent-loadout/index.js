@@ -5564,8 +5564,12 @@ export async function apply(ctx) {
       if (comparison) value.lighthouseComparison = comparison
       const workspaceComparison = workspaceComparisons.member(sessionId)
       if (workspaceComparison) {
-        const { lesson, scenario } = workspaceComparisons.read(workspaceComparison.id)
-        value.workspaceComparison = { ...workspaceComparison, ...(lesson && { lesson }), ...(lesson === evidenceLesson && { scenario }) }
+        const record = workspaceComparisons.read(workspaceComparison.id)
+        const { lesson, scenario } = record
+        const evidence = lesson === evidenceLesson
+        const observed = evidence && !value.running && await readComparisonArm(workspaceComparisons, record, workspaceComparison.arm, request.signal)
+        value.workspaceComparison = { ...workspaceComparison, ...(lesson && { lesson }), ...(evidence && { scenario }),
+          ...(observed?.lessonTaskSource && { lessonTaskSource: observed.lessonTaskSource }) }
       }
       const planComparison = planComparisons.member(sessionId)
       if (planComparison) {
