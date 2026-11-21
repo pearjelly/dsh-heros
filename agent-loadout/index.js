@@ -4070,6 +4070,18 @@ export async function apply(ctx) {
     if (outcomes.find(arm => arm.style === 'review').choices.length) return { material, arms: outcomes }
   }
 
+  function observedEvidenceOutcome(arms) {
+    const [baseline, replay] = arms
+    if (arms.length !== 2 || baseline.id !== 'baseline' || replay.id !== 'rematch' ||
+      arms.some(arm => arm.status !== 'complete' || !arm.sessionId || arm.materialState !== 'verified' || arm.continuationReason) ||
+      baseline.sessionId === replay.sessionId || !comparisonChoices(baseline).length) return
+    return { arms: arms.map(arm => {
+      const { id, deliverables, canReuse } = arm
+      const choices = comparisonChoices(arm)
+      return { id, choices, deliverables, canPreserve: Boolean(canReuse && (choices.length || deliverables.length)) }
+    }) }
+  }
+
   async function readComparisonArms(comparisons, record, signal) {
     const previous = previousComparison(record)
     const styles = comparisons === rematchComparisons && personalHandoffStyles(record, previous)
@@ -4078,8 +4090,9 @@ export async function apply(ctx) {
     if (record.baseline) pending.unshift(readRematchBaseline(record, previous, signal, verifyPersonalDelivery))
     const arms = await Promise.all(pending)
     const handoffOutcome = styles && observedHandoffOutcome(record.material, arms, styles)
+    const evidenceOutcome = record.baseline?.evidenceReplay && observedEvidenceOutcome(arms)
     return { arms, ...(previous?.view && { previous: previous.view }), ...(handoffOutcome && { handoffOutcome }),
-      ...(record.baseline?.evidenceReplay && { evidenceReplay: true }) }
+      ...(record.baseline?.evidenceReplay && { evidenceReplay: true }), ...(evidenceOutcome && { evidenceOutcome }) }
   }
 
   function comparisonChoices({ entries = [] }) {
@@ -4113,11 +4126,11 @@ export async function apply(ctx) {
     }
     const words = query.normalize('NFKC').toLowerCase().trim().split(/\s+/u).filter(Boolean)
     const registry = ctx.get('workspaceRegistry')
-    const groups = Object.entries(comparisonStores)
+    const groups = Object.entries(comparisonStores).filter(([category]) =>
+      (kind === 'all' || kind === category) && (!evidenceReplays || category === 'rematch'))
     const headings = { lighthouse: '灯塔补给行动 Lighthouse Supply Run', workspace: '实战同题对照 Workspace comparison',
       plans: '方案同题对照 Saved plan comparison', rematch: '单件换装对照 换装复赛 One-gear rematch Gear rematch' }
-    const matches = groups.filter(([category]) => (kind === 'all' || kind === category) && (!evidenceReplays || category === 'rematch'))
-      .flatMap(([category, store]) =>
+    const matches = groups.flatMap(([category, store]) =>
       Array.from(store.list(), record => {
         const { createdAt, id, task, material, workspaceId } = record
         const workspaceTitle = registry?.get(workspaceId)?.title ?? record.workspaceTitle
@@ -4149,10 +4162,8 @@ export async function apply(ctx) {
       signal?.throwIfAborted()
       const group = matches.slice(inspected, inspected + Math.min(6, pageSize - items.length, scanLimit - inspected))
       const cards = await Promise.all(group.map(async ({ store, record, ...item }) => {
-        const { arms: observed, previous } = await readComparisonArms(store, record, signal)
-        if (evidenceReplays && (observed.length !== 2 || observed[0].id !== 'baseline' || observed[1].id !== 'rematch' ||
-          observed.some(arm => arm.status !== 'complete' || !arm.sessionId || arm.materialState !== 'verified' || arm.continuationReason) ||
-          observed[0].sessionId === observed[1].sessionId || !comparisonChoices(observed[0]).length)) return null
+        const { arms: observed, previous, evidenceOutcome } = await readComparisonArms(store, record, signal)
+        if (evidenceReplays && !evidenceOutcome) return null
         const arms = observed.map(arm => {
           const { id, status, sessionId, turn, deliverables, reason, continuationReason, canReuse, canRematch, planName, heroName, lessonTaskSource } = arm
           const choices = comparisonChoices(arm)
@@ -4304,6 +4315,28 @@ export async function apply(ctx) {
       signal?.throwIfAborted()
       return { ...result, reason: error instanceof Error ? error.message : '本机配置已变化，无法核对这局的原出装。' }
     }
+  }
+
+  async function saveEvidenceReplayPlan({ comparisonId, arm, name, note }, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    const record = rematchComparisons.read(comparisonId)
+    const unavailable = '这组证据换装还没有可以保留的出装。'
+    if (!record?.baseline?.evidenceReplay || (arm !== 'baseline' && arm !== 'rematch')) throw new Error(unavailable)
+    const pinned = arm === 'baseline' ? record.baseline : record.loadout
+    return buildPlans.write({ name, note }, pinned.heroId, async () => {
+      const { evidenceOutcome } = await readComparisonArms(rematchComparisons, record, signal)
+      if (!evidenceOutcome?.arms.some(item => item.id === arm && item.canPreserve)) throw new Error(unavailable)
+      const ecosystem = await discover()
+      const { draft, candidate, identity } = await verifiedPlanComparisonArm(pinned, ecosystem)
+      const sameIdentity = arm === 'baseline'
+        ? matchesLessonIdentity(pinned.identity, identity, draft, candidate, ecosystem) : pinned.identity === identity
+      const saved = arm === 'rematch' && await rematchComparisons.readArm(comparisonId, arm)
+      if (!sameIdentity || (arm === 'rematch' && saved?.presetId !== pinned.presetId)) {
+        throw new Error('本机配置已变化，无法核对这局的原出装。')
+      }
+      signal?.throwIfAborted()
+      return { presetId: pinned.presetId, heroId: pinned.heroId, heroName: pinned.heroName }
+    })
   }
 
   async function readComparison(comparisons, { comparisonId, sessionId, prototype }, english, signal) {
@@ -5538,6 +5571,10 @@ export async function apply(ctx) {
         else if (selection?.action === 'rematch-comparison') value = await readComparison(rematchComparisons, selection, english, request.signal)
         else if (selection?.action === 'comparison-history') value = await comparisonHistory(selection, request.signal)
         else if (selection?.action === 'comparison-loadout-preview') value = await comparisonLoadout(selection, request.signal)
+        else if (selection?.action === 'evidence-replay-plan-save') {
+          value = await saveEvidenceReplayPlan(selection, request.signal)
+          updates.notify()
+        }
         else if (selection?.action === 'lesson-task-options') value = await lessonTaskOptions(selection, request.signal)
         else if (selection?.action === 'field-playbook-preview') value = await previewFieldPlaybook(selection)
         else if (selection?.action === 'match-settlements' || selection?.action === 'match-settlements-page') value = await matchSettlements(selection)

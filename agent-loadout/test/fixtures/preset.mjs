@@ -135,7 +135,7 @@ export async function apply(ctx) {
       const latestText = lastUser?.content[0]?.text
       const comparisonMaterial = latestText?.match(/^(?:【工作区同题对照】|\[Workspace comparison\])\n(?:选定材料 |Selected material: )"(02-lighthouse\.md|materials\/workspace-fixture\.md)"\n/u)?.[1]
       const taskMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(materials\/reuse-fixture\.md|案件 材料\/交接 记录\.md|会签 文件\.md)"\n/u)?.[1]
-      const personalEvidence = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(证据 材料\/设备 台账\.md)"\n/u)?.[1]
+      const personalEvidence = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(证据 材料\/(?:设备|更新) 台账\.md)"\n/u)?.[1]
       const evidenceMaterial = personalEvidence ?? (comparisonMaterial === '02-lighthouse.md' ? comparisonMaterial : undefined)
       const supportedFact = personalEvidence ? 'two spare radios' : '2 cans of lamp oil'
       const unverifiedClaim = personalEvidence ? 'a spare charger' : 'two spare batteries'

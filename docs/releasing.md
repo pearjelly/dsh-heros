@@ -63,7 +63,7 @@ DSH_HOME="$smoke_home" dsh web --port 0
 
 - Open the DSH-Heros lobby in English, then change the host language to 中文. Check the text and entry points changed in this release in both languages.
 - Start a fresh session from the Armory, equip a hero, and complete a real turn using the equipped tools. Check the observed tool calls and the resulting Armory feedback. Change equipment and verify that the conversation resumes with the updated loadout. [Sample files and first-turn task](demo/lighthouse)
-- In a separate scratch profile, install the previous published bundle and create a saved loadout and session before upgrading. Use the documented remove-and-add flow for `dsh-agent-loadout` in that profile. Verify that existing loadouts and progression still load and that the saved session can continue.
+- In a separate scratch profile, install the previous tagged bundle and create a saved loadout and session before upgrading. Keep the same pnpm store for both installs. Use the documented remove-and-add flow for `dsh-agent-loadout` in that profile with the new bundle or its tagged URL. Verify the installed version in `profiles/web/node_modules/dsh-agent-loadout/package.json`, then check that the saved loadout, progression, and session are still usable.
 - Repeat the core check in the desktop app using its matching bundled CLI and the `desktop` profile. Record the host versions and smoke results with the release notes.
 
 ## Publish on GitHub
@@ -104,7 +104,9 @@ curl -fsSL "$asset_base/latest/download/dsh-heros-bundle.tgz" \
 
 Update the existing community entry to the tagged bundle URL after publication. An install against a reused pnpm store can retrieve the old version of a rolling URL. A release-specific URL gives each bundle its own cache key. [Community entry](https://awesome-dsh-plugin.com/p/pearjelly/dsh-heros--agent-loadout/) · [Entry source](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/data/plugins/pearjelly__dsh-heros--agent-loadout.yml)
 
-1. Prepare the `tarball` change in the existing listing to `$asset_base/download/$tag/dsh-heros-bundle.tgz`. Run the community submission checker against the previous entry using the published bundle. If its version PR is still open, let its current check finish before pushing the new pin. A push to the same PR cancels the running check. Update the PR and confirm that the next check is attached to the new commit. After merge and site rebuild, verify that the full catalog still has exactly one matching entry and the downloaded bytes match the release checksum.
+1. Prepare the `tarball` change in the existing listing to `$asset_base/download/$tag/dsh-heros-bundle.tgz`. Run the community submission checker against the previous entry to verify the repository and plugin manifest. Verify the published bundle with the checksum from the GitHub release step. If the listing's version PR is still open, let its current check finish before pushing the new pin. A push to the same PR cancels the running check. Update the PR and confirm that the next check is attached to the new commit.
+
+2. Report GitHub publication and the community update separately. A catalog that still points to a rolling or older tagged URL is pending for this release, even if the rolling asset currently downloads the new bytes. While pending, direct users to the verified tagged install command in the README. After merge and site rebuild, verify that the full catalog still has exactly one matching entry and that the pinned URL serves the release checksum.
 
    ```sh
    curl --compressed -fsSL https://awesome-dsh-plugin.com/plugins.json -o "$release_dir/community-catalog.json"
@@ -114,5 +116,5 @@ Update the existing community entry to the tagged bundle URL after publication. 
      "$release_dir/community-catalog.json"
    ```
 
-2. Run the listed install command in a fresh scratch profile. If pnpm reports `ERR_PNPM_ADDING_TO_ROOT`, add `-w` after `add` in the listed command. Confirm the lobby opens and the installed package reports the released version. While the listing PR is pending, share the verified tagged bundle URL.
-3. Edit the existing entry when its description or other metadata needs a change. The separate in-app Discover index includes npm-backed plugins. This bundle is distributed through the community website and full catalog. [Contribution guide](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md) · [Discover index builder](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/scripts/build-index.mjs)
+3. Run the listed install command in a fresh scratch profile. If pnpm reports `ERR_PNPM_ADDING_TO_ROOT`, add `-w` after `add` in the listed command. Confirm the lobby opens and the installed package reports the released version.
+4. Edit the existing entry when its description or other metadata needs a change. The separate in-app Discover index includes npm-backed plugins. This bundle is distributed through the community website and full catalog. [Contribution guide](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md) · [Discover index builder](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/scripts/build-index.mjs)

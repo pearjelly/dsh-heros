@@ -15,11 +15,13 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.93.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.94.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 For the desktop app, use its bundled CLI with `--profile desktop`, then quit and reopen the app. If an earlier copy is installed, remove `dsh-agent-loadout` from the same profile before installing the release. The package keeps that identifier for compatibility.
+
+If you came from the community catalog, use the command above to install this release. The versioned address has its own pnpm cache entry, and `-w` lets the CLI install at the profile workspace root.
 
 Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
 
@@ -36,6 +38,10 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 2. Choose **Open rematch session**, then manually send the same task in the new DSH session. The replay uses the original workspace, material and brief. The original material and source must still pass verification.
 3. In **Evidence gear comparison**, compare the actual tool calls, recorded choices, and files from both sessions. A choice to pause can leave zero files. If the replay asks a question of its own, any recorded answer appears on that side. Open either source session to inspect the conversation and decide whether to equip Evidence Check next time.
 4. Once you have a completed personal comparison, open **Armory → Evidence Check → View evidence replay history**. Search by task, material, or workspace. Select a comparison and open either original DSH session to check the recorded choices and attachments. Completed records stay available if you later change the material.
+
+## Keep a loadout for next time
+
+In a completed **Evidence gear comparison**, **Keep a loadout for next time** shows the actual choices and attachments from both runs. On the side you prefer, choose **Keep this loadout**, review the gear and its sources, then name and save the plan. Saving leaves your current Armory draft in place. In **Loadout plans**, select the saved plan and choose **Start a task with this loadout** to use it on new material.
 
 ## Play your first rematch
 
