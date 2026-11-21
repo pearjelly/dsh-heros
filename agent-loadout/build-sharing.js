@@ -112,3 +112,45 @@ export function decodeBuildShare(value) {
   }
   throw new Error('分享码无效或版本不受支持。')
 }
+
+const challengePrefix = 'DSHC1.'
+const challengeLimit = Math.ceil(codeLimit * 4 / 3) + 100
+const challengeSample = 'lighthouse-evidence-1'
+export const lighthouseChallengeName = 'Lighthouse evidence challenge'
+const invalidChallenge = '灯塔挑战码无效或版本不受支持。'
+
+function challengeLoadout(code) {
+  if (typeof code !== 'string' || code.trim() !== code) throw new Error(invalidChallenge)
+  const recipe = decodeBuildShare(code)
+  const featured = recipe.gear.filter(item => item.kind === 'featured')
+  if (recipe.name !== lighthouseChallengeName || recipe.hero.id !== 'standard' || featured.length !== 2 ||
+    !['present', 'evidence'].every(id => featured.some(item => item.id === id)) ||
+    recipe.gear.some(item => item.kind !== 'featured' && (item.kind !== 'plugin' || item.operation !== 'remove'))) {
+    throw new Error(invalidChallenge)
+  }
+  return code
+}
+
+export function encodeLighthouseChallenge(loadout) {
+  const data = { sample: challengeSample, loadout: challengeLoadout(loadout) }
+  return challengePrefix + Buffer.from(JSON.stringify(data)).toString('base64url')
+}
+
+export function decodeLighthouseChallenge(value) {
+  if (typeof value !== 'string' || value.length > challengeLimit || !value.trim().startsWith(challengePrefix)) {
+    throw new Error(invalidChallenge)
+  }
+  const payload = value.trim().slice(challengePrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidChallenge)
+  try {
+    const bytes = Buffer.from(payload, 'base64url')
+    const data = JSON.parse(bytes.toString('utf8'))
+    if (shape(data, ['sample', 'loadout']) && data.sample === challengeSample &&
+      bytes.toString('base64url') === payload && bytes.equals(Buffer.from(JSON.stringify(data)))) {
+      return challengeLoadout(data.loadout)
+    }
+  } catch {
+    // The public sample and its portable loadout are both versioned.
+  }
+  throw new Error(invalidChallenge)
+}

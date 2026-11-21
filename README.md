@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.102.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.103.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -39,6 +39,11 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 2. Choose **Open rematch session**, then manually send the same task in the new DSH session. The replay uses the original workspace, material and brief. The original material and source must still pass verification.
 3. In **Evidence gear comparison**, compare the actual tool calls, recorded choices, and files from both sessions. A choice to pause can leave zero files. If the replay asks a question of its own, any recorded answer appears on that side. Open either source session to inspect the conversation and decide whether to equip Evidence Check next time.
 4. Once you have a completed personal comparison, open **Armory → Evidence Check → View evidence replay history**. Search by task, material, or workspace. Select a comparison and open either original DSH session to check the recorded choices and attachments. Completed records stay available if you later change the material.
+
+## Share a Lighthouse challenge
+
+1. Complete the public **Missing key evidence** exercise and open **View evidence run**. After the run passes verification, choose **Share a Lighthouse challenge** and copy the code. The code carries the packaged sample version and a portable recipe for the standard loadout. Your choices, results, and files stay in your own profile.
+2. To play a shared challenge, choose **Join a Lighthouse challenge** from the Lighthouse entry in the Armory and paste the code. After checking the sample and equipment sources, you can record your own optional opening choice and open a fresh session. Manually send the task and decide on the native DSH question card.
 
 ## Keep a loadout for next time
 

@@ -1142,7 +1142,8 @@ window.__ModuleLoader__.load({
       { id: 'delivery', icon: 'report', name: '交付路线', tools: 'glob → present', outcome: '把补给卡交到对话里，你可以点开核对内容。' },
     ]
 
-    function LighthouseStarter({ hero, request, launchIds, onCancel, onOpen, onEquip, onCompare, onLesson, lessonButton, evidenceButton }) {
+    function LighthouseStarter({ hero, request, launchIds, onCancel, onOpen, onEquip, onCompare, onLesson,
+      lessonButton, evidenceButton, onJoinChallenge, challengeButton }) {
       const [route, setRoute] = useState('delivery')
       const [busy, setBusy] = useState(false)
       const [problem, setProblem] = useState(null)
@@ -1206,6 +1207,8 @@ window.__ModuleLoader__.load({
               t('灯塔换装练习')),
             h('button', { ref: evidenceButton, type: 'button', className: 'moba-roster-open', disabled: busy,
               onClick: () => onLesson(lighthouseEvidenceLesson) }, t('灯塔证据取舍')),
+            h('button', { ref: challengeButton, type: 'button', className: 'moba-roster-open', disabled: busy,
+              'aria-haspopup': 'dialog', onClick: onJoinChallenge }, t('加入灯塔挑战')),
             problem?.sessionId && h('button', { type: 'button', className: 'moba-roster-open',
               onClick: () => onOpen(problem.sessionId) }, t('进入已建对局')),
             h('button', { type: 'submit', className: 'moba-start', disabled: busy },
@@ -1221,6 +1224,15 @@ window.__ModuleLoader__.load({
     ]
     const evidenceOpeningChoices = { gather: '继续补证', qualify: '降级推荐', pause: '暂缓提交' }
     const evidenceArm = { id: 'evidence', icon: 'search', name: '证据核验' }
+
+    function EvidenceOpeningChoice({ value, disabled, onChange }) {
+      return h('div', { className: 'moba-rematch-fields' },
+        h('label', null, t('开局选择（可跳过）'),
+          h('select', { value, disabled, onChange: event => onChange(event.target.value) },
+            h('option', { value: '' }, t('暂不选择')),
+            Object.entries(evidenceOpeningChoices).map(([id, label]) => h('option', { key: id, value: id }, t(label))))),
+        h('p', { className: 'moba-starter-note' }, t('先选你会怎么处理，发送任务后再在会话中作决定。')))
+    }
 
     function LighthouseLessonLaunch({ request, onCancel, onOpen, lesson = lighthouseRematchLesson }) {
       const language = useLanguage()
@@ -1269,19 +1281,150 @@ window.__ModuleLoader__.load({
             : h('ol', { className: 'moba-lesson-steps' },
               h('li', null, t('先用标准模式直接交付灯塔补给卡。')),
               h('li', null, t('再装上「交付前复核」跑同一任务，看看能否确认交付或退回修改。'))),
-          showOpeningChoice && h('div', { className: 'moba-rematch-fields' },
-            h('label', null, t('开局选择（可跳过）'),
-              h('select', { value: openingChoice, disabled: busy,
-                onChange: event => { setOpeningChoice(event.target.value); setError('') } },
-              h('option', { value: '' }, t('暂不选择')),
-              Object.entries(evidenceOpeningChoices).map(([id, label]) => h('option', { key: id, value: id }, t(label))))),
-            h('p', { className: 'moba-starter-note' }, t('先选你会怎么处理，发送任务后再在会话中作决定。'))),
+          showOpeningChoice && h(EvidenceOpeningChoice, { value: openingChoice, disabled: busy,
+            onChange: value => { setOpeningChoice(value); setError('') } }),
           h('p', { className: 'moba-starter-note' }, t('练习自带示例材料，无需保存方案。每一局都由你在会话中手动发送。')),
           error && h('p', { className: 'moba-alert', role: 'alert' }, error),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open', onClick: onCancel, disabled: busy }, t('返回')),
             h('button', { type: 'submit', className: 'moba-start', disabled: busy },
               t(busy ? '正在准备对局…' : error ? '重试' : evidence ? '开始证据取舍' : '开始换装练习'), h(Glyph, { kind: 'arrow', size: 16 })))))
+    }
+
+    function LighthouseChallengeShare({ comparisonId, request, onBack }) {
+      const language = useLanguage()
+      const [result, setResult] = useState(null)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const field = useRef(null)
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'lighthouse-challenge-share'
+        setResult(null)
+        setError('')
+        setNotice('')
+        request(action, { action, comparisonId }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setResult(value) })
+          .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
+        return () => abort.abort()
+      }, [comparisonId, request, language])
+
+      async function copy() {
+        try {
+          await navigator.clipboard.writeText(result.code)
+          setNotice(t('挑战码已复制。'))
+        } catch {
+          field.current?.focus()
+          field.current?.select()
+          setNotice(t('挑战码已选中，可以手动复制。'))
+        }
+      }
+
+      return h(InstallDialog, { title: t('分享灯塔挑战'), className: 'moba-starter-dialog',
+        onCancel: onBack, initialFocus: '.moba-challenge-back', onKeyDown: event => closeDialogOnEscape(event, onBack) },
+        h('div', { className: 'moba-plan-fields moba-share-fields' },
+          h('p', { className: 'moba-starter-note' }, t('挑战码指定公开缺证样例和出装要求。接收者会在新会话里自己选择。')),
+          error ? h('p', { className: 'moba-alert', role: 'alert' }, error)
+            : result?.code ? h('label', null, t('挑战码'),
+              h('textarea', { className: 'moba-share-code', ref: field, readOnly: true, value: result.code, rows: 3,
+                spellCheck: false, onFocus: event => event.currentTarget.select() }))
+              : h('p', { className: 'moba-empty', role: 'status' }, t('正在核对挑战要求…')),
+          notice && h('p', { className: 'moba-empty', role: 'status' }, notice)),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open moba-challenge-back', onClick: onBack }, t('返回')),
+          result?.code && h('button', { type: 'button', className: 'moba-start', onClick: copy }, t('复制挑战码'))))
+    }
+
+    function LighthouseChallengeJoin({ request, onCancel, onOpen }) {
+      const language = useLanguage()
+      const [code, setCode] = useState('')
+      const [checked, setChecked] = useState(null)
+      const [openingChoice, setOpeningChoice] = useState('')
+      const [busy, setBusy] = useState('')
+      const [error, setError] = useState('')
+      const pending = useRef(null)
+      const launchIds = useRef(new Map())
+      const heading = useRef(null)
+      const field = useRef(null)
+      const trimmed = code.trim()
+      const preview = checked?.code === trimmed && checked.language === language ? checked.value : undefined
+      const canOpen = !preview?.blocked && preview?.token
+      useEffect(() => () => pending.current?.abort(), [])
+      useEffect(() => { if (preview) heading.current?.focus() }, [preview])
+
+      async function check(event) {
+        event.preventDefault()
+        if (!trimmed || pending.current) return
+        const abort = new AbortController()
+        pending.current = abort
+        setBusy('check')
+        setError('')
+        setChecked(null)
+        try {
+          const action = 'lighthouse-challenge-preview'
+          const value = await request(action, { action, code: trimmed }, abort.signal, language)
+          if (!abort.signal.aborted) setChecked({ value, code: trimmed, language })
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setBusy('')
+        }
+      }
+
+      async function start() {
+        if (!canOpen || pending.current) return
+        const abort = new AbortController()
+        pending.current = abort
+        setBusy('start')
+        setError('')
+        try {
+          const action = 'lighthouse-challenge-open'
+          const key = JSON.stringify([trimmed, preview.token, openingChoice, language])
+          if (!launchIds.current.has(key)) launchIds.current.set(key, Array.from(crypto.getRandomValues(new Uint8Array(16)),
+            byte => byte.toString(16).padStart(2, '0')).join(''))
+          const result = await request(action, { action, code: trimmed, token: preview.token, launchId: launchIds.current.get(key),
+            ...(openingChoice && { openingChoice }) }, abort.signal, language)
+          if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
+        } catch (reason) {
+          if (!abort.signal.aborted) {
+            setError(reason.message)
+            setChecked(null)
+            field.current?.focus()
+          }
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setBusy('')
+        }
+      }
+
+      return h(InstallDialog, { title: t('加入灯塔挑战'), className: 'moba-starter-dialog',
+        busy: Boolean(busy), onCancel, initialFocus: '.moba-share-code',
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onCancel() }) },
+        h('form', { onSubmit: check },
+          h('div', { className: 'moba-plan-fields moba-share-fields' },
+            h('label', null, t('挑战码'),
+              h('textarea', { className: 'moba-share-code', ref: field, required: true, value: code, rows: 3, maxLength: lighthouseChallengeLimit,
+                readOnly: Boolean(busy), spellCheck: false, autoComplete: 'off', autoCapitalize: 'off',
+                onChange: event => { setCode(event.target.value); setChecked(null); setError(''); setOpeningChoice('') } })),
+            error && h('p', { className: 'moba-alert', role: 'alert' }, error),
+            busy === 'check' && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对挑战要求…')),
+            preview && h('div', { className: 'moba-share-review' },
+              h('h3', { ref: heading, tabIndex: -1 }, t('关键证据缺失')),
+              h(PlanShareRequirements, { value: preview }),
+              h(SharedPlanCapabilities, { comparison: preview.comparison }),
+              preview.blocked && h('p', { className: 'moba-alert', role: 'status' },
+                t(preview.reason ?? '请处理上方的装备或版本要求，再重新核对。')),
+              canOpen && h(Fragment, null,
+                h('p', { className: 'moba-lighthouse-note' }, t(evidenceScenarios[0].note)),
+                h(EvidenceOpeningChoice, { value: openingChoice, disabled: Boolean(busy), onChange: setOpeningChoice }))),
+            canOpen && h('p', { className: 'moba-starter-note' }, t('手动发送练习任务。如果出现证据取舍卡，请在会话里选择。'))),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(busy), onClick: onCancel }, t('返回')),
+            h('button', { type: 'submit', className: canOpen ? 'moba-roster-open' : 'moba-start',
+              disabled: Boolean(busy) || !trimmed }, t('核对挑战码')),
+            canOpen && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy), onClick: start },
+              t(busy === 'start' ? '正在准备对局…' : '开始灯塔挑战'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
     const fieldPlaybooks = [
@@ -1944,6 +2087,7 @@ window.__ModuleLoader__.load({
       const [savedNoteArm, setSavedNoteArm] = useState('')
       const [lessonTask, setLessonTask] = useState(null)
       const [lessonLaunchOpen, setLessonLaunchOpen] = useState(false)
+      const [challengeShareId, setChallengeShareId] = useState('')
       const starting = useRef(false)
       const launchIds = useRef(new Map())
       const returnFocus = useRef('')
@@ -2088,6 +2232,10 @@ window.__ModuleLoader__.load({
         returnFocus.current = '.moba-new-lesson'
         setLessonLaunchOpen(false)
       } })
+      if (challengeShareId) return h(LighthouseChallengeShare, { comparisonId: challengeShareId, request, onBack: () => {
+        returnFocus.current = '.moba-lighthouse-challenge-share'
+        setChallengeShareId('')
+      } })
 
       return h(InstallDialog, { title: t(comparisonTitle(kind, lessonMarker, evidenceReplay)), className: 'moba-lighthouse-comparison', busy: Boolean(launch),
         onCancel: onBack ?? onClose, initialFocus: returnFocus.current || focusSelector || '.moba-lighthouse-close',
@@ -2145,6 +2293,9 @@ window.__ModuleLoader__.load({
         h('div', { className: 'moba-market-actions moba-starter-actions' },
           (onBack || onHistory) && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
             onClick: onBack ?? onHistory }, onBack ? backLabel ?? backToRunHistoryLabel() : runHistoryLabel()),
+          kind === 'workspace' && evidence && value?.canShareChallenge && h('button', { type: 'button',
+            className: 'moba-roster-open moba-lighthouse-challenge-share', 'aria-haspopup': 'dialog',
+            onClick: () => setChallengeShareId(value.id) }, t('分享灯塔挑战')),
           practice && value?.id && h('button', { type: 'button', className: 'moba-roster-open moba-new-lesson',
             onClick: () => setLessonLaunchOpen(true) }, t(evidence ? '开始新的证据取舍' : '开始新的换装练习')),
           !practice && (kind === 'workspace' || kind === 'lighthouse') && value?.id && !prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
@@ -4123,6 +4274,7 @@ window.__ModuleLoader__.load({
     }
 
     const planShareLimit = 16 * 1024
+    const lighthouseChallengeLimit = Math.ceil(planShareLimit * 4 / 3) + 100
     const planShareStates = { ready: '已核对', missing: '本机缺失', different: '与分享要求不同', unavailable: '不可用' }
 
     function PlanShareRows({ title, items }) {
@@ -5774,6 +5926,8 @@ window.__ModuleLoader__.load({
       const starterLessonButton = useRef(null)
       const evidenceButton = useRef(null)
       const starterEvidenceButton = useRef(null)
+      const [challengeOpen, setChallengeOpen] = useState(false)
+      const starterChallengeButton = useRef(null)
       const [lighthouseCompareOpen, setLighthouseCompareOpen] = useState(false)
       const lighthouseCompareButton = useRef(null)
       const [playbooksOpen, setPlaybooksOpen] = useState(false)
@@ -6461,6 +6615,7 @@ window.__ModuleLoader__.load({
             onCompare: () => { setStarterOpen(false); setLighthouseCompareOpen(true) },
             onLesson: lesson => setLessonOpen({ lesson, trigger: lesson === lighthouseEvidenceLesson ? starterEvidenceButton : starterLessonButton }),
             lessonButton: starterLessonButton, evidenceButton: starterEvidenceButton,
+            challengeButton: starterChallengeButton, onJoinChallenge: () => setChallengeOpen(true),
             onOpen: sessionId => { cue('lock'); setStarterOpen(false); openSource(sessionId) } }),
           lessonOpen && h(LighthouseLessonLaunch, { request, lesson: lessonOpen.lesson, onCancel: () => {
             const { trigger } = lessonOpen
@@ -6469,6 +6624,15 @@ window.__ModuleLoader__.load({
           }, onOpen: (sessionId, task) => {
             cue('lock')
             setLessonOpen(null)
+            setStarterOpen(false)
+            openDraftSession(sessionId, task)
+          } }),
+          challengeOpen && h(LighthouseChallengeJoin, { request, onCancel: () => {
+            setChallengeOpen(false)
+            requestAnimationFrame(() => starterChallengeButton.current?.focus())
+          }, onOpen: (sessionId, task) => {
+            cue('lock')
+            setChallengeOpen(false)
             setStarterOpen(false)
             openDraftSession(sessionId, task)
           } }),

@@ -1629,6 +1629,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
   const sampleFiles = ['01-waystation.md', material, '03-old-bridge.md']
   const questions = '/api/loadout-fixture-handoff-question'
   let host
+  let recipient
   try {
     await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
     await installProfile(directory, env)
@@ -1637,6 +1638,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const open = (scenario, launchId, status) => invoke('lighthouse-evidence-open', { scenario, launchId }, status)
     const predict = (launchId, openingChoice, status, scenario = 'gap') =>
       invoke('lighthouse-evidence-open', { scenario, launchId, openingChoice }, status)
+    const shareChallenge = (comparisonId, status) => invoke('lighthouse-challenge-share', { comparisonId }, status)
     const openEnglish = async (scenario, launchId) => {
       const response = await host.requestRaw(endpoint, { method: 'POST',
         headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
@@ -1665,6 +1667,8 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     await predict(predictedLaunch, 'qualify', 422, 'confirmed')
     const [lower, samePrediction] = await Promise.all([predict(predictedLaunch, 'pause'), predict(predictedLaunch, 'pause')])
     assert.deepEqual(samePrediction, lower)
+    assert.equal((await read({ comparisonId: lower.id })).canShareChallenge, undefined)
+    await shareChallenge(lower.id, 422)
     await predict(predictedLaunch, 'gather', 422)
     await open('gap', predictedLaunch, 422)
     const pause = await openEnglish('gap', 'c'.repeat(32))
@@ -1824,7 +1828,109 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       assert.equal(item?.lesson, 'lighthouse-evidence')
       assert.equal(item.scenario, filter.comparisonId === confirmed.id ? 'confirmed' : 'gap')
     }
+
+    for (const id of [confirmed.id, edited.id, changed.id]) {
+      assert.equal((await read({ comparisonId: id })).canShareChallenge, undefined)
+      await shareChallenge(id, 422)
+    }
+    await shareChallenge('0'.repeat(32), 422)
+    const { code } = await shareChallenge(lower.id)
+    assert.equal((await read({ comparisonId: lower.id })).canShareChallenge, true)
+    assert.equal((await shareChallenge(gather.id)).code, code)
+    assert.equal((await shareChallenge(pause.id)).code, code)
+    const decodeCode = (text, prefix) => {
+      assert.ok(text.startsWith(prefix))
+      return JSON.parse(Buffer.from(text.slice(prefix.length), 'base64url').toString('utf8'))
+    }
+    const encodeCode = (data, prefix) => prefix + Buffer.from(JSON.stringify(data)).toString('base64url')
+    const challenge = decodeCode(code, 'DSHC1.')
+    assert.deepEqual(Object.keys(challenge), ['sample', 'loadout'])
+    assert.equal(challenge.sample, 'lighthouse-evidence-1')
+    const recipe = decodeCode(challenge.loadout, 'DSHH1.')
+    assert.equal(recipe.name, 'Lighthouse evidence challenge')
+    assert.equal(recipe.hero.id, 'standard')
+    assert.deepEqual(recipe.gear.filter(item => item.kind === 'featured').map(item => [item.id, item.operation]).sort(),
+      [['evidence', 'equip'], ['present', 'equip']])
+    assert.ok(recipe.gear.filter(item => item.kind !== 'featured').every(item => item.kind === 'plugin' && item.operation === 'remove'))
+    const portable = JSON.stringify(recipe)
+    for (const privateValue of [directory, lower.id, lower.sessionId, lower.requestId, material, lower.task,
+      'qualified-handoff.md', '降级推荐', '暂缓提交', 'Pause submission']) assert.ok(!portable.includes(privateValue), privateValue)
+    assert.doesNotMatch(portable, /"(?:workspaceId|workspacePath|material|note|choices|openingChoice|deliverables)"\s*:/u)
+
+    const recipientEnv = { ...env, DSH_HOME: join(directory, 'recipient') }
+    await installProfile(directory, recipientEnv)
+    recipient = await startHost(recipientEnv, patch)
+    const receive = async (action, fields, status) => (await recipient.request(endpoint, { action, ...fields }, status)).value
+    const previewChallenge = (text, status) => receive('lighthouse-challenge-preview', { code: text }, status)
+    const openChallenge = (fields, status) => receive('lighthouse-challenge-open', fields, status)
+    const recipientSessions = () => readdir(join(recipientEnv.DSH_HOME, 'sessions')).catch(error => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    })
+    const cleanCatalog = (await recipient.request(endpoint)).value
+    assert.deepEqual(cleanCatalog.plans, [])
+    assert.deepEqual(await recipientSessions(), [])
+    await receive('workspace-comparison', { comparisonId: lower.id }, 422)
+    await previewChallenge(encodeCode({ ...challenge, sample: 'unknown-evidence-sample' }, 'DSHC1.'), 422)
+    await previewChallenge(encodeCode({ ...challenge, sessionId: lower.sessionId }, 'DSHC1.'), 422)
+    const wrongLoadout = encodeCode({ ...recipe, gear: recipe.gear.filter(item => item.id !== 'evidence') }, 'DSHH1.')
+    await previewChallenge(encodeCode({ ...challenge, loadout: wrongLoadout }, 'DSHC1.'), 422)
+    const unavailableLoadout = encodeCode({ ...recipe, dependencies: [...recipe.dependencies,
+      { package: 'dsh-fixture-unavailable-for-lighthouse-challenge', version: '1.0.0' }] }, 'DSHH1.')
+    const unavailableCode = encodeCode({ ...challenge, loadout: unavailableLoadout }, 'DSHC1.')
+    const unavailable = await previewChallenge(unavailableCode)
+    assert.equal(unavailable.blocked, true)
+    assert.equal(unavailable.token, undefined)
+    const preview = await previewChallenge(code)
+    assert.ok(preview.token, JSON.stringify(preview))
+    assert.equal(preview.hero.id, 'standard')
+    assert.deepEqual(new Set(preview.draft.equipmentIds), new Set(['evidence', 'present']))
+    const challengeFields = { code, token: preview.token, launchId: 'b'.repeat(32), openingChoice: 'qualify' }
+    await openChallenge({ ...challengeFields, token: '0'.repeat(64) }, 422)
+    await openChallenge({ ...challengeFields, code: unavailableCode }, 422)
+    assert.deepEqual(await recipientSessions(), [])
+    assert.deepEqual((await recipient.request(endpoint)).value.saved, cleanCatalog.saved)
+    const [accepted, retried] = await Promise.all([openChallenge(challengeFields), openChallenge(challengeFields)])
+    assert.deepEqual(retried, accepted)
+    assert.notEqual(accepted.id, lower.id)
+    assert.notEqual(accepted.sessionId, lower.sessionId)
+    assert.equal(accepted.task, lower.task)
+    await openChallenge({ ...challengeFields, openingChoice: 'gather' }, 422)
+    assert.equal((await recipientSessions()).length, 1)
+    const nativeRecipient = () => recipient.request('/api/loadout-fixture-history?sessionId=' + accepted.sessionId)
+    const blank = await nativeRecipient()
+    assert.equal(blank.presetId, (await history(lower.sessionId)).presetId)
+    assert.notEqual(blank.workspacePath, (await history(lower.sessionId)).workspacePath)
+    assert.ok(!blank.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+    assert.deepEqual((await readdir(blank.workspacePath)).sort(), sampleFiles)
+    const receivedView = () => receive('workspace-comparison', { comparisonId: accepted.id })
+    assert.equal((await receivedView()).canShareChallenge, undefined)
+    const play = recipient.request(turnEndpoint, { ...accepted, text: accepted.task })
+    play.catch(() => {})
+    let question
+    try {
+      for (let attempt = 0; attempt < 100 && !question; attempt++) {
+        question = (await recipient.request(questions, { sessionId: accepted.sessionId })).question
+        if (!question) await delay(40)
+      }
+      assert.deepEqual(question?.options.map(option => option.label), ['继续补证', '降级推荐', '暂缓提交'])
+      assert.equal((await receivedView()).canShareChallenge, undefined)
+    } finally {
+      if (question) await recipient.request(questions, { sessionId: accepted.sessionId, choice: '暂缓提交' })
+      await play
+    }
+    const finished = await receivedView()
+    assert.equal(finished.canShareChallenge, true)
+    assert.deepEqual(finished.evidenceOpeningChoice, { choice: 'qualify', actualChoices: ['暂缓提交'] })
+    assert.deepEqual(finished.arms[0].deliverables, [])
+    const played = await nativeRecipient()
+    assert.deepEqual(tools(played).map(event => event.data.name), ['read', 'ask_user_question'])
+    assert.deepEqual(files(played), [])
+    assert.deepEqual((await readdir(played.workspacePath)).sort(), sampleFiles)
+    assert.deepEqual((await recipient.request(endpoint)).value.plans, [])
+    assert.equal((await receive('lighthouse-challenge-share', { comparisonId: accepted.id })).code, code)
   } finally {
+    await recipient?.stop()
     await host?.stop()
     await rm(directory, { recursive: true, force: true })
   }
