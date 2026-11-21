@@ -102,17 +102,17 @@ curl -fsSL "$asset_base/latest/download/dsh-heros-bundle.tgz" \
 
 ## Verify the DeepSeek Harness community listing
 
-The existing community entry follows the GitHub Latest asset route. A stable release with the same asset filename updates the download used by the existing listing. [Community entry](https://awesome-dsh-plugin.com/p/pearjelly/dsh-heros--agent-loadout/) · [Entry source](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/data/plugins/pearjelly__dsh-heros--agent-loadout.yml)
+Update the existing community entry to the tagged bundle URL after publication. An install against a reused pnpm store can retrieve the old version of a rolling URL. A release-specific URL gives each bundle its own cache key. [Community entry](https://awesome-dsh-plugin.com/p/pearjelly/dsh-heros--agent-loadout/) · [Entry source](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/data/plugins/pearjelly__dsh-heros--agent-loadout.yml)
 
-1. Open the existing listing and confirm that its installer uses the Latest asset URL. Check that the full catalog still has exactly one matching entry and compare the linked download with the release checksum.
+1. Submit a PR updating `tarball` in the existing listing to `$asset_base/download/$tag/dsh-heros-bundle.tgz`. After merge and site rebuild, verify that the full catalog still has exactly one matching entry and the downloaded bytes match the release checksum.
 
    ```sh
-   curl -fsSL https://awesome-dsh-plugin.com/plugins.json -o "$release_dir/community-catalog.json"
-   jq -e --arg url "$asset_base/latest/download/dsh-heros-bundle.tgz" \
+   curl --compressed -fsSL https://awesome-dsh-plugin.com/plugins.json -o "$release_dir/community-catalog.json"
+   jq -e --arg url "$asset_base/download/$tag/dsh-heros-bundle.tgz" \
      '[.plugins[] | select(.owner == "pearjelly" and .name == "dsh-heros#agent-loadout")]
       | length == 1 and .[0].tarball == $url and (.[0].install | contains($url))' \
      "$release_dir/community-catalog.json"
    ```
 
-2. Run the listed install command in a fresh scratch profile. If pnpm reports `ERR_PNPM_ADDING_TO_ROOT`, add `-w` after `add` in the listed command. Confirm the lobby opens and the installed package reports the released version.
-3. If the listing's description, category, or other metadata needs an update, submit a PR that edits the existing YAML entry. Rolling GitHub bundles can have an empty version in the catalog. The separate in-app Discover index includes npm-backed plugins, while this entry is distributed through the website and full catalog. [Contribution guide](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md) · [Discover index builder](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/scripts/build-index.mjs)
+2. Run the listed install command in a fresh scratch profile. If pnpm reports `ERR_PNPM_ADDING_TO_ROOT`, add `-w` after `add` in the listed command. Confirm the lobby opens and the installed package reports the released version. While the listing PR is pending, share the verified tagged bundle URL.
+3. Edit the existing entry when its description or other metadata needs a change. The separate in-app Discover index includes npm-backed plugins. This bundle is distributed through the community website and full catalog. [Contribution guide](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md) · [Discover index builder](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/scripts/build-index.mjs)
