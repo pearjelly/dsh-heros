@@ -51,6 +51,7 @@ const planTaskRecord = 'plugin:dsh-agent-loadout/plan-task'
 const planTaskSessionPrefix = 'session-a076'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
+const evidenceOpeningChoices = ['gather', 'qualify', 'pause']
 const isEvidenceLessonSource = ({ kind, arm }) => kind === 'workspace' && arm === 'evidence'
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
@@ -61,6 +62,10 @@ function flatten(rows) {
   return rows.flatMap(row => row.group === true && Array.isArray(row.config)
     ? [row, ...flatten(row.config)]
     : [row])
+}
+
+function validEvidenceOpeningChoice(lesson, scenario, choice) {
+  return choice === undefined || (lesson === evidenceLesson && scenario === 'gap' && evidenceOpeningChoices.includes(choice))
 }
 
 function validLessonTaskReference(source) {
@@ -459,8 +464,9 @@ export async function apply(ctx) {
     () => warnings.push('lighthouse-comparisons'))
   const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', [...workspaceComparisonArms, 'evidence'], saveEntry,
     () => warnings.push('workspace-comparisons'),
-    record => validWorkspaceComparison(record) && (record.lesson === undefined || record.lesson === lighthouseLesson ||
-      (record.lesson === evidenceLesson && lighthouseEvidenceScenarios.includes(record.scenario))),
+    record => validWorkspaceComparison(record) && validEvidenceOpeningChoice(record.lesson, record.scenario, record.openingChoice) &&
+      (record.lesson === undefined || record.lesson === lighthouseLesson ||
+        (record.lesson === evidenceLesson && lighthouseEvidenceScenarios.includes(record.scenario))),
     record => {
       if (record.lesson === evidenceLesson) return ['evidence']
       if (record.lesson === lighthouseLesson) return ['direct']
@@ -4010,7 +4016,7 @@ export async function apply(ctx) {
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material,
         verifyMaterialDelivery: lessonBaseline || verifyPersonalDelivery,
         ...((verifyPersonalDelivery || evidencePractice || strictEvidence) && { exactMessages: true }),
-        linkedChoicesOnly: strictEvidence }, receipts)
+        linkedChoicesOnly: strictEvidence || (evidencePractice && comparison.openingChoice !== undefined) }, receipts)
       if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
         result.reason = '未交付本次练习的灯塔补给卡。请查看原会话或开始新的练习。'
       }
@@ -4509,10 +4515,13 @@ export async function apply(ctx) {
       material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
     ])
     const evidenceRetestOutcome = record.evidenceRetest && await readEvidenceRetestOutcome(record, rounds.arms, signal)
+    const practice = record.openingChoice && rounds.arms.find(arm => arm.id === 'evidence')
+    const evidenceOpeningChoice = practice && verifiedEvidenceArm(practice)
+      ? { choice: record.openingChoice, actualChoices: comparisonChoices(practice) } : undefined
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
       ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),
       ...(record.lesson === evidenceLesson && { scenario: record.scenario }), ...(record.evidenceRetest && { evidenceRetest: true }),
-      ...(evidenceRetestOutcome && { evidenceRetestOutcome }) }
+      ...(evidenceRetestOutcome && { evidenceRetestOutcome }), ...(evidenceOpeningChoice && { evidenceOpeningChoice }) }
   }
 
   async function createWorkspaceComparison(comparisons, registry, selection, english, signal) {
@@ -4536,11 +4545,13 @@ export async function apply(ctx) {
     return record
   }
 
-  async function openLighthouseLesson({ launchId, scenario = 'gap' }, english, signal, lesson = lighthouseLesson) {
+  async function openLighthouseLesson({ launchId, scenario = 'gap', openingChoice }, english, signal, lesson = lighthouseLesson) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     if (!validOpeningId(launchId)) throw new Error('开局请求无效，请重试。')
     const evidence = lesson === evidenceLesson
-    if (evidence && !lighthouseEvidenceScenarios.includes(scenario)) throw new Error('开局请求无效，请重试。')
+    if ((evidence && !lighthouseEvidenceScenarios.includes(scenario)) || !validEvidenceOpeningChoice(lesson, scenario, openingChoice)) {
+      throw new Error('开局请求无效，请重试。')
+    }
     const registry = ctx.get('workspaceRegistry')
     if (!registry?.create || !ctx.get('sessionController')?.create || !ctx.get('sessionQuery')) {
       throw new Error('灯塔练习工作区不可用。')
@@ -4556,12 +4567,14 @@ export async function apply(ctx) {
         const digest = await digestWorkspaceMaterial(workspace.path, material, signal)
         signal?.throwIfAborted()
         return { ...fields, workspaceId: workspace.id, workspaceTitle: workspace.title, cwd: workspace.path, digest, lesson,
-          ...(evidence && { scenario }) }
+          ...(evidence && { scenario }), ...(openingChoice && { openingChoice }) }
       }).finally(() => openingLighthouseLessons.delete(key))
       openingLighthouseLessons.set(key, work)
     }
     const record = await work
-    if (evidence && record.scenario !== scenario) throw new Error('本次对照请求与原任务不同，请重新开始。')
+    if (evidence && (record.scenario !== scenario || record.openingChoice !== openingChoice)) {
+      throw new Error('本次对照请求与原任务不同，请重新开始。')
+    }
     return openComparisonArm(workspaceComparisons, { comparisonId: record.id, arm: evidence ? 'evidence' : 'direct' }, english, signal)
   }
 

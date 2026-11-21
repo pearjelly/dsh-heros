@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.99.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.100.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -27,9 +27,9 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 
 ## Play Lighthouse evidence choices
 
-1. In the lobby's **Armory**, open **Evidence Check** and choose **Try an evidence choice**. **Lighthouse evidence choices** also opens from **Lighthouse Supply Run**. Pick a scenario and choose **Start evidence exercise**. The fresh Standard Mode session comes with Evidence Check and the sample supply card. Review and manually send the prepared task in DSH. If you choose **Back** before starting, focus returns to the armory button and you can resume the same loadout draft.
-2. In **Missing key evidence**, the card does not verify a report of two spare batteries. On the native DSH question card, you can gather more evidence, limit the recommendation to what the card supports, or pause submission. In **Evidence available**, the card records two cans of lamp oil, so the handoff can proceed without asking you to resolve a missing source.
-3. Choose **View evidence run** in the session, or find the run in **Run history**. Check actual tool calls, any answer you gave, and any file delivered in that session. A choice to pause can leave the run with zero attachments. Each run uses a separate sample workspace, and any delivery stays in the DSH conversation.
+1. In the lobby's **Armory**, open **Evidence Check** and choose **Try an evidence choice**. **Lighthouse evidence choices** also opens from **Lighthouse Supply Run**. In **Missing key evidence**, use **Opening choice (optional)** to record what you would do about the dispatch report of two spare batteries. Choose to gather more evidence, qualify the recommendation, or pause submission. Leave **Skip for now** selected if you want to decide during the session. If you choose **Back** before starting, focus returns to the armory button and you can resume the same loadout draft.
+2. Choose **Start evidence exercise**. The fresh Standard Mode session comes with Evidence Check and the sample supply card. Review and manually send the prepared task in DSH, then decide when the native question card appears. In **Evidence available**, the card records two cans of lamp oil, so the handoff can proceed without asking you to resolve a missing source.
+3. Choose **View evidence run** in the session, or find the run in **Run history**. Once the run finishes and passes verification, **Opening choice and actual decision** puts your recorded intention next to your native choice and any delivered files. You might start by planning to pause, then choose a qualified recommendation once you see what the supply card supports. XP follows the verified activity in the native session.
 4. After a recorded decision in **Missing key evidence** or a verified handoff in **Evidence available**, choose **Use this loadout on my task**. Pick a file in your own workspace, write the new brief and review the loadout before opening a fresh session. Send the task yourself. In **View task result**, inspect any choice you made and any file actually delivered. You can review the gear and save it as a plan.
 
 ## Replay a personal task without Evidence Check

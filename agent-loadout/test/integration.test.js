@@ -1635,6 +1635,8 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     host = await startHost(env, patch)
     const invoke = async (action, fields, status) => (await host.request(endpoint, { action, ...fields }, status)).value
     const open = (scenario, launchId, status) => invoke('lighthouse-evidence-open', { scenario, launchId }, status)
+    const predict = (launchId, openingChoice, status, scenario = 'gap') =>
+      invoke('lighthouse-evidence-open', { scenario, launchId, openingChoice }, status)
     const openEnglish = async (scenario, launchId) => {
       const response = await host.requestRaw(endpoint, { method: 'POST',
         headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
@@ -1656,8 +1658,15 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const [gather, duplicate] = await Promise.all([open('gap', launchId), open('gap', launchId)])
     assert.deepEqual(duplicate, gather)
     await open('confirmed', launchId, 422)
+    await predict(launchId, 'gather', 422)
     assert.match(gather.task, /两节备用电池/u)
-    const lower = await open('gap', 'b'.repeat(32))
+    const predictedLaunch = 'b'.repeat(32)
+    for (const rejected of ['later', false, null]) await predict(predictedLaunch, rejected, 422)
+    await predict(predictedLaunch, 'qualify', 422, 'confirmed')
+    const [lower, samePrediction] = await Promise.all([predict(predictedLaunch, 'pause'), predict(predictedLaunch, 'pause')])
+    assert.deepEqual(samePrediction, lower)
+    await predict(predictedLaunch, 'gather', 422)
+    await open('gap', predictedLaunch, 422)
     const pause = await openEnglish('gap', 'c'.repeat(32))
     const confirmed = await openEnglish('confirmed', 'd'.repeat(32))
     assert.equal(lower.task, gather.task)
@@ -1666,7 +1675,8 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.doesNotMatch(confirmed.task, /two spare batteries/u)
     const cases = [
       { opened: gather, scenario: 'gap', options: ['继续补证', '降级推荐', '暂缓提交'], decision: '继续补证', calls: ['read', 'ask_user_question', 'glob'] },
-      { opened: lower, scenario: 'gap', options: ['继续补证', '降级推荐', '暂缓提交'], decision: '降级推荐', calls: ['read', 'ask_user_question', 'write', 'present'], file: 'qualified-handoff.md' },
+      { opened: lower, scenario: 'gap', options: ['继续补证', '降级推荐', '暂缓提交'], decision: '降级推荐', openingChoice: 'pause',
+        calls: ['read', 'ask_user_question', 'write', 'present'], file: 'qualified-handoff.md' },
       { opened: pause, scenario: 'gap', options: ['Continue gathering evidence', 'Lower the recommendation to a qualified draft', 'Pause submission'],
         decision: 'Pause submission', calls: ['read', 'ask_user_question'] },
       { opened: confirmed, scenario: 'confirmed', calls: ['read', 'write', 'present'], file: 'verified-handoff.md' },
@@ -1674,7 +1684,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.equal(new Set(cases.map(testCase => testCase.opened.sessionId)).size, cases.length)
     assert.equal((await read({})).id, undefined)
     const proved = []
-    for (const { opened, scenario, options, decision, calls, file } of cases) {
+    for (const { opened, scenario, options, decision, openingChoice, calls, file } of cases) {
       const filter = { comparisonId: opened.id }
       const native = await history(opened.sessionId)
       const practice = native.workspacePath
@@ -1691,6 +1701,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       assert.equal(waiting.task, opened.task)
       assert.equal(waiting.material, material)
       assert.deepEqual(waiting.arms.map(arm => [arm.id, arm.status]), [['evidence', 'waiting']])
+      assert.equal(waiting.evidenceOpeningChoice, undefined)
       assert.deepEqual((await equipmentIn(host, opened.sessionId)).workspaceComparison, {
         id: opened.id, arm: 'evidence', task: opened.task, lesson: 'lighthouse-evidence', scenario,
       })
@@ -1706,7 +1717,9 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
             if (!question) await delay(40)
           }
           assert.deepEqual(question?.options.map(option => option.label), options)
-          const [arm] = (await read(filter)).arms
+          const pending = await read(filter)
+          assert.equal(pending.evidenceOpeningChoice, undefined)
+          const [arm] = pending.arms
           assert.equal(arm.status, 'waiting-choice')
           assert.deepEqual(arm.pendingQuestions[0].options, options)
           assert.deepEqual(arm.deliverables, [])
@@ -1730,12 +1743,15 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
         if (scenario === 'gap') assert.match(body, /Unverified: two spare batteries/u)
       }
       assert.deepEqual(await Promise.all(sampleFiles.map(name => readFile(join(practice, name), 'utf8'))), seeded)
-      const [arm] = (await read({ sessionId: opened.sessionId })).arms
+      const completed = await read({ sessionId: opened.sessionId })
+      const [arm] = completed.arms
       assert.equal(arm.status, 'complete')
       assert.deepEqual(arm.entries.map(entry => [entry.name, entry.state]), calls.map(name => [name, 'completed']))
       assert.deepEqual(arm.entries.flatMap(entry => entry.choices ?? []), decision ? [decision] : [])
       assert.deepEqual(arm.deliverables, file ? [{ name: file, turn: 1 }] : [])
-      proved.push({ filter, arm })
+      const openingResult = openingChoice && { choice: openingChoice, actualChoices: [decision] }
+      assert.deepEqual(completed.evidenceOpeningChoice, openingResult)
+      proved.push({ filter, arm, openingResult })
     }
 
     const plainPath = join(directory, 'plain-workspace')
@@ -1748,12 +1764,14 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.deepEqual(files(plainHistory), [])
     assert.equal(await read({ sessionId: plain.sessionId }), null)
 
-    const edited = await open('gap', 'e'.repeat(32))
+    const edited = await predict('e'.repeat(32), 'gather')
     await send({ ...edited, task: 'Use a different handoff task.' })
-    const [wrongChoice] = (await read({ comparisonId: edited.id })).arms
+    const rejected = await read({ comparisonId: edited.id })
+    const [wrongChoice] = rejected.arms
     assert.equal(wrongChoice.status, 'unavailable')
     assert.equal(wrongChoice.reason, 'changed-task')
     assert.ok(!wrongChoice.deliverables?.length)
+    assert.equal(rejected.evidenceOpeningChoice, undefined)
     const changed = await openEnglish('confirmed', 'f'.repeat(32))
     const changedNative = await history(changed.sessionId)
     await appendFile(join(changedNative.workspacePath, material), '\nAn unexpected change to this isolated supply card.\n')
@@ -1768,7 +1786,14 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     host = await startHost(env, patch)
     assert.deepEqual(await open('gap', launchId), gather)
     await open('confirmed', launchId, 422)
-    for (const { filter, arm } of proved) assert.deepEqual((await read(filter)).arms[0], arm)
+    assert.deepEqual(await predict(predictedLaunch, 'pause'), lower)
+    await predict(predictedLaunch, 'qualify', 422)
+    await open('gap', predictedLaunch, 422)
+    for (const { filter, arm, openingResult } of proved) {
+      const restored = await read(filter)
+      assert.deepEqual(restored.arms[0], arm)
+      assert.deepEqual(restored.evidenceOpeningChoice, openingResult)
+    }
     const chronicle = await invoke('comparison-history', { kind: 'workspace', query: material })
     for (const { filter } of proved) {
       const item = chronicle.items.find(item => item.id === filter.comparisonId)

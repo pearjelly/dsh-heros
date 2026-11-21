@@ -1215,20 +1215,23 @@ window.__ModuleLoader__.load({
     const lighthouseRematchLesson = 'lighthouse-rematch'
     const lighthouseEvidenceLesson = 'lighthouse-evidence'
     const evidenceScenarios = [
-      { id: 'gap', icon: 'search', name: '关键证据缺失', note: '一条关键结论缺少依据。你会继续补证、降级推荐，还是暂缓提交？' },
+      { id: 'gap', icon: 'search', name: '关键证据缺失', note: '调度消息说给下一班备了两节电池。交接稿里能写这句话吗？' },
       { id: 'confirmed', icon: 'report', name: '证据齐全', note: '关键结论有可核对的依据。看看材料足够时，这局会怎么交付。' },
     ]
+    const evidenceOpeningChoices = { gather: '继续补证', qualify: '降级推荐', pause: '暂缓提交' }
     const evidenceArm = { id: 'evidence', icon: 'search', name: '证据核验' }
 
     function LighthouseLessonLaunch({ request, onCancel, onOpen, lesson = lighthouseRematchLesson }) {
       const language = useLanguage()
       const evidence = lesson === lighthouseEvidenceLesson
       const [scenario, setScenario] = useState(evidenceScenarios[0].id)
+      const [openingChoice, setOpeningChoice] = useState('')
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const starting = useRef(false)
       const launch = useRef(new Map())
       const group = useId()
+      const showOpeningChoice = evidence && scenario === 'gap'
       async function start(event) {
         event.preventDefault()
         if (starting.current) return
@@ -1237,10 +1240,12 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           const action = evidence ? 'lighthouse-evidence-open' : 'lighthouse-rematch-open'
-          const key = evidence ? scenario : lesson
+          const choice = showOpeningChoice ? openingChoice : ''
+          const key = evidence ? JSON.stringify([scenario, choice]) : lesson
           if (!launch.current.has(key)) launch.current.set(key, Array.from(crypto.getRandomValues(new Uint8Array(16)),
             byte => byte.toString(16).padStart(2, '0')).join(''))
-          const result = await request(action, { action, launchId: launch.current.get(key), ...(evidence && { scenario }) }, undefined, language)
+          const result = await request(action, { action, launchId: launch.current.get(key), ...(evidence && { scenario }),
+            ...(choice && { openingChoice: choice }) }, undefined, language)
           onOpen(result.sessionId, result.task)
         } catch (reason) {
           setError(reason.message)
@@ -1263,6 +1268,13 @@ window.__ModuleLoader__.load({
             : h('ol', { className: 'moba-lesson-steps' },
               h('li', null, t('先用标准模式直接交付灯塔补给卡。')),
               h('li', null, t('再装上「交付前复核」跑同一任务，看看能否确认交付或退回修改。'))),
+          showOpeningChoice && h('div', { className: 'moba-rematch-fields' },
+            h('label', null, t('开局选择（可跳过）'),
+              h('select', { value: openingChoice, disabled: busy,
+                onChange: event => { setOpeningChoice(event.target.value); setError('') } },
+              h('option', { value: '' }, t('暂不选择')),
+              Object.entries(evidenceOpeningChoices).map(([id, label]) => h('option', { key: id, value: id }, t(label))))),
+            h('p', { className: 'moba-starter-note' }, t('先选你会怎么处理，发送任务后再在会话中作决定。'))),
           h('p', { className: 'moba-starter-note' }, t('练习自带示例材料，无需保存方案。每一局都由你在会话中手动发送。')),
           error && h('p', { className: 'moba-alert', role: 'alert' }, error),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
@@ -1439,6 +1451,16 @@ window.__ModuleLoader__.load({
     function ObservedChoiceSummary({ choices }) {
       return h('p', { className: 'moba-lighthouse-note' }, choices.length
         ? t('你实际选择了 ') + choices.join(' / ') : t('本局没有记录提问卡选择。'))
+    }
+
+    function EvidenceOpeningOutcome({ outcome }) {
+      const heading = useId()
+      const choice = evidenceOpeningChoices[outcome.choice]
+      if (!choice) return null
+      return h('section', { className: 'moba-handoff-outcome moba-lighthouse-artifacts', 'aria-labelledby': heading },
+        h('h3', { id: heading }, t('开局想法与实战选择')),
+        h(InstallFacts, { facts: [[t('开局选择'), t(choice)]] }),
+        h(ObservedChoiceSummary, { choices: outcome.actualChoices ?? empty }))
     }
 
     function HandoffOutcomeSummary({ outcome, onPreserve, busy }) {
@@ -1967,6 +1989,7 @@ window.__ModuleLoader__.load({
               h('textarea', { ref: taskField, readOnly: true, value: task, rows: 4 })),
             h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制任务')),
             notice && h('p', { className: 'moba-lighthouse-note', role: 'status' }, notice)),
+          evidence && value.evidenceOpeningChoice && h(EvidenceOpeningOutcome, { outcome: value.evidenceOpeningChoice }),
           handoff && h(HandoffOutcomeSummary, { outcome: handoff, busy: Boolean(launch),
             onPreserve: onUse && value.id ? arm => setReuse({ id: value.id, arm, handoff: true }) : undefined }),
           evidenceOutcome && h(EvidenceOutcomeSummary, { outcome: evidenceOutcome,
