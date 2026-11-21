@@ -1314,9 +1314,10 @@ window.__ModuleLoader__.load({
         standard: '我用标准模式打了一局。同一张补给卡，你会选谁？',
         minimal: '我用极简模式打了一局。同一张补给卡，你会选谁？',
       }[playedHero]
-      const invitation = heroTrial && result?.code && [
+      const invitation = result?.code && [
         ...(heroHook ? [t(heroHook)] : []),
-        t('来玩一局深度荣耀的灯塔英雄挑战。打开大厅，点「加入灯塔挑战」，粘贴这整段并核对，选你的首发英雄。'),
+        t(heroTrial ? '来玩一局深度荣耀的灯塔英雄挑战。打开大厅，点「加入灯塔挑战」，粘贴这整段并核对，选你的首发英雄。'
+          : '补给卡没有记录两节备用电池。你会补证、降级推荐，还是暂缓提交？打开深度荣耀大厅，点「加入灯塔挑战」，粘贴这整段邀请。'),
         result.code,
       ].join('\n\n')
       useEffect(() => {
@@ -1728,9 +1729,9 @@ window.__ModuleLoader__.load({
         arm.materialRead === true && Boolean(arm.summary) && typeof arm.originalAttached === 'boolean'
     }
 
-    const heroHandoffReportCodeLimit = 192
+    const lighthouseHandoffReportCodeLimit = 192
 
-    function HeroHandoffReport({ report, comparisonId, request, onBack }) {
+    function LighthouseHandoffReport({ report, comparisonId, request, onBack }) {
       const language = useLanguage()
       const [input, setInput] = useState('')
       const [result, setResult] = useState(null)
@@ -1741,8 +1742,11 @@ window.__ModuleLoader__.load({
       const field = useRef(null)
       const heading = useRef(null)
       const share = report.mode === 'share'
-      const shareAction = 'hero-trial-handoff-report'
-      const compareAction = 'hero-trial-handoff-compare'
+      const evidence = report.evidence === true
+      const shareAction = evidence ? 'lighthouse-evidence-report' : 'hero-trial-handoff-report'
+      const compareAction = evidence ? 'lighthouse-evidence-report-compare' : 'hero-trial-handoff-compare'
+      const codePattern = evidence ? /^DSHR2\.[A-Za-z0-9_-]+$/ : /^DSHR1\.[A-Za-z0-9_-]+$/
+      const invalidCode = evidence ? '灯塔取舍战报码无效或版本不受支持。' : '英雄战报码无效或版本不受支持。'
 
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => {
@@ -1754,7 +1758,7 @@ window.__ModuleLoader__.load({
           .then(value => { if (!abort.signal.aborted) setResult(value) })
           .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
         return () => abort.abort()
-      }, [share, request, comparisonId, report.arm, language])
+      }, [share, shareAction, request, comparisonId, report.arm, language])
       useEffect(() => { if (!share && result) heading.current?.focus() }, [share, result])
 
       async function check(event) {
@@ -1762,8 +1766,8 @@ window.__ModuleLoader__.load({
         const code = input.trim()
         if (pending.current || !code) return
         setResult(null)
-        if (input.length > heroHandoffReportCodeLimit || !/^DSHR1\.[A-Za-z0-9_-]+$/.test(code)) {
-          setError(t('英雄战报码无效或版本不受支持。'))
+        if (input.length > lighthouseHandoffReportCodeLimit || !codePattern.test(code)) {
+          setError(t(invalidCode))
           field.current?.focus()
           return
         }
@@ -1795,6 +1799,11 @@ window.__ModuleLoader__.load({
       }
 
       function renderSide(side, title) {
+        if (evidence) return h('article', { className: 'moba-lighthouse-arm moba-handoff-report-side' },
+          h('header', null, h(ItemArt, { item: { id: 'evidence' } }), h('h4', null, t(title))),
+          h('dl', { className: 'moba-handoff-report-facts' },
+            h('dt', null, t('提问卡选择')), h('dd', null, t(evidenceOpeningChoices[side.choice])),
+            h('dt', null, t('交付文件')), h('dd', null, t(side.delivered ? '有交付记录' : '没有交付记录'))))
         const hero = side.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === side.arm)
         return h('article', { className: 'moba-lighthouse-arm moba-handoff-report-side', 'data-met': side.meetsNeed },
           h('header', null, h(HeroArt, { id: side.arm === minimalDeliveryReplayArm.id ? 'minimal' : side.arm, art: hero.art,
@@ -1804,30 +1813,34 @@ window.__ModuleLoader__.load({
             h('dt', null, t('接班需求')), h('dd', null, t(side.meetsNeed ? '符合' : '未满足'))))
       }
 
-      const title = share ? '分享这局战报' : '对照好友战报'
+      const title = evidence ? (share ? '分享本局取舍' : '对照好友取舍') : (share ? '分享这局战报' : '对照好友战报')
       const comparison = result?.friend
-      const need = result && heroTrialNeeds.find(item => item.id === result.need)
+      const need = !evidence && result && heroTrialNeeds.find(item => item.id === result.need)
+      const note = evidence ? (share ? '取舍码包含公开样例版本、实际选择和是否交付。'
+        : '粘贴好友的灯塔取舍码，对照同一份缺证样例里各自的选择和交付。') : (share
+        ? '战报码只包含公开题目版本、接班需求、出装和是否附上原件。'
+        : '粘贴同一题、同一接班需求的战报码，看看两套出装交接得怎么样。')
       return h(InstallDialog, { title: t(title), className: 'moba-lighthouse-comparison moba-starter-dialog',
         onCancel: onBack, initialFocus: share ? '.moba-challenge-back' : '.moba-share-code',
         onKeyDown: event => closeDialogOnEscape(event, onBack) },
         h('form', { onSubmit: check },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
-            h('p', { className: 'moba-starter-note' }, t(share
-              ? '战报码只包含公开题目版本、接班需求、出装和是否附上原件。'
-              : '粘贴同一题、同一接班需求的战报码，看看两套出装交接得怎么样。')),
+            h('p', { className: 'moba-starter-note' }, t(note)),
             share && result?.code && h('label', null, t('战报码'),
               h('textarea', { ref: field, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                 spellCheck: false, onFocus: event => event.currentTarget.select() })),
             !share && h('label', null, t('好友战报码'),
-              h('textarea', { className: 'moba-share-code', ref: field, value: input, rows: 3, maxLength: heroHandoffReportCodeLimit + 1,
+              h('textarea', { className: 'moba-share-code', ref: field, value: input, rows: 3, maxLength: lighthouseHandoffReportCodeLimit + 1,
                 readOnly: busy, spellCheck: false,
                 autoComplete: 'off', autoCapitalize: 'off', onChange: event => { setInput(event.target.value); setResult(null); setError('') } })),
             (busy || share && !result && !error) && h('p', { role: 'status' }, t('正在核对战报…')),
             error && h('p', { className: 'moba-alert', role: 'alert' }, error),
             result && h('section', { className: 'moba-handoff-outcome' },
-              h('h3', { ref: heading, tabIndex: -1 }, t('接班人需要什么？'), ' ', t(need.name)),
+              h('h3', { ref: heading, tabIndex: -1 }, evidence ? t('缺证时，你们怎么选？') :
+                h(Fragment, null, t('接班人需要什么？'), ' ', t(need.name))),
               h('div', { className: 'moba-lighthouse-arms moba-handoff-report-grid' },
-                renderSide(result.local, '本机核对的交接'), comparison && renderSide(comparison, '好友分享的交接')),
+                renderSide(result.local, evidence ? '本机核对的取舍' : '本机核对的交接'),
+                comparison && renderSide(comparison, evidence ? '好友分享的取舍' : '好友分享的交接')),
               comparison && h('p', { className: 'moba-lighthouse-note' }, t('可以打开自己的原会话核对细节。好友的交接来自对方提供的战报码。'))),
             notice && h('p', { role: 'status', className: 'moba-empty' }, notice)),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
@@ -2128,7 +2141,7 @@ window.__ModuleLoader__.load({
           onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
         sharing && h(LighthouseChallengeShare, { comparisonId: activeId, request, heroTrial: true,
           playedHero: verifiedHeroes.length === 1 ? verifiedHeroes[0].id : undefined, onBack: closeSharing }),
-        handoffReport && h(HeroHandoffReport, { report: handoffReport, comparisonId: activeId, request, onBack: closeHandoffReport }),
+        handoffReport && h(LighthouseHandoffReport, { report: handoffReport, comparisonId: activeId, request, onBack: closeHandoffReport }),
         personalSource && h(LessonLoadoutTask, { source: personalSource, workspaces, request, backLabel: '返回试玩对照',
           onBack: closePersonalTask, onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }))
     }
@@ -2716,6 +2729,7 @@ window.__ModuleLoader__.load({
       const [lessonTask, setLessonTask] = useState(null)
       const [lessonLaunchOpen, setLessonLaunchOpen] = useState(false)
       const [challengeShareId, setChallengeShareId] = useState('')
+      const [evidenceReport, setEvidenceReport] = useState('')
       const starting = useRef(false)
       const launchIds = useRef(new Map())
       const returnFocus = useRef('')
@@ -2761,6 +2775,7 @@ window.__ModuleLoader__.load({
       const lessonMarker = value?.lesson ?? lessonHint
       const lesson = lessonMarker === lighthouseRematchLesson
       const evidence = lessonMarker === lighthouseEvidenceLesson
+      const canShareEvidenceReport = evidence && value?.canShareEvidenceReport === true
       const practice = lesson || evidence
       const scenario = evidenceScenarios.find(item => item.id === value?.scenario)
       const draftNotices = evidence ? evidenceDraftNotices : comparisonDraftNotices
@@ -2771,7 +2786,8 @@ window.__ModuleLoader__.load({
       const retestSource = retestOutcome && canViewPrevious(retestOutcome.source) ? retestOutcome.source : undefined
       const focusSelector = focusPrevious && (previous || retestSource) ? '[data-comparison-previous]'
         : value?.arms.some(arm => arm.id === focusArm) ? `[data-comparison-arm="${focusArm}"]`
-          : publicEvidenceReplay && evidenceOutcome ? '[data-public-evidence-outcome]' : ''
+          : publicEvidenceReplay && evidenceOutcome ? '[data-public-evidence-outcome]'
+            : canShareEvidenceReport ? '[data-evidence-report="share"]' : ''
       const workspaceId = workspaces.some(item => item.workspaceId === selectedWorkspaceId) ? selectedWorkspaceId : ''
       const defaultBrief = value?.defaultTask ?? t('根据这份材料准备一份可交接的成果，简要说明重点，并按当前交付流程处理。')
       const brief = customBrief ?? defaultBrief
@@ -2872,9 +2888,15 @@ window.__ModuleLoader__.load({
         returnFocus.current = '.moba-lighthouse-challenge-share'
         setChallengeShareId('')
       } })
+      if (evidenceReport) return h(LighthouseHandoffReport, { report: { mode: evidenceReport, evidence: true },
+        comparisonId: value.id, request, onBack: () => {
+          returnFocus.current = `[data-evidence-report="${evidenceReport}"]`
+          setEvidenceReport('')
+        } })
 
       return h(InstallDialog, { title: t(comparisonTitle(kind, lessonMarker, evidenceReplay, publicEvidenceReplay)),
-        className: 'moba-lighthouse-comparison' + (publicEvidenceReplay ? ' moba-public-evidence-comparison' : ''), busy: Boolean(launch),
+        className: 'moba-lighthouse-comparison' + (publicEvidenceReplay || canShareEvidenceReport ? ' moba-public-evidence-comparison' : ''),
+        busy: Boolean(launch),
         onCancel: onBack ?? onClose, initialFocus: returnFocus.current || focusSelector || '.moba-lighthouse-close',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!starting.current) (onBack ?? onClose)() }) },
         h('p', { className: 'moba-lighthouse-note' }, t(publicEvidenceReplay
@@ -2904,6 +2926,11 @@ window.__ModuleLoader__.load({
           materialWarning && h('p', { className: 'moba-alert', role: 'status' }, t(materialWarning), ' ',
             !error && h('button', { type: 'button', className: 'moba-text', onClick: refresh }, t('刷新对照'))),
           publicEvidenceReplay && evidenceSummary,
+          canShareEvidenceReport && h('div', { className: 'moba-detail-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open', 'data-evidence-report': 'share', 'aria-haspopup': 'dialog',
+              onClick: () => setEvidenceReport('share') }, t('分享本局取舍')),
+            h('button', { type: 'button', className: 'moba-roster-open', 'data-evidence-report': 'compare', 'aria-haspopup': 'dialog',
+              onClick: () => setEvidenceReport('compare') }, t('对照好友取舍'))),
           !setup && task && h('div', { className: 'moba-lighthouse-task' },
             h('label', null, t(evidence ? '练习任务' : lesson ? '练习共用的任务' : '两边共用的任务'),
               h('textarea', { ref: taskField, readOnly: true, value: task, rows: 4 })),

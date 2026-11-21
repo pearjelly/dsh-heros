@@ -1,4 +1,4 @@
-import { lighthouseHeroArms, lighthouseHeroDelivery, lighthouseHeroNeeds } from './lighthouse.js'
+import { lighthouseEvidenceChoices, lighthouseHeroArms, lighthouseHeroDelivery, lighthouseHeroNeeds } from './lighthouse.js'
 
 const prefix = 'DSHH1.'
 const codeLimit = 16_384
@@ -158,6 +158,33 @@ export function decodeLighthouseChallenge(value) {
     // The public sample and its portable loadout are both versioned.
   }
   throw new Error(invalidChallenge)
+}
+
+const evidenceReportPrefix = 'DSHR2.'
+const evidenceReportLimit = 192
+const invalidEvidenceReport = '灯塔取舍战报码无效或版本不受支持。'
+
+export function encodeLighthouseEvidenceReport(choice, delivered) {
+  if (!lighthouseEvidenceChoices.includes(choice) || typeof delivered !== 'boolean') throw new Error(invalidEvidenceReport)
+  return evidenceReportPrefix + Buffer.from(JSON.stringify({ sample: challengeSample, choice, delivered })).toString('base64url')
+}
+
+export function decodeLighthouseEvidenceReport(code) {
+  if (typeof code !== 'string' || code.length > evidenceReportLimit || !code.startsWith(evidenceReportPrefix)) {
+    throw new Error(invalidEvidenceReport)
+  }
+  const payload = code.slice(evidenceReportPrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidEvidenceReport)
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (shape(data, ['sample', 'choice', 'delivered']) && data.sample === challengeSample &&
+      encodeLighthouseEvidenceReport(data.choice, data.delivered) === code) {
+      return { choice: data.choice, delivered: data.delivered }
+    }
+  } catch {
+    // Only canonical reports on the bundled public sample can be compared.
+  }
+  throw new Error(invalidEvidenceReport)
 }
 
 export function isLighthouseHeroChallenge(value) {

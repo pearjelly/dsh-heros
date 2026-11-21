@@ -10,7 +10,7 @@ import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, 
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
 import { openBuildPlans, planTaskPrompt } from './build-plans.js'
-import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, isLighthouseHeroChallenge, lighthouseChallengeName } from './build-sharing.js'
+import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, isLighthouseHeroChallenge, lighthouseChallengeName } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
 import { customActionStore } from './custom-actions.js'
@@ -18,7 +18,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroDelivery, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceChoices, lighthouseEvidenceDecision, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseEvidenceTask, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroDelivery, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -51,7 +51,6 @@ const planTaskRecord = 'plugin:dsh-agent-loadout/plan-task'
 const planTaskSessionPrefix = 'session-a076'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
-const evidenceOpeningChoices = ['gather', 'qualify', 'pause']
 const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).digest('hex')
 const heroTrialUnavailable = '本机的标准模式与极简模式暂时无法进行这场试玩。'
 const heroDeliveryUnavailable = '请先用极简模式完成一局需要原件的试玩，并核对它留下的文字交接。'
@@ -79,7 +78,7 @@ function flatten(rows) {
 }
 
 function validEvidenceOpeningChoice(lesson, scenario, choice) {
-  return choice === undefined || (lesson === evidenceLesson && scenario === 'gap' && evidenceOpeningChoices.includes(choice))
+  return choice === undefined || (lesson === evidenceLesson && scenario === 'gap' && lighthouseEvidenceChoices.includes(choice))
 }
 
 function validLessonTaskReference(source) {
@@ -1541,6 +1540,31 @@ export async function apply(ctx) {
   function completedLighthouseChallenge(record, arm) {
     return record?.lesson === evidenceLesson && record.scenario === 'gap' && arm?.id === 'evidence' &&
       verifiedEvidenceArm(arm) && comparisonChoices(arm).length > 0
+  }
+
+  function observedLighthouseEvidenceReport(record, arm, materialState) {
+    if (materialState !== 'verified' || !completedLighthouseChallenge(record, arm) || record.material !== lighthouseHeroMaterial ||
+      ![false, true].some(english => record.task === workspaceComparisonTask({
+        material: record.material, task: lighthouseEvidenceTask(english, 'gap'),
+      }, english).task)) return
+    const choice = lighthouseEvidenceDecision(comparisonChoices(arm))
+    if (choice) return { choice, delivered: completedPresentDelivery(arm) }
+  }
+
+  async function evidenceHandoffReport({ comparisonId, code }, signal, compare = false) {
+    const record = workspaceComparisons.read(comparisonId)
+    const unavailable = '请先完成并核验一局缺证取舍。'
+    if (record?.lesson !== evidenceLesson || record.scenario !== 'gap' ||
+      ctx.get('workspaceRegistry')?.get(record.workspaceId)?.path !== record.cwd) throw new Error(unavailable)
+    const friend = compare ? decodeLighthouseEvidenceReport(code) : undefined
+    const [arm, materialState] = await Promise.all([
+      readComparisonArm(workspaceComparisons, record, 'evidence', signal, { linkedChoicesOnly: true }),
+      workspaceMaterialState(record, signal),
+    ])
+    const local = observedLighthouseEvidenceReport(record, arm, materialState)
+    if (!local) throw new Error(unavailable)
+    signal?.throwIfAborted()
+    return friend ? { local, friend } : { local, code: encodeLighthouseEvidenceReport(local.choice, local.delivered) }
   }
 
   async function shareLighthouseChallenge({ comparisonId }, signal) {
@@ -4858,12 +4882,13 @@ export async function apply(ctx) {
     const evidenceOpeningChoice = record.openingChoice && practice && verifiedEvidenceArm(practice)
       ? { choice: record.openingChoice, actualChoices: comparisonChoices(practice) } : undefined
     const canShareChallenge = completedLighthouseChallenge(record, practice)
+    const canShareEvidenceReport = Boolean(observedLighthouseEvidenceReport(record, practice, materialState))
     if (canShareChallenge && materialState === 'verified') practice.canReplayLighthouseEvidence = true
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
       ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),
       ...(record.lesson === evidenceLesson && { scenario: record.scenario }), ...(record.evidenceRetest && { evidenceRetest: true }),
       ...(evidenceRetestOutcome && { evidenceRetestOutcome }), ...(evidenceOpeningChoice && { evidenceOpeningChoice }),
-      ...(canShareChallenge && { canShareChallenge: true }) }
+      ...(canShareChallenge && { canShareChallenge: true }), ...(canShareEvidenceReport && { canShareEvidenceReport: true }) }
   }
 
   async function createWorkspaceComparison(comparisons, registry, selection, english, signal) {
@@ -6299,6 +6324,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-rematch-open') value = await openLighthouseLesson(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-evidence-open') value = await openLighthouseLesson(selection, english, request.signal, evidenceLesson)
         else if (selection?.action === 'lighthouse-challenge-share') value = await shareLighthouseChallenge(selection, request.signal)
+        else if (selection?.action === 'lighthouse-evidence-report') value = await evidenceHandoffReport(selection, request.signal)
+        else if (selection?.action === 'lighthouse-evidence-report-compare') value = await evidenceHandoffReport(selection, request.signal, true)
         else if (selection?.action === 'hero-trial-challenge-share') value = await shareHeroChallenge(selection, request.signal)
         else if (selection?.action === 'hero-trial-handoff-report') value = await heroHandoffReport(selection, request.signal)
         else if (selection?.action === 'hero-trial-handoff-compare') value = await heroHandoffReport(selection, request.signal, true)

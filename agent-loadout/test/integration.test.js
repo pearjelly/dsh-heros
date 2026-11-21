@@ -2770,6 +2770,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     for (const id of [confirmed.id, edited.id, changed.id]) {
       assert.equal((await read({ comparisonId: id })).canShareChallenge, undefined)
       await shareChallenge(id, 422)
+      await invoke('lighthouse-evidence-report', { comparisonId: id }, 422)
     }
     await shareChallenge('0'.repeat(32), 422)
     const { code } = await shareChallenge(lower.id)
@@ -2784,6 +2785,15 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const challenge = decodeCode(code, 'DSHC1.')
     assert.deepEqual(Object.keys(challenge), ['sample', 'loadout'])
     assert.equal(challenge.sample, 'lighthouse-evidence-1')
+    const decisionReport = comparisonId => invoke('lighthouse-evidence-report', { comparisonId })
+    const qualifiedReport = await decisionReport(lower.id)
+    const qualifiedDecision = { choice: 'qualify', delivered: true }
+    const pausedDecision = { choice: 'pause', delivered: false }
+    assert.deepEqual(qualifiedReport.local, qualifiedDecision)
+    assert.deepEqual(decodeCode(qualifiedReport.code, 'DSHR2.'), { sample: challenge.sample, ...qualifiedDecision })
+    assert.deepEqual((await decisionReport(gather.id)).local, { choice: 'gather', delivered: false })
+    assert.deepEqual((await decisionReport(pause.id)).local, pausedDecision)
+    assert.equal((await read({ comparisonId: lower.id })).canShareEvidenceReport, true)
     const recipe = decodeCode(challenge.loadout, 'DSHH1.')
     assert.equal(recipe.name, 'Lighthouse evidence challenge')
     assert.equal(recipe.hero.id, 'standard')
@@ -2883,6 +2893,9 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.deepEqual((await readdir(blank.workspacePath)).sort(), sampleFiles)
     const receivedView = () => receive('workspace-comparison', { comparisonId: accepted.id })
     assert.equal((await receivedView()).canShareChallenge, undefined)
+    const recipientReportSource = { comparisonId: accepted.id }
+    const friendReport = { ...recipientReportSource, code: qualifiedReport.code }
+    await receive('lighthouse-evidence-report-compare', friendReport, 422)
     const play = recipient.request(turnEndpoint, { ...accepted, text: accepted.task })
     play.catch(() => {})
     let question
@@ -2893,12 +2906,14 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       }
       assert.deepEqual(question?.options.map(option => option.label), ['继续补证', '降级推荐', '暂缓提交'])
       assert.equal((await receivedView()).canShareChallenge, undefined)
+      await receive('lighthouse-evidence-report', recipientReportSource, 422)
     } finally {
       if (question) await recipient.request(questions, { sessionId: accepted.sessionId, choice: '暂缓提交' })
       await play
     }
     const finished = await receivedView()
     assert.equal(finished.canShareChallenge, true)
+    assert.equal(finished.canShareEvidenceReport, true)
     assert.equal(finished.arms[0].canReplayLighthouseEvidence, true)
     assert.deepEqual(finished.evidenceOpeningChoice, { choice: 'qualify', actualChoices: ['暂缓提交'] })
     assert.deepEqual(finished.arms[0].deliverables, [])
@@ -2908,6 +2923,18 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.deepEqual((await readdir(played.workspacePath)).sort(), sampleFiles)
     assert.deepEqual((await recipient.request(endpoint)).value.plans, [])
     assert.equal((await receive('lighthouse-challenge-share', { comparisonId: accepted.id })).code, code)
+    const pausedReport = await receive('lighthouse-evidence-report', recipientReportSource)
+    assert.deepEqual(pausedReport.local, pausedDecision)
+    assert.deepEqual(decodeCode(pausedReport.code, 'DSHR2.'), { sample: challenge.sample, ...pausedDecision })
+    assert.deepEqual(await receive('lighthouse-evidence-report-compare', friendReport),
+      { local: pausedDecision, friend: qualifiedDecision })
+    assert.deepEqual(await invoke('lighthouse-evidence-report-compare', { comparisonId: lower.id, code: pausedReport.code }),
+      { local: qualifiedDecision, friend: pausedDecision })
+    for (const change of [{ sample: 'unknown-sample' }, { choice: 'unverified' }, { delivered: 1 }, { sessionId: lower.sessionId }]) {
+      const invalid = encodeCode({ sample: challenge.sample, ...qualifiedDecision, ...change }, 'DSHR2.')
+      await receive('lighthouse-evidence-report-compare', { comparisonId: accepted.id, code: invalid }, 422)
+    }
+    assert.equal((await recipientSessions()).length, 1)
     const matchup = { ...replayFrom(accepted.id), change }
     const recipientReplayPreview = await receive('rematch-comparison-preview', matchup)
     const recipientReplay = await receive('rematch-comparison-open', {

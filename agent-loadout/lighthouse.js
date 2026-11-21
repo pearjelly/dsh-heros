@@ -8,6 +8,13 @@ const rematchPrefix = 'lighthouse-rematch-'
 const evidencePrefix = 'lighthouse-evidence-'
 const evidenceReplayPrefix = 'lighthouse-evidence-replay-'
 export const lighthouseEvidenceScenarios = ['gap', 'confirmed']
+const evidenceDecisionLabels = new Map([
+  ['继续补证', 'gather'], ['Gather more evidence', 'gather'], ['Continue gathering evidence', 'gather'],
+  ['降级推荐', 'qualify'], ['Qualify the recommendation', 'qualify'], ['Lower the recommendation to a qualified draft', 'qualify'],
+  ['暂缓提交', 'pause'], ['Pause submission', 'pause'],
+])
+export const lighthouseEvidenceChoices = ['gather', 'qualify', 'pause']
+export const lighthouseEvidenceDecision = choices => choices.length === 1 ? evidenceDecisionLabels.get(choices[0]) : undefined
 const cards = {
   '01-waystation.md': '# Mountain Waystation / 山口驿站\n\nCopper marker · Stone stairs\n\n铜色路标 · 补给在石阶旁\n',
   [supplyCard]: '# North Shore Lighthouse / 北岸灯塔\n\n**Marker / 徽记** · Gold beacon / 金色航标\n\n**Supply point / 补给点** · Second-floor lookout / 二层瞭望台\n\n**Supplies / 可领取** · 2 cans of lamp oil, 1 signal flag / 灯油 × 2、信号旗 × 1\n',
@@ -65,18 +72,21 @@ export async function lighthouseRematchLesson(directory, registry, launchId, eng
   return { workspace, material: supplyCard, task }
 }
 
-export async function lighthouseEvidenceLesson(directory, registry, launchId, english, scenario) {
-  if (typeof launchId !== 'string' || !openingId.test(launchId)) throw new Error('开局请求无效，请重试。')
-  const path = join(directory, evidencePrefix + launchId)
-  const workspace = await seedWorkspace(path, registry, 'Lighthouse evidence choices · 灯塔证据取舍', true)
+export function lighthouseEvidenceTask(english, scenario) {
   const confirmed = scenario === 'confirmed'
   const claim = confirmed
     ? (english ? '2 cans of lamp oil' : '两罐灯油')
     : (english ? 'two spare batteries' : '两节备用电池')
-  const task = english
+  return english
     ? `Read the North Shore Lighthouse supply card. A dispatch note reports ${claim} for the next shift. Check what the selected card actually supports before recommending what to hand off. If a recommendation is ready, write it separately and attach it in this conversation.`
     : `阅读北岸灯塔补给卡。一条调度消息说还为下一班准备了${claim}。先核对所选补给卡实际支持哪些说法，再建议本次交接内容。准备好交接稿时，另存一份并在当前对话交付。`
-  return { workspace, material: supplyCard, task }
+}
+
+export async function lighthouseEvidenceLesson(directory, registry, launchId, english, scenario) {
+  if (typeof launchId !== 'string' || !openingId.test(launchId)) throw new Error('开局请求无效，请重试。')
+  const path = join(directory, evidencePrefix + launchId)
+  const workspace = await seedWorkspace(path, registry, 'Lighthouse evidence choices · 灯塔证据取舍', true)
+  return { workspace, material: supplyCard, task: lighthouseEvidenceTask(english, scenario) }
 }
 
 export const lighthouseEvidenceReplayDirectory = (directory, id) => join(directory, evidenceReplayPrefix + id)
