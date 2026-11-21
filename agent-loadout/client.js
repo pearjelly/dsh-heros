@@ -984,7 +984,8 @@ window.__ModuleLoader__.load({
 
     function ItemDetail({ item, status, equipped, heroNames, presets, roles, request, onShowHero, onPreviewPairing, onFit, onPrepareTrial, onToggle, onManage, onEnable, onOpenSource, onConfigureSource,
       onAppearance, onActions, onCollection, onConfigureModule, sourceOptions, sourceChoice, onSource, builtIn, onBuiltIn, replacement,
-      disabled, appearanceDisabled, toolLinks, providerLinks, moduleLinks, linkedSource, onInspectRelated }) {
+      disabled, appearanceDisabled, toolLinks, providerLinks, moduleLinks, linkedSource, onInspectRelated, onPracticeEvidence }) {
+      const evidencePracticeButton = useRef(null)
       if (!item) return h('p', { className: 'moba-empty' }, t('没有找到符合条件的装备。'))
       if (status?.state === 'configure') return h('div', { className: 'moba-detail', id: 'moba-item-detail', 'aria-live': 'polite' },
         h('div', { className: 'moba-detail-head' },
@@ -1057,6 +1058,10 @@ window.__ModuleLoader__.load({
         status?.dependencies?.length > 0 && h('p', { className: 'moba-condition' },
           t('随装备加载 ') + status.dependencies.join('、')),
         item.trigger && h('p', { className: 'moba-condition' }, item.trigger),
+        item.id === 'evidence' && onPracticeEvidence && h('div', { className: 'moba-detail-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', ref: evidencePracticeButton, disabled,
+            'aria-haspopup': 'dialog', onClick: () => onPracticeEvidence(evidencePracticeButton) },
+          h(Glyph, { kind: 'flag', size: 16 }), t('试一次证据取舍'))),
         item.modules?.length > 1 && h('p', { className: 'moba-condition' }, t('成套装配 ') + item.modules.join(' · ')),
         toolLinks.length ? h(EquipmentLinks, { title: t('提供的工具'), action: t('查看工具'), links: toolLinks, onOpen: onInspectRelated })
           : item.provides?.length > 0 && h('p', { className: 'moba-condition' }, t('提供工具 ') + item.provides.join(' · ')),
@@ -2921,7 +2926,7 @@ window.__ModuleLoader__.load({
 
     function Shop({ items, roles, activeId, statuses, selected, heroNames, presets, onShowHero, onPreviewPairing, onFit, onPrepareTrial, onInspect, onToggle, onManage, onEnable, onRefresh,
       onOpenSource, onEditSaved, onAppearance, onActions, onCollection, equipmentSources, onSource,
-      builtIn, removed, removalRoots, onBuiltIn, standingClaims, request, revision, disabled, saved, profileError, requestedItem }) {
+      builtIn, removed, removalRoots, onBuiltIn, standingClaims, request, revision, disabled, saved, profileError, requestedItem, onPracticeEvidence }) {
       const [category, setCategory] = useState('featured')
       const [role, setRole] = useState('')
       const [query, setQuery] = useState('')
@@ -3146,7 +3151,7 @@ window.__ModuleLoader__.load({
             art: inspectedStatus?.art ?? active.art, roles: inspectedStatus?.roles ?? active.roles },
           status: inspectedStatus, equipped: active && isEquipped(active), replacement,
           heroNames, presets, roles, request, onShowHero, onPreviewPairing, onFit: !saved && onFit, onPrepareTrial, onToggle, onManage, onEnable, onOpenSource, disabled: disabled || saved,
-          builtIn: activeBuiltIn, onBuiltIn,
+          builtIn: activeBuiltIn, onBuiltIn, onPracticeEvidence: !saved && onPracticeEvidence,
           onAppearance, onActions, onCollection, sourceOptions, sourceChoice, onSource: changeSource, appearanceDisabled: disabled,
           toolLinks, providerLinks, moduleLinks, linkedSource, onInspectRelated: inspectRelated,
           onConfigureModule: initialModule => setDialog({ kind: 'custom', initialModule }),
@@ -5975,6 +5980,8 @@ window.__ModuleLoader__.load({
               presets, onShowHero: (heroId, equipmentId) => setGalleryOpen({ heroId, equipmentId }), onPreviewPairing: previewPairing,
               onFit: presets.some(hero => !hero.broken) ? fitEquipment : undefined,
               onPrepareTrial: !pending && canCompare ? prepareEquipmentTrial : undefined,
+              onPracticeEvidence: presets.some(hero => hero.id === 'standard' && !hero.broken)
+                ? trigger => setLessonOpen({ lesson: lighthouseEvidenceLesson, trigger }) : undefined,
               heroNames: new Map(presets.map(hero => [hero.id, hero.name])),
               selected, onInspect: setInspected, onToggle: toggle, onManage: manage, onEnable: enableProfileItem,
               onOpenSource: openSource, onAppearance: editAppearance, onActions: editActions, onCollection: updateCollection,

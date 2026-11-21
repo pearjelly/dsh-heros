@@ -166,7 +166,9 @@ dsh web
 
 如果原生插件安装报告 `ERR_PNPM_ADDING_TO_ROOT`，请在对应 Profile 的 `pnpm-workspace.yaml` 加入 `ignoreWorkspaceRootCheck: true`。使用 pnpm 9 的 Web Profile 在同目录的 `.npmrc` 中加入 `ignore-workspace-root-check=true`。[pnpm 工作区设置](https://pnpm.io/workspaces#ignoreworkspacerootcheck)
 
-在大厅的 **灯塔补给行动** 旁打开 **灯塔证据取舍**（**Lighthouse evidence choices**），选 **关键证据缺失**（**Missing key evidence**）或 **证据齐全**（**Evidence available**）。点 **开始证据取舍**，在独立的标准模式会话核对并手动发送任务。补给卡没有两节备用电池的依据时，**证据核验**通过 DSH 原生提问卡提供继续补证、降级推荐、暂缓提交三个选择。补给卡能够核实两罐灯油时，可跳过提问继续交接。点 **查看取舍记录**（**View evidence run**）或从 **实战记录** 找回这局，核对实际工具调用、你选择的答案和已交付的文件。文件留在 DSH 对话内。
+在大厅的 **装备库 → 证据核验** 点 **试一次证据取舍**（**Try an evidence choice**）。也可以从 **灯塔补给行动** 打开 **灯塔证据取舍**（**Lighthouse evidence choices**）。选 **关键证据缺失**（**Missing key evidence**）或 **证据齐全**（**Evidence available**），点 **开始证据取舍**，在独立的标准模式会话核对并手动发送任务。开局前返回装备详情，可以继续编辑原出装草稿。
+
+补给卡没有两节备用电池的依据时，**证据核验**通过 DSH 原生提问卡提供继续补证、降级推荐、暂缓提交三个选择。补给卡能够核实两罐灯油时，可跳过提问继续交接。点 **查看取舍记录**（**View evidence run**）或从 **实战记录** 找回这局，核对实际工具调用、你选择的答案和已交付的文件。文件留在 DSH 对话内。
 
 在练习记录里核对到一次证据取舍或一次证据齐全的交付后，点 **用这套出装做自己的任务**（**Use this loadout on my task**）。用自己的工作区和材料准备新任务，核对实际装备来源后在原生会话手动发送。可从 **查看任务结果** 核对本局的选择和附件，并把出装保存为方案。
 
