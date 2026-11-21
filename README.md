@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.92.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.93.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -35,6 +35,7 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 1. Open **View task result** on a personal Standard Mode run with a verified Evidence Check choice. Choose **Try one gear change**, then **Review Evidence Check removal**. The preview removes only Evidence Check and keeps Deliverable Preview and its original tool source.
 2. Choose **Open rematch session**, then manually send the same task in the new DSH session. The replay uses the original workspace, material and brief. The original material and source must still pass verification.
 3. In **Evidence gear comparison**, compare the actual tool calls, recorded choices, and files from both sessions. A choice to pause can leave zero files. If the replay asks a question of its own, any recorded answer appears on that side. Open either source session to inspect the conversation and decide whether to equip Evidence Check next time.
+4. Once you have a completed personal comparison, open **Armory → Evidence Check → View evidence replay history**. Search by task, material, or workspace. Select a comparison and open either original DSH session to check the recorded choices and attachments. Completed records stay available if you later change the material.
 
 ## Play your first rematch
 

@@ -982,10 +982,35 @@ window.__ModuleLoader__.load({
           onClick: () => setLimit(value => value + 4) }, t('查看更多来源')))
     }
 
+    function EvidenceDetailActions({ request, revision, onPractice, onHistory, disabled }) {
+      const practiceButton = useRef(null)
+      const historyButton = useRef(null)
+      const [available, setAvailable] = useState(false)
+      const canCheck = Boolean(onHistory)
+
+      useEffect(() => {
+        if (!canCheck) return
+        const abort = new AbortController()
+        const action = 'comparison-history'
+        request(action, { action, scope: evidenceReplayScope, probe: true }, abort.signal)
+          .then(value => { if (!abort.signal.aborted) setAvailable(value.available === true) })
+          .catch(() => { if (!abort.signal.aborted) setAvailable(false) })
+        return () => abort.abort()
+      }, [canCheck, request, revision])
+
+      return h('div', { className: 'moba-detail-actions' },
+        onPractice && h('button', { type: 'button', className: 'moba-roster-open', ref: practiceButton, disabled,
+          'aria-haspopup': 'dialog', onClick: () => onPractice(practiceButton) },
+          h(Glyph, { kind: 'flag', size: 16 }), t('试一次证据取舍')),
+        available && onHistory && h('button', { type: 'button', className: 'moba-roster-open', ref: historyButton, disabled,
+          'aria-haspopup': 'dialog', onClick: () => onHistory(historyButton) },
+          h(Glyph, { kind: 'report', size: 16 }), t('查看证据换装记录')))
+    }
+
     function ItemDetail({ item, status, equipped, heroNames, presets, roles, request, onShowHero, onPreviewPairing, onFit, onPrepareTrial, onToggle, onManage, onEnable, onOpenSource, onConfigureSource,
       onAppearance, onActions, onCollection, onConfigureModule, sourceOptions, sourceChoice, onSource, builtIn, onBuiltIn, replacement,
-      disabled, appearanceDisabled, toolLinks, providerLinks, moduleLinks, linkedSource, onInspectRelated, onPracticeEvidence }) {
-      const evidencePracticeButton = useRef(null)
+      disabled, appearanceDisabled, toolLinks, providerLinks, moduleLinks, linkedSource, onInspectRelated,
+      onPracticeEvidence, onEvidenceHistory, revision }) {
       if (!item) return h('p', { className: 'moba-empty' }, t('没有找到符合条件的装备。'))
       if (status?.state === 'configure') return h('div', { className: 'moba-detail', id: 'moba-item-detail', 'aria-live': 'polite' },
         h('div', { className: 'moba-detail-head' },
@@ -1058,10 +1083,9 @@ window.__ModuleLoader__.load({
         status?.dependencies?.length > 0 && h('p', { className: 'moba-condition' },
           t('随装备加载 ') + status.dependencies.join('、')),
         item.trigger && h('p', { className: 'moba-condition' }, item.trigger),
-        item.id === 'evidence' && onPracticeEvidence && h('div', { className: 'moba-detail-actions' },
-          h('button', { type: 'button', className: 'moba-roster-open', ref: evidencePracticeButton, disabled,
-            'aria-haspopup': 'dialog', onClick: () => onPracticeEvidence(evidencePracticeButton) },
-          h(Glyph, { kind: 'flag', size: 16 }), t('试一次证据取舍'))),
+        item.id === 'evidence' && (onPracticeEvidence || onEvidenceHistory) && h(EvidenceDetailActions, {
+          request, revision, onPractice: onPracticeEvidence, onHistory: onEvidenceHistory, disabled,
+        }),
         item.modules?.length > 1 && h('p', { className: 'moba-condition' }, t('成套装配 ') + item.modules.join(' · ')),
         toolLinks.length ? h(EquipmentLinks, { title: t('提供的工具'), action: t('查看工具'), links: toolLinks, onOpen: onInspectRelated })
           : item.provides?.length > 0 && h('p', { className: 'moba-condition' }, t('提供工具 ') + item.provides.join(' · ')),
@@ -1314,6 +1338,7 @@ window.__ModuleLoader__.load({
     }
     const runHistoryLabel = () => t('实战记录', '实战记录（同题对照）')
     const backToRunHistoryLabel = () => t('返回实战记录', '返回实战记录（同题对照）')
+    const evidenceReplayScope = 'evidence-replays'
 
     function closeDialogOnEscape(event, close) {
       if (event.key !== 'Escape') return
@@ -1595,7 +1620,7 @@ window.__ModuleLoader__.load({
       return item.path && duplicate ? title + ' · ' + item.path : title
     }
 
-    function RunComparison({ kind = 'lighthouse', comparisonId, initialPrevious, lessonHint, evidenceReplayHint, onBack, ...props }) {
+    function RunComparison({ kind = 'lighthouse', comparisonId, initialPrevious, lessonHint, evidenceReplayHint, onBack, backLabel, ...props }) {
       const origin = { kind, comparisonId }
       const [path, setPath] = useState(() => previousComparisonIsValid(initialPrevious) && !sameComparison(origin, initialPrevious) ? [initialPrevious] : [])
       const [returning, setReturning] = useState(false)
@@ -1621,7 +1646,7 @@ window.__ModuleLoader__.load({
         evidenceReplayHint: path.length ? current.evidenceReplay : evidenceReplayHint,
         focusArm: returning ? undefined : current.arm,
         focusPrevious: returning, canViewPrevious: canView, onPrevious: viewPrevious,
-        backLabel: path.length ? t('返回后一组对照') : undefined, onBack: path.length ? returnToNewer : onBack })
+        backLabel: path.length ? t('返回后一组对照') : backLabel, onBack: path.length ? returnToNewer : onBack })
     }
 
     function ComparisonBoard({ kind, request, comparisonId, sessionId, onClose, onVisit, putTask, canViewPrevious, lessonHint, evidenceReplayHint,
@@ -1877,7 +1902,7 @@ window.__ModuleLoader__.load({
             onClick: () => onOpen(item) }, t(evidence ? '查看取舍记录' : '查看对照'), h(Glyph, { kind: 'arrow', size: 15 }))))
     }
 
-    function ComparisonHistory({ request, workspaces, initialWorkspaceId, onClose, onSource, onVisit, onUse, initialKind = 'all' }) {
+    function ComparisonHistory({ request, workspaces, initialWorkspaceId, onClose, onSource, onVisit, onUse, initialKind = 'all', scope }) {
       const language = useLanguage()
       const [query, setQuery] = useState('')
       const [kind, setKind] = useState(initialKind)
@@ -1888,7 +1913,8 @@ window.__ModuleLoader__.load({
       const [selection, setSelection] = useState(null)
       const focus = useRef(new Map())
       const term = query.trim()
-      const key = JSON.stringify([term, kind, outcome, language])
+      const evidenceHistory = scope === evidenceReplayScope
+      const key = JSON.stringify([term, kind, outcome, scope, language])
       const before = page?.key === key ? page.before : undefined
       const current = state?.key === key ? state : undefined
       const loading = !current || current.cursor !== before || current.attempt !== attempt
@@ -1903,7 +1929,8 @@ window.__ModuleLoader__.load({
         const action = 'comparison-history'
         const timer = setTimeout(async () => {
           try {
-            const value = await request(action, { action, query: term, kind, outcome, before }, abort.signal, language)
+            const value = await request(action, { action, query: term, before,
+              ...(evidenceHistory ? { scope } : { kind, outcome }) }, abort.signal, language)
             if (abort.signal.aborted) return
             setState(previous => {
               const rows = before && previous?.key === key ? previous.items : empty
@@ -1916,7 +1943,7 @@ window.__ModuleLoader__.load({
           }
         }, term && !before ? 180 : 0)
         return () => { abort.abort(); clearTimeout(timer) }
-      }, [request, key, term, kind, outcome, before, attempt, language])
+      }, [request, key, term, kind, outcome, scope, evidenceHistory, before, attempt, language])
 
       function select(item, arm) {
         setSelection({ id: item.id, kind: item.kind, arm, lesson: item.lesson, evidenceReplay: item.evidenceReplay })
@@ -1950,19 +1977,21 @@ window.__ModuleLoader__.load({
         arm: selection.arm, request, onBack: back, onClose, onUse })
       if (selection) return h(RunComparison, { kind: selection.kind, comparisonId: selection.id, request,
         workspaces, initialWorkspaceId, initialPrevious: selection.previous, lessonHint: selection.lesson,
-        evidenceReplayHint: selection.evidenceReplay, onBack: back, onClose, onVisit, onUse })
+        evidenceReplayHint: selection.evidenceReplay, onBack: back,
+        backLabel: evidenceHistory ? t('返回证据换装记录') : undefined, onClose, onVisit, onUse })
 
-      return h(InstallDialog, { title: runHistoryLabel(), className: 'moba-lighthouse-comparison moba-comparison-history',
+      return h(InstallDialog, { title: evidenceHistory ? t('证据换装记录') : runHistoryLabel(),
+        className: 'moba-lighthouse-comparison moba-comparison-history',
         onCancel: onClose, initialFocus: '.moba-comparison-history-query', onKeyDown: event => closeDialogOnEscape(event, onClose) },
         h('div', { className: 'moba-history-filters' },
           h('label', { className: 'moba-search' }, h(Glyph, { kind: 'search', size: 17 }),
             h('input', { className: 'moba-comparison-history-query', type: 'search', maxLength: 200, value: query,
-              'aria-label': t('搜索实战记录'), placeholder: t('搜索任务、材料或工作区'),
+              'aria-label': t(evidenceHistory ? '搜索证据换装记录' : '搜索实战记录'), placeholder: t('搜索任务、材料或工作区'),
               onChange: event => { setQuery(event.target.value); setPage(null) } })),
-          h('label', null, t('对照类型'), h('select', { value: kind,
+          !evidenceHistory && h('label', null, t('对照类型'), h('select', { value: kind,
             onChange: event => { setKind(event.target.value); setPage(null) } },
             filters.kind.map(([id, name]) => h('option', { key: id, value: id }, t(name))))),
-          h('label', null, t('结果筛选'), h('select', { value: outcome,
+          !evidenceHistory && h('label', null, t('结果筛选'), h('select', { value: outcome,
             onChange: event => { setOutcome(event.target.value); setPage(null) } },
             filters.outcome.map(([id, name]) => h('option', { key: id, value: id }, t(name)))))),
         current?.items.length > 0 && h('ul', { className: 'moba-history-list' }, current.items.map(item =>
@@ -1977,8 +2006,9 @@ window.__ModuleLoader__.load({
           : current.error ? h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
             h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重试')))
             : !current.items.length && h('p', { className: 'moba-empty', role: 'status' }, t(current.before
-              ? '这页没有匹配项，仍有更早的记录可查。' : term || kind !== 'all' || outcome !== 'all'
-                ? '没有符合条件的对照。' : '还没有同题对照记录。')),
+              ? '这页没有匹配项，仍有更早的记录可查。'
+              : evidenceHistory && !term ? '还没有已完成的证据换装对照。'
+                : term || kind !== 'all' || outcome !== 'all' ? '没有符合条件的对照。' : '还没有同题对照记录。')),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
           current?.before && (loading || current.before !== before) && h('button', { type: 'button', className: 'moba-roster-open',
             disabled: loading || Boolean(current.error), onClick: () => setPage({ key, before: current.before }) }, t('加载更多记录')),
@@ -2926,7 +2956,8 @@ window.__ModuleLoader__.load({
 
     function Shop({ items, roles, activeId, statuses, selected, heroNames, presets, onShowHero, onPreviewPairing, onFit, onPrepareTrial, onInspect, onToggle, onManage, onEnable, onRefresh,
       onOpenSource, onEditSaved, onAppearance, onActions, onCollection, equipmentSources, onSource,
-      builtIn, removed, removalRoots, onBuiltIn, standingClaims, request, revision, disabled, saved, profileError, requestedItem, onPracticeEvidence }) {
+      builtIn, removed, removalRoots, onBuiltIn, standingClaims, request, revision, disabled, saved, profileError, requestedItem,
+      onPracticeEvidence, onEvidenceHistory }) {
       const [category, setCategory] = useState('featured')
       const [role, setRole] = useState('')
       const [query, setQuery] = useState('')
@@ -3152,6 +3183,7 @@ window.__ModuleLoader__.load({
           status: inspectedStatus, equipped: active && isEquipped(active), replacement,
           heroNames, presets, roles, request, onShowHero, onPreviewPairing, onFit: !saved && onFit, onPrepareTrial, onToggle, onManage, onEnable, onOpenSource, disabled: disabled || saved,
           builtIn: activeBuiltIn, onBuiltIn, onPracticeEvidence: !saved && onPracticeEvidence,
+          onEvidenceHistory: !saved && onEvidenceHistory, revision,
           onAppearance, onActions, onCollection, sourceOptions, sourceChoice, onSource: changeSource, appearanceDisabled: disabled,
           toolLinks, providerLinks, moduleLinks, linkedSource, onInspectRelated: inspectRelated,
           onConfigureModule: initialModule => setDialog({ kind: 'custom', initialModule }),
@@ -5176,6 +5208,7 @@ window.__ModuleLoader__.load({
       const workspaceCompareButton = useRef(null)
       const [runHistory, setRunHistory] = useState('')
       const runHistoryButton = useRef(null)
+      const runHistoryTrigger = useRef(null)
       const [notice, setNotice] = useState(proven ? t('已载入实战出装草稿。') : '')
       const [appearance, setAppearance] = useState(null)
       const [actionTarget, setActionTarget] = useState(null)
@@ -5469,15 +5502,17 @@ window.__ModuleLoader__.load({
           t(adapted ? '已采用「%s」的换装草稿。' : '已采用「%s」的分享出装。').replace('%s', () => name), { preserveMatchMode: true })
       }
 
-      function showRunHistory(kind = 'all') {
+      function showRunHistory(kind = 'all', trigger = runHistoryButton) {
         setLighthouseCompareOpen(false)
         setWorkspaceCompareOpen(false)
+        runHistoryTrigger.current = trigger
         setRunHistory(kind)
       }
 
       function closeRunHistory() {
+        const trigger = runHistoryTrigger.current
         setRunHistory('')
-        requestAnimationFrame(() => runHistoryButton.current?.focus())
+        requestAnimationFrame(() => (trigger?.current ?? runHistoryButton.current)?.focus())
       }
 
       function adoptComparisonLoadout({ draft, gear, workspaceId }, save) {
@@ -5884,7 +5919,9 @@ window.__ModuleLoader__.load({
               openDraftSession(sessionId, task)
             } }),
           runHistory && h(ComparisonHistory, { request, workspaces: comparableWorkspaces, initialWorkspaceId: workspace?.workspaceId,
-            initialKind: runHistory, onClose: closeRunHistory, onUse: adoptComparisonLoadout, onSource: sessionId => {
+            initialKind: runHistory === evidenceReplayScope ? 'rematch' : runHistory,
+            scope: runHistory === evidenceReplayScope ? evidenceReplayScope : undefined,
+            onClose: closeRunHistory, onUse: adoptComparisonLoadout, onSource: sessionId => {
               setRunHistory('')
               openSource(sessionId)
             }, onVisit: (sessionId, task) => {
@@ -5982,6 +6019,7 @@ window.__ModuleLoader__.load({
               onPrepareTrial: !pending && canCompare ? prepareEquipmentTrial : undefined,
               onPracticeEvidence: presets.some(hero => hero.id === 'standard' && !hero.broken)
                 ? trigger => setLessonOpen({ lesson: lighthouseEvidenceLesson, trigger }) : undefined,
+              onEvidenceHistory: trigger => showRunHistory(evidenceReplayScope, trigger),
               heroNames: new Map(presets.map(hero => [hero.id, hero.name])),
               selected, onInspect: setInspected, onToggle: toggle, onManage: manage, onEnable: enableProfileItem,
               onOpenSource: openSource, onAppearance: editAppearance, onActions: editActions, onCollection: updateCollection,

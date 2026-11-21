@@ -4100,9 +4100,11 @@ export async function apply(ctx) {
     return b.createdAt - a.createdAt || b.id.localeCompare(a.id) || b.kind.localeCompare(a.kind)
   }
 
-  async function comparisonHistory({ query = '', kind = 'all', outcome = 'all', before }, signal) {
+  async function comparisonHistory({ query = '', kind = 'all', outcome = 'all', before, scope, probe = false }, signal) {
+    const evidenceReplays = scope === 'evidence-replays'
     if (typeof query !== 'string' || query.length > 200 || !['all', ...Object.keys(comparisonStores)].includes(kind) ||
-      !['all', 'delivered', 'decisions'].includes(outcome)) throw new Error('实战记录筛选无效，请重新选择。')
+      !['all', 'delivered', 'decisions'].includes(outcome) || (scope !== undefined && !evidenceReplays) ||
+      typeof probe !== 'boolean' || (probe && !evidenceReplays)) throw new Error('实战记录筛选无效，请重新选择。')
     let older
     if (before !== undefined) {
       const fields = typeof before === 'string' && /^(\d{1,16}):(workspace|lighthouse|plans|rematch):([a-f0-9]{32})$/.exec(before)
@@ -4114,7 +4116,8 @@ export async function apply(ctx) {
     const groups = Object.entries(comparisonStores)
     const headings = { lighthouse: '灯塔补给行动 Lighthouse Supply Run', workspace: '实战同题对照 Workspace comparison',
       plans: '方案同题对照 Saved plan comparison', rematch: '单件换装对照 换装复赛 One-gear rematch Gear rematch' }
-    const matches = groups.filter(([category]) => kind === 'all' || kind === category).flatMap(([category, store]) =>
+    const matches = groups.filter(([category]) => (kind === 'all' || kind === category) && (!evidenceReplays || category === 'rematch'))
+      .flatMap(([category, store]) =>
       Array.from(store.list(), record => {
         const { createdAt, id, task, material, workspaceId } = record
         const workspaceTitle = registry?.get(workspaceId)?.title ?? record.workspaceTitle
@@ -4124,6 +4127,7 @@ export async function apply(ctx) {
           ...(record.lesson === evidenceLesson && { scenario: record.scenario }),
           ...(record.baseline?.evidenceReplay && { evidenceReplay: true }) }
       }).filter(item => {
+        if (evidenceReplays && !item.evidenceReplay) return false
         if (older && comparisonHistoryOrder(item, older) <= 0) return false
         const workspaceName = item.workspaceTitle === 'default-workspace' ? 'default-workspace 默认工作区 Default workspace' : item.workspaceTitle
         const planLabels = item.record.plans && Object.values(item.record.plans).flatMap(({ planName, heroName }) => [planName, heroName])
@@ -4137,8 +4141,8 @@ export async function apply(ctx) {
         return words.every(word => searchable.includes(word))
       })).sort(comparisonHistoryOrder)
 
-    const pageSize = 12
-    const scanLimit = Math.min(matches.length, outcome === 'all' ? pageSize : 48)
+    const pageSize = probe ? 1 : 12
+    const scanLimit = evidenceReplays ? matches.length : Math.min(matches.length, outcome === 'all' ? pageSize : 48)
     const items = []
     let inspected = 0
     while (inspected < scanLimit && items.length < pageSize) {
@@ -4146,6 +4150,9 @@ export async function apply(ctx) {
       const group = matches.slice(inspected, inspected + Math.min(6, pageSize - items.length, scanLimit - inspected))
       const cards = await Promise.all(group.map(async ({ store, record, ...item }) => {
         const { arms: observed, previous } = await readComparisonArms(store, record, signal)
+        if (evidenceReplays && (observed.length !== 2 || observed[0].id !== 'baseline' || observed[1].id !== 'rematch' ||
+          observed.some(arm => arm.status !== 'complete' || !arm.sessionId || arm.materialState !== 'verified' || arm.continuationReason) ||
+          observed[0].sessionId === observed[1].sessionId || !comparisonChoices(observed[0]).length)) return null
         const arms = observed.map(arm => {
           const { id, status, sessionId, turn, deliverables, reason, continuationReason, canReuse, canRematch, planName, heroName, lessonTaskSource } = arm
           const choices = comparisonChoices(arm)
@@ -4155,9 +4162,10 @@ export async function apply(ctx) {
         return { ...item, arms, ...(previous && { previous }) }
       }))
       inspected += cards.length
-      items.push(...cards.filter(item => outcome === 'all' || item.arms.some(arm =>
-        (outcome === 'delivered' ? arm.deliverables : arm.choices)?.length)))
+      items.push(...cards.filter(item => item && (outcome === 'all' || item.arms.some(arm =>
+        (outcome === 'delivered' ? arm.deliverables : arm.choices)?.length))))
     }
+    if (probe) return { available: items.length > 0 }
     const last = matches[inspected - 1]
     return { items, ...(last && inspected < matches.length && { before: `${last.createdAt}:${last.kind}:${last.id}` }) }
   }

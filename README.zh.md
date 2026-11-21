@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.92.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.93.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -35,6 +35,7 @@ dsh web
 1. 标准模式的个人任务记录了可核验的证据取舍后，打开 **查看任务结果**，点 **换一件再试**，再点 **核对卸下证据核验**。预览仅卸下一件证据核验，保留交付物预览和原工具来源。
 2. 点 **打开换装会话**，在独立的 DSH 会话里手动发送。复赛沿用原工作区、材料和任务说明，材料与来源需继续通过核验。
 3. 在 **证据换装对照** 核对两局实际调用、选择和交付文件。暂缓可能留下零附件，复赛的其他提问也可以留下选择。打开两局原会话核对提问经过，再决定下次是否装备证据核验。
+4. 完成一组个人对照后，在 **装备库 → 证据核验** 点 **查看证据换装记录**。可按任务、材料或工作区搜索，选中一组后打开两局各自的 DSH 原会话，核对实际选择和附件。之后修改材料，仍可查看已完成的记录。
 
 ## 打完第一次换装复赛
 
