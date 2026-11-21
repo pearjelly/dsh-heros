@@ -3733,7 +3733,12 @@ export async function apply(ctx) {
   async function checkedRematchBaseline(selection, signal) {
     if (selection.kind === 'personal') return checkedPersonalRematchBaseline(selection, signal)
     const { comparisons, record, arm } = rematchReference(selection)
-    const [observed, saved] = await Promise.all([readComparisonArm(comparisons, record, arm, signal), comparisons.readArm(record.id, arm)])
+    const personalReviewRematch = comparisons === rematchComparisons && arm === 'rematch' &&
+      record.baseline?.kind === 'personal' && record.edit.addId === 'review' &&
+      record.edit.removeId === undefined && record.edit.sourceId === undefined
+    const [observed, saved] = await Promise.all([
+      readComparisonArm(comparisons, record, arm, signal, personalReviewRematch), comparisons.readArm(record.id, arm),
+    ])
     if (!saved?.opened || !observed.canRematch) throw new Error('请选择一局已核验的实战作为原局。')
     const { workspaceId, cwd, digest, material, task, workspaceTitle } = record
     const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
@@ -3757,6 +3762,7 @@ export async function apply(ctx) {
       baseline: { sessionId: baseline.sessionId, heroName, planName: baseline.planName, ...(record.change && { change: record.change }) } }
     const brief = record.brief ?? task.split('\n').slice(2, -1).join('\n').trim()
     return { ecosystem, preset, draft, candidate, baseline, view, lesson: record.lesson,
+      ...(personalReviewRematch && { observed, personalReviewRematch: record }),
       fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief, ...(record.lesson && { lesson: record.lesson }) } }
   }
 
@@ -3776,13 +3782,20 @@ export async function apply(ctx) {
     return { builtIn, removed, equipped }
   }
 
-  async function personalReviewSuggestion(selection, checked, signal) {
-    const { observed, ecosystem, draft, candidate: before } = checked
-    if (!observed?.materialDelivered || draft.presetId !== 'standard' || draft.equipmentIds.length !== 1 ||
-      draft.equipmentIds[0] !== 'present' || observed.entries.some(item => item.name === 'ask_user_question') ||
+  async function personalHandoffSuggestion(selection, checked, signal) {
+    const { observed, ecosystem, draft, candidate: before, personalReviewRematch } = checked
+    if (observed?.status !== 'complete' || !observed.materialDelivered || observed.continuationReason ||
+      draft.presetId !== 'standard' || !draft.equipmentIds.includes('present') ||
       !observed.entries.some(item => item.name === 'present' && item.state === 'completed')) return
-    const change = { addId: 'review' }
+    const direct = draft.equipmentIds.length === 1 && !observed.entries.some(item => item.name === 'ask_user_question')
+    const reviewed = draft.equipmentIds.length === 2 && draft.equipmentIds.includes('review') && comparisonChoices(observed).length > 0
+    if (!direct && !reviewed) return
+    const change = direct ? { addId: 'review' } : { removeId: 'review' }
     try {
+      if (personalReviewRematch) {
+        const original = await readRematchBaseline(personalReviewRematch, previousComparison(personalReviewRematch), signal)
+        if (!original.canReuse || !original.materialDelivered) return
+      }
       const { candidate } = await checkRematch(requestedRematch({ ...selection, change }), signal, checked)
       const presentModule = equipmentById.get('present').module
       const presentRows = build => flatten(build.record.definition.plugins)
@@ -3797,7 +3810,7 @@ export async function apply(ctx) {
       const [present] = beforeTools
       if (beforeTools.length === 1 && !present.timing && after.length === 1 && after[0].id === present.id &&
         after[0].timing === present.timing && after[0].sourceId === present.sourceId &&
-        questions.length === 1 && !questions[0].timing) return change
+        (reviewed || questions.length === 1 && !questions[0].timing)) return change
     } catch {
       signal?.throwIfAborted()
     }
@@ -3823,9 +3836,11 @@ export async function apply(ctx) {
       return [{ id: item.id, name: item.name, kind: item.kind ?? 'featured', summary: item.summary, sources, searchTerms }]
     }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id))
     const reviewAvailable = available.some(item => item.id === 'review')
-    const personalSuggestedChange = reviewAvailable && await personalReviewSuggestion(selection, checked, signal)
+    const personalSuggestedChange = await personalHandoffSuggestion(selection, checked, signal)
+    const baseline = personalSuggestedChange?.removeId
+      ? { ...view.baseline, choices: comparisonChoices(checked.observed) } : view.baseline
     signal?.throwIfAborted()
-    return { ...view, equipped, available,
+    return { ...view, baseline, equipped, available,
       ...(checked.lesson === lighthouseLesson && checked.baseline.kind === 'workspace' && reviewAvailable && { suggestedGearId: 'review' }),
       ...(personalSuggestedChange && { personalSuggestedChange }) }
   }
@@ -3920,7 +3935,7 @@ export async function apply(ctx) {
     return prepare(checked.draft, checked.candidate)
   }
 
-  async function readComparisonArm(comparisons, comparison, arm, signal) {
+  async function readComparisonArm(comparisons, comparison, arm, signal, verifyPersonalDelivery = false) {
     const { sessionId } = comparisons.identity(comparison.id, arm)
     const labels = comparison.loadout ? { heroName: comparison.loadout.heroName } : planComparisonLabels(comparison, arm)
     let saved
@@ -3934,7 +3949,7 @@ export async function apply(ctx) {
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
       const lessonBaseline = comparisons === workspaceComparisons && comparison.lesson === lighthouseLesson
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material,
-        verifyMaterialDelivery: lessonBaseline }, receipts)
+        verifyMaterialDelivery: lessonBaseline || verifyPersonalDelivery, ...(verifyPersonalDelivery && { exactMessages: true }) }, receipts)
       if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
         result.reason = '未交付本次练习的灯塔补给卡。请查看原会话或开始新的练习。'
       }

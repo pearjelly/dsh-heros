@@ -2063,6 +2063,8 @@
   "重新读取换装选项": "Reload gear options",
   "打开换装会话": "Open rematch session",
   "试试交付前复核": "Try Delivery Review",
+  "试试直接交付": "Try direct delivery",
+  "卸下交付前复核，用同一任务试试直接交付。": "Remove Delivery Review to try direct delivery on the same task.",
   "原局已交付": "Original run delivered",
   "可以先看草稿，再决定确认交付或退回修改。": "You can review the draft first, then approve delivery or request changes.",
   "用原局作为基准。换装局沿用同一份材料和任务。": "Use the original run as the baseline. The rematch uses the same file and task.",

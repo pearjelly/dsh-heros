@@ -1920,8 +1920,13 @@ window.__ModuleLoader__.load({
       const equippedById = new Map(equipped.map(item => [item.id, item]))
       const additions = available.filter(item => !equippedById.has(item.id))
       const suggested = additions.find(item => item.id === options?.suggestedGearId)
-      const personalSuggestion = kind === 'personal' && options?.personalSuggestedChange?.addId === 'review' &&
+      const { addId: suggestedAddition, removeId: suggestedRemoval } = options?.personalSuggestedChange ?? emptyMap
+      const originalChoices = options?.baseline?.choices ?? empty
+      const addReview = kind === 'personal' && suggestedAddition === 'review' && suggestedRemoval === undefined &&
         additions.some(item => item.id === 'review')
+      const removeReview = (kind === 'personal' || kind === 'rematch' && arm === 'rematch') && suggestedRemoval === 'review' &&
+        suggestedAddition === undefined && equippedById.has('review') && originalChoices.length > 0 && Boolean(options?.material)
+      const suggestionLabel = addReview ? '试试交付前复核' : removeReview ? '试试直接交付' : undefined
       const swaps = equipped.length > 0 && (additions.length > 0 || available.some(item =>
         equippedById.has(item.id) && item.sources?.some(source => source.id !== equippedById.get(item.id).sourceId)))
       const operation = mode || (additions.length > 0 ? 'add' : equipped.length > 0 ? 'remove' : 'add')
@@ -2013,8 +2018,13 @@ window.__ModuleLoader__.load({
           ...(selectedSource && { sourceId: selectedSource.id }) })
       }
 
-      function tryDeliveryReview() {
-        if (!personalSuggestion || !readyToReview || pending.current) return
+      function previewSuggestion() {
+        if (!suggestionLabel || !readyToReview || pending.current) return
+        if (removeReview) {
+          setMode('remove')
+          setRemoveId('review')
+          return previewChange({ removeId: 'review' }, true)
+        }
         setMode('add')
         setRemoveId('')
         setAddId('review')
@@ -2060,12 +2070,13 @@ window.__ModuleLoader__.load({
             ? t('默认工作区') : options.workspaceTitle], [t('材料文件相对路径'), options.material], [t('基准局的换装'), baselineChange]] }),
           h('div', { className: 'moba-lighthouse-task' },
             h('label', null, t('两边共用的任务'), h('textarea', { readOnly: true, rows: 4, value: preview?.task ?? options.task }))),
-          !preview && !reading && !loaded?.error && !needsRefresh && personalSuggestion &&
-            h('aside', { className: 'moba-lighthouse-arm', 'aria-label': t('试试交付前复核') },
+          !preview && !reading && !loaded?.error && !needsRefresh && suggestionLabel &&
+            h('aside', { className: 'moba-lighthouse-arm', 'aria-label': t(suggestionLabel) },
               h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t('原局已交付') + ' · ' + options.material), ' ',
-                t('可以先看草稿，再决定确认交付或退回修改。')),
+                removeReview ? t('你实际选择了 ') + originalChoices.join(' / ') : t('可以先看草稿，再决定确认交付或退回修改。')),
+              removeReview && h('p', { className: 'moba-lighthouse-note' }, t('卸下交付前复核，用同一任务试试直接交付。')),
               h('div', null, h('button', { type: 'button', ref: suggestionButton, className: 'moba-roster-open',
-                disabled: !readyToReview, onClick: tryDeliveryReview }, t('试试交付前复核'), h(Glyph, { kind: 'arrow', size: 15 })))),
+                disabled: !readyToReview, onClick: previewSuggestion }, t(suggestionLabel), h(Glyph, { kind: 'arrow', size: 15 })))),
           preview ? h(Fragment, null,
             h('h3', { ref: reviewHeading, tabIndex: -1 }, t('核对换装')),
             h(RematchChangeFacts, { change: changeFacts }),

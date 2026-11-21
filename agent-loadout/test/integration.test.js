@@ -808,8 +808,16 @@ test('shows the native Team tool gate and restores a legacy hero on DSH 0.2.2-rc
     await host.request(endpoint, claim, 422)
     assert.equal((await match('match-growth')).quest.completed, undefined)
     const completed = await complete(target)
+    assert.equal(completed.status, 'completed')
     const journal = async () => (await invoke('growth-journal')).active.find(item => item.id === delivery.id)
-    assert.equal((await journal()).teamTask.status, 'completed')
+    let recorded
+    for (let attempt = 0; attempt < 40; attempt++) {
+      recorded = await journal()
+      if (recorded.teamTask.revision === completed.revision) break
+      await delay(50)
+    }
+    assert.equal(recorded.teamTask.revision, completed.revision)
+    assert.equal(recorded.teamTask.status, 'completed')
     assert.equal((await equipmentIn(host, sessionId)).settlement.ready.id, delivery.id)
     const reopened = await change(completed, 'reopen')
     await host.request(endpoint, claim, 422)
@@ -1815,7 +1823,8 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     assert.equal(rematchOptions.material, material)
     assert.equal(rematchOptions.task, checkedAgain.task)
     assert.ok(rematchOptions.equipped.some(item => item.id === 'review'))
-    assert.equal(rematchOptions.personalSuggestedChange, undefined)
+    assert.deepEqual(rematchOptions.personalSuggestedChange, { removeId: 'review' })
+    assert.deepEqual(rematchOptions.baseline.choices, ['Confirm handoff'])
     await invoke('rematch-comparison-options', { ...baseline, arm: 'baseline' }, 422)
     await invoke('lesson-task-options', baseline, 422)
     const ownReplay = { ...baseline, change: { removeId: 'review' } }
@@ -1891,6 +1900,32 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
       const arm = armOf(view, 'rematch')
       assert.deepEqual(arm.entries[0].choices, [label])
       assert.deepEqual(arm.deliverables.map(item => item.name), label === 'Confirm handoff' ? [file] : [])
+
+      const child = { kind: 'rematch', comparisonId: trial.id, arm: 'rematch' }
+      const followUp = await invoke('rematch-comparison-options', child)
+      if (label === 'Revise draft') {
+        assert.equal(followUp.personalSuggestedChange, undefined)
+        assert.equal(followUp.baseline.choices, undefined)
+        continue
+      }
+      assert.deepEqual(followUp.personalSuggestedChange, { removeId: 'review' })
+      assert.deepEqual(followUp.baseline.choices, [label])
+      const directChange = { ...child, change: followUp.personalSuggestedChange }
+      const directPreview = await invoke('rematch-comparison-preview', directChange)
+      assert.equal(directPreview.task, trial.task)
+      assert.deepEqual(directPreview.change, { removed: { id: 'review', name: '交付前复核' } })
+      const directReplay = await invoke('rematch-comparison-open', { ...directChange, token: directPreview.token, launchId: '1'.repeat(32) })
+      assert.notEqual(directReplay.sessionId, trial.sessionId)
+      assert.equal(directReplay.task, trial.task)
+      assert.ok(!(await history(directReplay.sessionId)).events.some(item => item.type === 'user/message'))
+      await send(directReplay)
+      const directResult = await history(directReplay.sessionId)
+      assert.equal(presentSource(directResult), originalPresentSource)
+      assert.deepEqual(directResult.events.filter(item => item.type === 'tool/call').map(item => item.data.name), ['present'])
+      const book = await invoke('rematch-comparison', { comparisonId: directReplay.id })
+      assert.equal(book.previous.sessionId, trial.sessionId)
+      assert.deepEqual(armOf(book, 'baseline').entries[0].choices, [label])
+      assert.equal(armOf(book, 'rematch').deliverables[0].name, file)
     }
     assert.deepEqual(await history(directPersonal.sessionId), directPlayed)
 
