@@ -1704,6 +1704,25 @@ window.__ModuleLoader__.load({
           h('p', { className: 'moba-lighthouse-note', style: { whiteSpace: 'pre-wrap' } }, arm.summary)))
     }
 
+    function HeroDeliveryReplayResult({ outcome: { sessionId, originalFile }, onVisit }) {
+      const heading = useId()
+      const { hostAvailable, opening, failed, openFile } = usePresentedFileOpener(
+        Boolean(originalFile && presentedFileHasCoordinates(originalFile)))
+      return h('section', { className: 'moba-handoff-outcome moba-hero-replay-result', 'aria-labelledby': heading },
+        h('h3', { id: heading, tabIndex: -1, 'data-hero-delivery-recap': true }, t('极简模式换装战报')),
+        h('p', { className: 'moba-lighthouse-note' }, t('同一段任务。第二局给极简模式加了交付物预览。')),
+        h('dl', { className: 'moba-handoff-report-facts' },
+          h('dt', null, t('加装前')), h('dd', null, t('已交文字摘要，缺少补给卡原件')),
+          h('dt', null, t('加装后')), h('dd', null, t('已附原件，符合接班需求'))),
+        h('div', { className: 'moba-detail-actions' },
+          hostAvailable && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(opening),
+            onClick: () => openFile(sessionId, originalFile, 'original') },
+          t(opening ? '正在打开文件…' : '打开补给卡原件')),
+          (!hostAvailable || failed) && h('button', { type: 'button', className: 'moba-roster-open',
+            onClick: () => onVisit(sessionId) }, t('去会话看补给卡原件'))),
+        failed && h('p', { className: 'moba-match-action-error', role: 'alert' }, t('暂时无法打开这份交付文件。可在原会话查看。')))
+    }
+
     function canReportHeroHandoff(arm) {
       return arm.status === 'complete' && arm.materialState === 'verified' &&
         arm.materialRead === true && Boolean(arm.summary) && typeof arm.originalAttached === 'boolean'
@@ -1899,6 +1918,7 @@ window.__ModuleLoader__.load({
       const setup = !activeId
       const value = board?.id === activeId ? board : undefined
       const minimalReplay = value?.minimalReplay
+      const deliveryReplay = value?.deliveryReplay
 
       useEffect(() => {
         const abort = new AbortController()
@@ -2038,7 +2058,8 @@ window.__ModuleLoader__.load({
 
       const finished = value?.arms.length > 0 && value.arms.every(arm => arm.status === 'complete')
       const verifiedHeroes = value?.arms.filter(canReportHeroHandoff) ?? []
-      const focusSelector = focusReplay && minimalReplay ? '[data-comparison-arm="minimal-present"]' : '[data-hero-trial-results]'
+      const focusSelector = focusReplay && deliveryReplay ? '[data-hero-delivery-recap]'
+        : focusReplay && minimalReplay ? '[data-comparison-arm="minimal-present"]' : '[data-hero-trial-results]'
       return h(Fragment, null, h(InstallDialog, { title: t(heroTrialTitle), busy, onCancel: onClose,
         className: setup ? 'moba-starter-dialog' : 'moba-lighthouse-comparison',
         initialFocus: setup ? 'input[type="radio"]' : value ? focusSelector : 'h2',
@@ -2062,8 +2083,10 @@ window.__ModuleLoader__.load({
             value ? h(Fragment, null,
               h('p', { ref: heading, tabIndex: -1, 'data-hero-trial-results': true }, h('strong', null, t('接班人需要什么？')), ' ',
                 t(heroTrialNeeds.find(item => item.id === value.need)?.name ?? value.need)),
-              !finished && h('p', { className: 'moba-lighthouse-note' }, t('每位英雄有自己的会话。请分别手动发送同一段任务，再回来看结果。')),
-              finished && h('p', { className: 'moba-lighthouse-note' }, t('交付是否符合需求依据工具、回复和附件记录。摘要内容可打开原会话核对。')),
+              deliveryReplay ? h(HeroDeliveryReplayResult, { outcome: deliveryReplay, onVisit }) :
+                h('p', { className: 'moba-lighthouse-note' }, t(finished
+                  ? '交付是否符合需求依据工具、回复和附件记录。摘要内容可打开原会话核对。'
+                  : '每位英雄有自己的会话。请分别手动发送同一段任务，再回来看结果。')),
               value.canShareHeroChallenge && h('div', { className: 'moba-comparison-previous' },
                 h('button', { type: 'button', ref: shareButton, className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
                   onClick: () => setSharing(true) }, t('分享英雄试玩')),
@@ -2111,6 +2134,7 @@ window.__ModuleLoader__.load({
       const replayTrigger = useRef(null)
       const availablePersonalTask = member.lessonTaskSource
       const availableReplay = member.arm === 'minimal' && member.canReplayMinimalDelivery === true
+      const verifiedDeliveryReplay = member.verifiedDeliveryReplay === true
       const hero = member.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === member.arm)
       useEffect(() => {
         const status = consumeDraft(sessionId)
@@ -2137,13 +2161,14 @@ window.__ModuleLoader__.load({
           h('div', null, h('strong', null, t(heroTrialTitle)), hero && h('span', null, t(hero.name))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
-              onClick: () => setOpen(true) }, t(heroTrialView)),
+              onClick: () => setOpen(true) }, t(verifiedDeliveryReplay ? '查看换装战报' : heroTrialView)),
             availablePersonalTask && h('button', { ref: personalTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setPersonalSource(availablePersonalTask) },
               t(stockTrialTaskLabels[member.arm] ?? lessonTaskLabel)),
             availableReplay && h('button', { ref: replayTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setReplayOpen(true) }, t(minimalDeliveryReplayLabel))),
-          availableReplay ? h('p', { role: 'status' }, t('这局交接了文字，接班人还需要可打开的原件。'))
+          verifiedDeliveryReplay ? h('p', { role: 'status' }, t('加装后已附上补给卡原件，符合接班需求。'))
+            : availableReplay ? h('p', { role: 'status' }, t('这局交接了文字，接班人还需要可打开的原件。'))
             : !hasTurn && !availablePersonalTask && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
         replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: member.id, onBack: closeReplay,
           backLabel: '返回试玩会话', onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
@@ -8332,12 +8357,11 @@ window.__ModuleLoader__.load({
       return Number.isSafeInteger(seq) && seq >= 0 && Number.isSafeInteger(index) && index >= 0
     }
 
-    function LessonTaskFiles({ files, sessionId, complete, materialDelivered }) {
+    function usePresentedFileOpener(addressable) {
       const [hostAvailable, setHostAvailable] = useState(false)
       const [opening, setOpening] = useState('')
       const [failed, setFailed] = useState(false)
       const pending = useRef(null)
-      const addressable = files.some(presentedFileHasCoordinates)
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => {
         if (!addressable) return
@@ -8349,7 +8373,7 @@ window.__ModuleLoader__.load({
         return () => abort.abort()
       }, [addressable])
 
-      async function openFile(file, key) {
+      async function openFile(sessionId, file, key) {
         if (pending.current || !hostAvailable || !presentedFileHasCoordinates(file)) return
         const abort = pending.current = new AbortController()
         setOpening(key)
@@ -8365,7 +8389,11 @@ window.__ModuleLoader__.load({
           if (!abort.signal.aborted) setOpening('')
         }
       }
+      return { hostAvailable: addressable && hostAvailable, opening, failed, openFile }
+    }
 
+    function LessonTaskFiles({ files, sessionId, complete, materialDelivered }) {
+      const { hostAvailable, opening, failed, openFile } = usePresentedFileOpener(files.some(presentedFileHasCoordinates))
       if (!files.length && !complete) return null
       return h('section', { className: 'moba-proven-files moba-lesson-result-files' },
         h('h4', null, t('已交付的文件') + ' · ' + files.length),
@@ -8377,7 +8405,7 @@ window.__ModuleLoader__.load({
               file.turn && h('small', null, t('第 ') + file.turn + t(' 回合'))),
             hostAvailable && presentedFileHasCoordinates(file) && h('button', { type: 'button', className: 'moba-text',
               'aria-label': t('打开交付文件') + ' · ' + file.name, disabled: opening.length > 0,
-              onClick: () => openFile(file, key) }, t(opening === key ? '正在打开文件…' : '打开交付文件')))
+              onClick: () => openFile(sessionId, file, key) }, t(opening === key ? '正在打开文件…' : '打开交付文件')))
         })),
         failed && h('p', { className: 'moba-match-action-error', role: 'alert' }, t('暂时无法打开这份交付文件。可在原会话查看。')))
     }
@@ -10810,6 +10838,9 @@ window.__ModuleLoader__.load({
       .moba-handoff-outcome .moba-lighthouse-arms { margin: 6px 0 0; }
       .moba-handoff-outcome .moba-lighthouse-note { margin: 0; }
       .moba-handoff-outcome .moba-lighthouse-arm footer { justify-content: start; align-self: end; }
+      .moba-hero-replay-result { display: grid; gap: 6px; min-width: 0; padding: 9px;
+        border: 1px solid #59786b; background: #1b2d2b; }
+      .moba-hero-replay-result dd:last-child { color: #afddc0; }
       .moba-handoff-report-grid { grid-template-columns: repeat(auto-fit, minmax(min(206px, 100%), 1fr)); }
       .moba-handoff-report-side header { align-items: center; }
       .moba-handoff-report-side header span:not(.moba-starter-hero) { display: block; color: var(--muted); font-weight: 500; }

@@ -1698,6 +1698,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
 
     assert.equal(result.canReplayMinimalDelivery, true)
     assert.equal(result.minimalReplay, undefined)
+    assert.equal(result.deliveryReplay, undefined)
     assert.equal(await minimalShortcut(minimal.sessionId), true)
     const replayPreview = await previewReplay(trial.id)
     assert.match(replayPreview.token, /^[a-f0-9]{64}$/u)
@@ -1752,6 +1753,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(replayWaiting.minimalReplay.status, 'waiting')
     assert.equal(replayWaiting.minimalReplay.summary, undefined)
     assert.equal(replayWaiting.minimalReplay.lessonTaskSource, undefined)
+    assert.equal(replayWaiting.deliveryReplay, undefined)
     assert.equal(await minimalShortcut(minimal.sessionId), undefined)
     await shareHandoff(trial.id, 'minimal-present', 422)
     await invoke('lesson-task-options', transfer, 422)
@@ -1779,6 +1781,9 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(replayed.minimalReplay.deliverables.map(file => file.name), [material])
     assert.deepEqual(replayed.minimalReplay.entries.map(item => [item.name, item.state]), [['bash', 'completed'], ['present', 'completed']])
     assert.deepEqual(replayed.minimalReplay.lessonTaskSource, transfer)
+    assert.deepEqual(replayed.deliveryReplay, { sessionId: replay.sessionId,
+      originalFile: { name: material, seq: delivery.seq, index: 0 } })
+    assert.equal((await equipmentIn(host, replay.sessionId)).heroTrial.verifiedDeliveryReplay, true)
     const equippedOutcome = { arm: 'minimal-present', originalAttached: true, meetsNeed: true }
     assert.deepEqual(await shareHandoff(trial.id, 'minimal-present'), { need: 'original', local: equippedOutcome,
       code: reportCode({ ...standardFields, arm: 'minimal-present' }) })
@@ -1827,10 +1832,18 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     await writeFile(ownPath, ownContent)
     const replayCard = join(nativeReplay.workspacePath, material)
     await appendFile(replayCard, '\nArchived sample changed after the native result.\n')
-    assert.equal((await read(trial.id)).minimalReplay.lessonTaskSource, undefined)
+    const changedReplay = await read(trial.id)
+    assert.equal(changedReplay.minimalReplay.lessonTaskSource, undefined)
+    assert.equal(changedReplay.deliveryReplay, undefined)
+    assert.equal((await equipmentIn(host, replay.sessionId)).heroTrial.verifiedDeliveryReplay, undefined)
     await invoke('lesson-task-options', transfer, 422)
     await invoke('lesson-task-open', ownFields, 422)
     await writeFile(replayCard, materialBytes)
+    await appendFile(originalCard, '\nChanged after comparing both runs.\n')
+    assert.equal((await read(trial.id)).deliveryReplay, undefined)
+    assert.equal((await equipmentIn(host, replay.sessionId)).heroTrial.verifiedDeliveryReplay, undefined)
+    await writeFile(originalCard, materialBytes)
+    assert.deepEqual((await read(trial.id)).deliveryReplay, replayed.deliveryReplay)
     assert.deepEqual(await nativeSessions(), beforePersonal)
 
     const [own, sameOwn] = await Promise.all([invoke('lesson-task-open', ownFields), invoke('lesson-task-open', ownFields)])

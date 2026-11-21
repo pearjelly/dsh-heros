@@ -520,7 +520,11 @@ export function observedHeroHandoff(events, turn, cwd, material, contents, bindi
     event.data.message.source.kind === 'model').flatMap(({ data }) =>
     data.message.content.filter(part => part.type === 'text' && part.text.trim()).map(part => part.text.trim()))
     .at(-1)?.slice(0, 1800)
-  const result = { materialRead: Boolean(read), originalAttached: Boolean(original), ...(summary && { summary }) }
+  const originalFile = original && {
+    name: basename(material), seq: original.seq,
+    index: original.data.files.findIndex(file => typeof file.path === 'string' && resolve(cwd, file.path) === resolve(cwd, material)),
+  }
+  const result = { materialRead: Boolean(read), originalAttached: Boolean(original), originalFile, ...(summary && { summary }) }
   if (!bindingArm || !read) return result
   const readCall = calls.get(read.data.message.toolCallId)
   const presentCall = original && calls.get(original.data.callId)

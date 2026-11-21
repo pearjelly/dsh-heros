@@ -4951,7 +4951,9 @@ export async function apply(ctx) {
         includeBindings ? arm : undefined)
       const meetsNeed = materialState === 'verified' && proof.materialRead && Boolean(proof.summary) &&
         (record.need === 'summary' || proof.originalAttached)
-      return { ...details, ...proof, meetsNeed }
+      const { originalFile, ...handoff } = proof
+      return { ...details, ...handoff, meetsNeed,
+        ...(arm === lighthouseHeroDelivery && meetsNeed && originalFile && { originalFile }) }
     } catch {
       signal?.throwIfAborted()
       return unavailable
@@ -5035,9 +5037,11 @@ export async function apply(ctx) {
       return { ...view, ...(lessonTaskSource && { lessonTaskSource }) }
     }))
     const lessonTaskSource = heroDeliveryLessonSource(record, minimal, replay)
+    const { originalFile, ...replayView } = replay
     return { id, need, task, material: lighthouseHeroMaterial, arms,
       ...([standard, minimal].some(verifiedHeroHandoff) && { canShareHeroChallenge: true }),
-      ...(replay.status !== 'unopened' ? { minimalReplay: { ...replay, ...(lessonTaskSource && { lessonTaskSource }) } }
+      ...(lessonTaskSource && { deliveryReplay: { sessionId: replay.sessionId, originalFile } }),
+      ...(replay.status !== 'unopened' ? { minimalReplay: { ...replayView, ...(lessonTaskSource && { lessonTaskSource }) } }
         : canReplayHeroDelivery(record, minimal) && { canReplayMinimalDelivery: true }) }
   }
 
@@ -6096,9 +6100,14 @@ export async function apply(ctx) {
       const heroTrial = heroTrials.member(sessionId)
       if (heroTrial && (await heroTrials.readArm(heroTrial.id, heroTrial.arm))?.opened) {
         value.heroTrial = heroTrial
-        if (lighthouseHeroArms.includes(heroTrial.arm) && !value.running) {
+        if (!value.running) {
           const record = heroTrials.read(heroTrial.id)
-          if (heroTrial.arm === 'standard' || record.need === 'summary') {
+          if (heroTrial.arm === lighthouseHeroDelivery) {
+            const [original, replay] = await Promise.all([
+              readHeroTrialArm(record, 'minimal', request.signal), readHeroTrialArm(record, lighthouseHeroDelivery, request.signal),
+            ])
+            if (heroDeliveryLessonSource(record, original, replay)) value.heroTrial = { ...heroTrial, verifiedDeliveryReplay: true }
+          } else if (heroTrial.arm === 'standard' || record.need === 'summary') {
             const observed = await readHeroTrialArm(record, heroTrial.arm, request.signal, true)
             const lessonTaskSource = await stockTrialTaskReference(record, observed, request.signal)
             if (lessonTaskSource) value.heroTrial = { ...heroTrial, lessonTaskSource }
