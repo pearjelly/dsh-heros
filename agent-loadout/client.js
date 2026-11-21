@@ -1655,7 +1655,7 @@ window.__ModuleLoader__.load({
 
     const heroTrialTitle = '英雄同题试玩'
     const heroTrialView = '查看试玩对照'
-    const standardTrialTaskLabel = '用标准模式做自己的任务'
+    const stockTrialTaskLabels = { standard: '用标准模式做自己的任务', minimal: '用极简模式做自己的任务' }
     const minimalDeliveryReplayLabel = '给极简模式装上交付物预览'
     const heroTrialNeeds = [
       { id: 'original', icon: 'report', name: '可打开的原件', note: '接班人要在会话里打开原件核对。',
@@ -2023,11 +2023,11 @@ window.__ModuleLoader__.load({
         const reportable = canReportHeroHandoff(arm)
         return h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
           onStart: equipped ? undefined : open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
-          onLessonTask: equipped || arm.id === 'standard' ? (item, opener) => {
+          onLessonTask: (item, opener) => {
             personalButton.current = opener
             setPersonalSource(item.lessonTaskSource)
-          } : undefined,
-          lessonTaskAction: arm.id === 'standard' ? standardTrialTaskLabel : lessonTaskLabel,
+          },
+          lessonTaskAction: stockTrialTaskLabels[arm.id] ?? lessonTaskLabel,
           onNotice: status => setNotice(t(comparisonDraftNotices[status])), result: h(Fragment, null, h(HeroTrialResult, { arm }), extraResult,
             reportable && h('div', { className: 'moba-comparison-previous' },
               h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
@@ -2109,7 +2109,7 @@ window.__ModuleLoader__.load({
       const trigger = useRef(null)
       const personalTrigger = useRef(null)
       const replayTrigger = useRef(null)
-      const availablePersonalTask = member.arm === 'standard' && member.lessonTaskSource
+      const availablePersonalTask = member.lessonTaskSource
       const availableReplay = member.arm === 'minimal' && member.canReplayMinimalDelivery === true
       const hero = member.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === member.arm)
       useEffect(() => {
@@ -2140,7 +2140,7 @@ window.__ModuleLoader__.load({
               onClick: () => setOpen(true) }, t(heroTrialView)),
             availablePersonalTask && h('button', { ref: personalTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setPersonalSource(availablePersonalTask) },
-              t(standardTrialTaskLabel)),
+              t(stockTrialTaskLabels[member.arm] ?? lessonTaskLabel)),
             availableReplay && h('button', { ref: replayTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setReplayOpen(true) }, t(minimalDeliveryReplayLabel))),
           availableReplay ? h('p', { role: 'status' }, t('这局交接了文字，接班人还需要可打开的原件。'))
@@ -5207,10 +5207,9 @@ window.__ModuleLoader__.load({
         return () => abort.abort()
       }, [request, kind, comparisonId, arm, attempt, language, reference, membership])
 
-      const standardTrial = kind === 'hero-trial' && arm === 'standard'
-      const taskLabel = standardTrial ? standardTrialTaskLabel : lessonTaskLabel
-      return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : taskLabel), busy: opening,
-        className: standardTrial ? 'moba-lighthouse-comparison moba-standard-trial-task' : 'moba-lighthouse-comparison',
+      const stockTaskLabel = kind === 'hero-trial' && stockTrialTaskLabels[arm]
+      return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
+        className: stockTaskLabel ? 'moba-lighthouse-comparison moba-stock-trial-task' : 'moba-lighthouse-comparison',
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t('用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
         options ? h(LoadoutTaskForm, { lessonSource: options.source, workspaces: allowed, request,
@@ -5266,10 +5265,10 @@ window.__ModuleLoader__.load({
       const origin = preview?.source ?? lessonSource
       const originArm = origin && comparisonArmConfig(origin.kind, origin.arm, origin.publicEvidenceReplay === true)
       const heroTrialOrigin = origin?.heroDeliveryTrial === true
-      const standardTrialOrigin = origin?.kind === 'hero-trial' && origin.arm === 'standard'
-      const sourceLabel = standardTrialOrigin ? (origin.heroName ?? t('标准模式')) : heroTrialOrigin ? t(minimalDeliveryReplayArm.name)
+      const stockTrialHero = origin?.kind === 'hero-trial' && heroTrialHeroes.find(item => item.id === origin.arm)
+      const sourceLabel = stockTrialHero ? (origin.heroName ?? t(stockTrialHero.name)) : heroTrialOrigin ? t(minimalDeliveryReplayArm.name)
         : origin && [comparisonArmName(originArm, origin), origin.heroName].filter(Boolean).join(' · ')
-      const gearSource = standardTrialOrigin
+      const gearSource = stockTrialHero
         ? origin.gearSources?.map(item => [item.tool, item.name, item.version].filter(Boolean).join(' · ')).join(' / ')
         : heroTrialOrigin && origin.gearSource && [origin.gearSource.name, origin.gearSource.version].filter(Boolean).join(' · ')
       const actionPrefix = lessonSource ? 'lesson-task' : 'plan-task'
@@ -5402,6 +5401,7 @@ window.__ModuleLoader__.load({
       return !preview ? h('form', { className: 'moba-plan-form moba-plan-task', onSubmit: submit },
         h('div', { className: 'moba-plan-fields' },
           origin ? h(Fragment, null, h(InstallFacts, { facts: [[t('练习出装'), sourceLabel], [t('装备来源'), gearSource]] }),
+            stockTrialHero?.id === 'minimal' && h('p', { className: 'moba-lighthouse-note' }, t('这套出装适合在对话里交接文字。')),
             h(RematchChangeFacts, { change: origin.change }))
             : choices.length > 0 && (choices.length > 1 || !version) ? h('fieldset', {
               className: 'moba-plan-list moba-task-plan-choices', disabled: Boolean(working),
@@ -8475,6 +8475,7 @@ window.__ModuleLoader__.load({
                 t(result.status === 'unavailable' ? '暂不可核对' : comparisonArmStates[result.status] ?? result.status),
                 result.turn && t('第 ') + result.turn + t(' 回合'),
               ].filter(Boolean).join(' · ')),
+              result.textHandoff && h('p', { className: 'moba-match-action-note' }, t('已记录终端工具完成和助手文字回复。')),
               h(ObservedComparisonCalls, { entries: result.entries }),
               h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
                 complete: result.status === 'complete', materialDelivered: result.materialDelivered }),
@@ -10513,11 +10514,11 @@ window.__ModuleLoader__.load({
       .moba-plan-task dt { color: var(--muted); }
       .moba-plan-task dd { margin: 0; overflow-wrap: anywhere; }
       .moba-plan-task .moba-lighthouse-note { margin: 0; }
-      .moba-standard-trial-task .moba-plan-task,
-      .moba-standard-trial-task .moba-plan-fields { grid-template-columns: minmax(0, 1fr); }
-      .moba-standard-trial-task .moba-plan-fields :is(input, select, textarea) { box-sizing: border-box; }
-      .moba-standard-trial-task .moba-gallery-footer { flex-wrap: wrap; }
-      .moba-standard-trial-task .moba-gallery-footer button { white-space: normal; }
+      .moba-stock-trial-task .moba-plan-task,
+      .moba-stock-trial-task .moba-plan-fields { grid-template-columns: minmax(0, 1fr); }
+      .moba-stock-trial-task .moba-plan-fields :is(input, select, textarea) { box-sizing: border-box; }
+      .moba-stock-trial-task .moba-gallery-footer { flex-wrap: wrap; }
+      .moba-stock-trial-task .moba-gallery-footer button { white-space: normal; }
       .moba-plan-fields .moba-share-code { font: 12px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
       .moba-share-fields > h3, .moba-share-review > h3, .moba-share-section h3 { margin: 0; overflow-wrap: anywhere; }
       .moba-share-fields > h3, .moba-share-review > h3 { color: var(--gold); font-size: 17px; }

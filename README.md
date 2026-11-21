@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.121.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.122.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -49,6 +49,10 @@ Choose **Compare a friend's report** on a verified local run with the same publi
 When Standard has read the bundled card and delivered the verified original, choose **Use Standard on my task** in that DSH session or on the Standard result. Select a workspace or **Add a materials folder**, choose your own file, and write a new brief. In **Review file and loadout**, check the stock Standard preset and its tool sources. Choose **Confirm and open session**, then manually send the new task in DSH.
 
 After verified delivery, [try a review step on the same task](#try-a-review-step-before-delivery).
+
+### Use Minimal on your own task
+
+When the next shift needed a **Verifiable text summary** and stock Minimal read the supply card and completed a verified text handoff, choose **Use Minimal on my task** in the original DSH session or on the Minimal result. Select a workspace or add your materials folder, pick a file, and write a new brief. Review the Minimal preset and Bash tool source, open a new DSH session, and manually send the task. Read the summary in the new conversation.
 
 ### Give Minimal one more tool
 

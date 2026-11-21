@@ -26,7 +26,7 @@ import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } 
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
-import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, panelActivityRecord, toolSourceRecord } from './match-report.js'
+import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedTextHandoff, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
 import { planReviewActivities } from './plan-reviews.js'
@@ -61,8 +61,12 @@ const isPublicEvidenceReplaySource = ({ kind, arm, publicEvidenceReplay }) =>
   kind === 'rematch' && arm === 'rematch' && publicEvidenceReplay === true
 const isHeroDeliveryTrialSource = ({ kind, arm }) => kind === 'hero-trial' && arm === lighthouseHeroDelivery
 const isStandardTrialSource = ({ kind, arm }) => kind === 'hero-trial' && arm === 'standard'
-const isHeroTrialTaskSource = source => isHeroDeliveryTrialSource(source) || isStandardTrialSource(source)
+const isMinimalTrialSource = ({ kind, arm }) => kind === 'hero-trial' && arm === 'minimal'
+const isStockTrialSource = source => isStandardTrialSource(source) || isMinimalTrialSource(source)
+const isHeroTrialTaskSource = source => isHeroDeliveryTrialSource(source) || isStockTrialSource(source)
 const standardTrialTools = { read: '@deepseek-ai/dsh-tool-fs', present: '@deepseek-ai/dsh-tool-present' }
+const stockTrialTools = { standard: standardTrialTools, minimal: { bash: '@deepseek-ai/dsh-tool-bash-persistent' } }
+const stockTransferChanged = '原装英雄的工具或来源已变化，请重新核对。'
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
 const equipmentById = new Map(equipment.map(item => [item.id, item]))
@@ -1294,8 +1298,9 @@ export async function apply(ctx) {
       if (verify) verifyLive({ presetId, sessionId })
       const { planName, material, task, source } = checked.view
       if (source?.heroDeliveryTrial && !heroTrialLive(lighthouseHeroDelivery, presetId, agent)) throw new Error(heroDeliveryChanged)
-      if (checked.standardBindings && !standardTrialLive(presetId, agent, checked.standardBindings)) throw new Error(heroDeliveryChanged)
-      const target = source && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity }
+      if (checked.stockBindings && !stockTrialLive(source.arm, presetId, agent, checked.stockBindings)) throw new Error(stockTransferChanged)
+      const target = source && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
+        ...(isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
         ...(source && { source, target }) })
       updates.notify(sessionId)
@@ -1324,14 +1329,14 @@ export async function apply(ctx) {
       heroTrialToolFit(arm, new Set(ctx.tools.schemas(scope).map(tool => tool.name)))
   }
 
-  function standardTrialLive(presetId, agent, bindings) {
-    if (!heroTrialLive('standard', presetId, agent)) return false
+  function stockTrialLive(arm, presetId, agent, bindings) {
+    if (!heroTrialLive(arm, presetId, agent)) return false
     const scope = toolRuntime.scopeOf(agent.ctx)
     const origins = ctx.get('agentLoadoutToolOrigins')
     return bindings.every(({ tool, id, sourceId }) => {
       const definition = ctx.tools.get(tool, scope)
       const origin = definition && origins?.get(definition, scope)
-      if (origin?.moduleName !== standardTrialTools[tool]) return false
+      if (origin?.moduleName !== stockTrialTools[arm][tool]) return false
       const actual = dispatchedToolDetails(ctx, scope, definition, agent.ctx, records.get(presetId)?.definition.plugins)
       return actual.id === id && actual.sourceId === sourceId
     })
@@ -3869,10 +3874,10 @@ export async function apply(ctx) {
 
   async function verifiedLessonTaskSource(selection, signal) {
     if (isHeroDeliveryTrialSource(selection)) return verifiedHeroDeliveryLesson(selection.comparisonId, signal)
-    if (isStandardTrialSource(selection)) {
+    if (isStockTrialSource(selection)) {
       const record = heroTrials.read(selection.comparisonId)
-      const observed = record && await readHeroTrialArm(record, 'standard', signal, true)
-      const checked = record && await verifiedStandardTrialLesson(record, observed, signal)
+      const observed = record && await readHeroTrialArm(record, selection.arm, signal, true)
+      const checked = record && await verifiedStockTrialLesson(record, observed, signal)
       if (!checked) throw new Error('请从已经核验的灯塔练习开始。')
       return checked
     }
@@ -3965,17 +3970,17 @@ export async function apply(ctx) {
 
   async function checkLessonTask(input, signal) {
     const { workspaceId, material, task, hash, english } = input
-    const { draft, candidate, ecosystem, proof, view: source, standardBindings } = await verifiedLessonTaskSource(input.source, signal)
+    const { draft, candidate, ecosystem, proof, view: source, stockBindings } = await verifiedLessonTaskSource(input.source, signal)
     const { workspace, digest } = await readPersonalTaskMaterial(workspaceId, material, signal)
     const cwd = workspace.path
-    const lessonName = isStandardTrialSource(source) ? '标准模式'
+    const lessonName = isStockTrialSource(source) ? presetLabels.get(source.arm)[0]
       : source.heroDeliveryTrial ? '极简模式 + 交付物预览'
       : source.publicEvidenceReplay ? '灯塔证据换装对照' : source.lesson === evidenceLesson ? '灯塔证据取舍' : '灯塔换装练习'
     const planName = english ? englishText(lessonName) : lessonName
     const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task, source }
     const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, proof])).digest('hex')
     signal?.throwIfAborted()
-    return { view, cwd, digest, draft, candidate, ecosystem, token, identity: proof.identity, standardBindings }
+    return { view, cwd, digest, draft, candidate, ecosystem, token, identity: proof.identity, stockBindings }
   }
 
   function personalTaskTarget(launch, header) {
@@ -4555,6 +4560,10 @@ export async function apply(ctx) {
       const evidence = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
         verifyMaterialProof: strict || verifyEvidence, verifyMaterialDelivery: true, exactMessages: true,
         linkedChoicesOnly: verifyEvidence, includeWindows: !strict }, receipts)
+      const textBinding = isMinimalTrialSource(launch.source) && target.textBinding
+      if (textBinding?.tool === 'bash' && evidence.status === 'complete' && !evidence.continuationReason &&
+        !evidence.deliverables.length && observedTextHandoff(source.events, evidence.turn, textBinding) &&
+        await personalTaskMaterialState(target, signal) === 'verified') evidence.textHandoff = true
       return { launch, cwd, presetId, evidence, target }
     } finally {
       source[Symbol.dispose]()
@@ -4590,12 +4599,14 @@ export async function apply(ctx) {
     const publicReplay = isPublicEvidenceReplaySource(launch.source)
     const heroDeliveryTrial = isHeroTrialTaskSource(launch.source)
     const delivered = evidenceSource ? evidence.deliverables?.length > 0 : evidence.materialDelivered
-    const canReview = evidence.status === 'complete' && (publicReplay || heroDeliveryTrial
+    const minimalText = isMinimalTrialSource(launch.source)
+    const deliveryVerified = publicReplay || heroDeliveryTrial
       ? verifiedPresentHandoff(evidence) && (!heroDeliveryTrial || evidence.materialDelivered)
-      : (delivered || choices.length > 0) && (!evidenceSource || !evidence.continuationReason))
+      : (delivered || choices.length > 0) && (!evidenceSource || !evidence.continuationReason)
+    const canReview = evidence.status === 'complete' && (minimalText ? evidence.textHandoff === true : deliveryVerified)
     const receiptIds = windows.map(({ endSeq }) => sessionId + ':' + endSeq)
     const canContinue = canReview && (!publicReplay || evidence.materialDelivered)
-    const reference = canContinue && target && (!evidenceSource || choices.length > 0) &&
+    const reference = canContinue && target && !minimalText && (!evidenceSource || choices.length > 0) &&
       { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }
     const [settled, original] = await Promise.all([
       growth.settlementAwards(sessionId, receiptIds),
@@ -4615,7 +4626,7 @@ export async function apply(ctx) {
     if (review !== true || !canReview) return result
     try {
       const [checked, uploaded] = await Promise.all([verifiedLessonTaskSource(launch.source, signal), appearance.index()])
-      if (checked.proof.presetId !== presetId || (isStandardTrialSource(launch.source) &&
+      if (checked.proof.presetId !== presetId || (isStockTrialSource(launch.source) &&
         checked.proof.identity !== target?.identity)) throw new Error('本机配置已变化，无法核对这局的原出装。')
       const { draft, candidate, ecosystem } = checked
       const art = packageArt(uploaded, ecosystem)
@@ -4936,7 +4947,8 @@ export async function apply(ctx) {
       const materialState = result.materialState === 'verified' ? currentMaterialState : (result.materialState ?? currentMaterialState)
       const details = { id: arm, sessionId, workspaceId: saved.workspaceId, ...result, materialState }
       if (result.status !== 'complete' || result.continuationReason) return details
-      const proof = observedHeroHandoff(source.events, result.turn, saved.cwd, material, lighthouseHeroContents, includeBindings)
+      const proof = observedHeroHandoff(source.events, result.turn, saved.cwd, material, lighthouseHeroContents,
+        includeBindings ? arm : undefined)
       const meetsNeed = materialState === 'verified' && proof.materialRead && Boolean(proof.summary) &&
         (record.need === 'summary' || proof.originalAttached)
       return { ...details, ...proof, meetsNeed }
@@ -4978,33 +4990,35 @@ export async function apply(ctx) {
       view: { ...anchor, heroName: presetLabels.get('minimal')?.[0] ?? 'Minimal' } }
   }
 
-  async function verifiedStandardTrialLesson(record, observed, signal) {
-    if (!observed.bindings || !verifiedHeroHandoff(observed) || !observed.originalAttached) return
+  async function verifiedStockTrialLesson(record, observed, signal) {
+    const arm = observed.id
+    if (!observed.bindings || !verifiedHeroHandoff(observed) || (arm === 'standard'
+      ? !observed.originalAttached : record.need !== 'summary' || observed.originalAttached || observed.deliverables.length)) return
     const { ecosystem, sources } = await shareEnvironment()
-    if (sources.hero('standard')?.owner.package !== '@deepseek-ai/dsh-web-app') return
-    const capabilities = summarizeCapabilities(ecosystem, 'standard', {})
+    if (sources.hero(arm)?.owner.package !== '@deepseek-ai/dsh-web-app') return
+    const capabilities = summarizeCapabilities(ecosystem, arm, {})
     const gearSources = observed.bindings.map(({ tool, id, sourceId }) => {
       const current = capabilities.get(id)
-      const module = standardTrialTools[tool]
+      const module = stockTrialTools[arm][tool]
       if (current?.name !== tool || current.sourceId !== sourceId ||
-        !ecosystem.unitsByPreset.get('standard')?.some(unit => unit.active && unit.id === sourceId && unit.modules.includes(module))) return
+        !ecosystem.unitsByPreset.get(arm)?.some(unit => unit.active && unit.id === sourceId && unit.modules.includes(module))) return
       const provider = sources.packageFor(module)
       if (provider?.package === module) return { tool, name: module, version: provider.version }
     })
     if (!gearSources.every(Boolean)) return
-    const { draft, candidate, identity } = await verifiedPlanComparisonArm({ presetId: 'standard', heroId: 'standard' }, ecosystem)
+    const { draft, candidate, identity } = await verifiedPlanComparisonArm({ presetId: arm, heroId: arm }, ecosystem)
     signal?.throwIfAborted()
-    const standardBindings = observed.bindings
-    const reference = { kind: 'hero-trial', comparisonId: record.id, arm: 'standard' }
+    const stockBindings = observed.bindings
+    const reference = { kind: 'hero-trial', comparisonId: record.id, arm }
     const source = { ...reference, sessionId: observed.sessionId }
-    return { reference, draft, candidate, ecosystem, standardBindings,
-      proof: { ...source, presetId: 'standard', identity, standardBindings, gearSources },
-      view: { ...source, heroName: presetLabels.get('standard')?.[0] ?? 'Standard', gearSources } }
+    return { reference, draft, candidate, ecosystem, stockBindings,
+      proof: { ...source, presetId: arm, identity, stockBindings, gearSources },
+      view: { ...source, heroName: presetLabels.get(arm)?.[0] ?? arm, gearSources } }
   }
 
-  async function standardTrialTaskReference(record, observed, signal) {
+  async function stockTrialTaskReference(record, observed, signal) {
     try {
-      return (await verifiedStandardTrialLesson(record, observed, signal))?.reference
+      return (await verifiedStockTrialLesson(record, observed, signal))?.reference
     } catch {
       signal?.throwIfAborted()
     }
@@ -5013,12 +5027,15 @@ export async function apply(ctx) {
   async function readHeroTrial(record, signal) {
     if (!record) return { arms: lighthouseHeroArms.map(id => ({ id, status: 'unopened' })) }
     const { id, need, task } = record
-    const [standard, minimal, replay] = await Promise.all(heroTrials.arms.map(arm => readHeroTrialArm(record, arm, signal, arm === 'standard')))
-    const standardLesson = await standardTrialTaskReference(record, standard, signal)
-    const { bindings, ...standardView } = standard
-    if (standardLesson) standardView.lessonTaskSource = standardLesson
+    const [standard, minimal, replay] = await Promise.all(heroTrials.arms.map(arm => readHeroTrialArm(record, arm, signal,
+      arm === 'standard' || arm === 'minimal' && need === 'summary')))
+    const arms = await Promise.all([standard, minimal].map(async observed => {
+      const lessonTaskSource = await stockTrialTaskReference(record, observed, signal)
+      const { bindings, ...view } = observed
+      return { ...view, ...(lessonTaskSource && { lessonTaskSource }) }
+    }))
     const lessonTaskSource = heroDeliveryLessonSource(record, minimal, replay)
-    return { id, need, task, material: lighthouseHeroMaterial, arms: [standardView, minimal],
+    return { id, need, task, material: lighthouseHeroMaterial, arms,
       ...([standard, minimal].some(verifiedHeroHandoff) && { canShareHeroChallenge: true }),
       ...(replay.status !== 'unopened' ? { minimalReplay: { ...replay, ...(lessonTaskSource && { lessonTaskSource }) } }
         : canReplayHeroDelivery(record, minimal) && { canReplayMinimalDelivery: true }) }
@@ -5186,7 +5203,7 @@ export async function apply(ctx) {
           const agent = ctx.get('agents')?.get(sessionId)
           if (!heroTrialLive(arm, saved.presetId, agent)) throw new Error(heroTrialUnavailable)
         } else if (verify) verifyLive({ presetId: saved.presetId, sessionId })
-        if (stockReviewBindings && !standardTrialLive(saved.presetId, ctx.get('agents')?.get(sessionId), stockReviewBindings)) {
+        if (stockReviewBindings && !stockTrialLive('standard', saved.presetId, ctx.get('agents')?.get(sessionId), stockReviewBindings)) {
           throw new Error('原局的读取或交付工具来源已变化，请重新核对。')
         }
       }
@@ -6079,15 +6096,13 @@ export async function apply(ctx) {
       const heroTrial = heroTrials.member(sessionId)
       if (heroTrial && (await heroTrials.readArm(heroTrial.id, heroTrial.arm))?.opened) {
         value.heroTrial = heroTrial
-        if (heroTrial.arm === 'standard' && !value.running) {
+        if (lighthouseHeroArms.includes(heroTrial.arm) && !value.running) {
           const record = heroTrials.read(heroTrial.id)
-          const observed = await readHeroTrialArm(record, 'standard', request.signal, true)
-          const lessonTaskSource = await standardTrialTaskReference(record, observed, request.signal)
-          if (lessonTaskSource) value.heroTrial = { ...heroTrial, lessonTaskSource }
-        }
-        if (heroTrial.arm === 'minimal' && !value.running) {
-          const record = heroTrials.read(heroTrial.id)
-          if (record.need === 'original' && !(await heroTrials.readArm(heroTrial.id, lighthouseHeroDelivery))?.opened) {
+          if (heroTrial.arm === 'standard' || record.need === 'summary') {
+            const observed = await readHeroTrialArm(record, heroTrial.arm, request.signal, true)
+            const lessonTaskSource = await stockTrialTaskReference(record, observed, request.signal)
+            if (lessonTaskSource) value.heroTrial = { ...heroTrial, lessonTaskSource }
+          } else if (!(await heroTrials.readArm(heroTrial.id, lighthouseHeroDelivery))?.opened) {
             const observed = await readHeroTrialArm(record, 'minimal', request.signal)
             if (canReplayHeroDelivery(record, observed)) value.heroTrial = { ...heroTrial, canReplayMinimalDelivery: true }
           }

@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.121.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.122.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -49,6 +49,10 @@ dsh web
 标准模式读取内置补给卡并实际交付原件，结果通过核验后，可在 DSH 原会话或试玩对照的标准模式结果点 **用标准模式做自己的任务**。选择工作区，也可点 **添加材料文件夹**。选好个人文件，填写新任务说明，点 **核对材料和出装** 查看原装标准模式和工具来源。点 **确认并打开会话**，在新的 DSH 会话手动发送任务。
 
 交付通过核验后，可以[用同一任务试试交付前复核](#试试交付前先复核)。
+
+### 用极简模式做自己的任务
+
+接班人只需 **可核对的文字摘要**，且原装极简模式读取补给卡、完成文字交接并通过核验后，可在 DSH 原会话或试玩对照的极简模式结果点 **用极简模式做自己的任务**。选择工作区或添加材料文件夹，选文件并写下新任务说明。核对极简模式和终端 Bash 工具的来源，在新的 DSH 会话手动发送，再到这局对话查看摘要。
 
 ### 给极简模式加一件装备
 

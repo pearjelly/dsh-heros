@@ -478,7 +478,28 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     ...(followUps.continuationReason && { continuationReason: followUps.continuationReason }), ...(includeWindows && { windows }) }
 }
 
-export function observedHeroHandoff(events, turn, cwd, material, contents, includeBindings = false) {
+function recordedHandoffTool(events, call) {
+  const source = events.findLast(event => event.type === toolSourceRecord && event.ignorable === true &&
+    event.data.callSeq === call.seq && event.data.blocked !== true)?.data
+  if (source?.id && validSourceId(source.sourceId)) return { tool: call.data.name, id: source.id, sourceId: source.sourceId }
+}
+
+export function observedTextHandoff(events, turn, binding) {
+  if (!binding) return false
+  const body = events.filter(event => event.data?.turn === turn)
+  const reads = new Set(body.flatMap(event => {
+    if (event.type !== 'tool/call' || event.data.name !== binding.tool) return []
+    const recorded = recordedHandoffTool(events, event)
+    return recorded?.id === binding.id && recorded.sourceId === binding.sourceId ? [event.data.callId] : []
+  }))
+  const result = body.find(event => event.type === 'tool/result' && event.surfaceOp === 'append' &&
+    !event.data.message.isError && reads.has(event.data.message.toolCallId))
+  return Boolean(result && body.some(event => event.type === 'assistant/message' && event.surfaceOp === 'append' &&
+    event.seq > result.seq && event.data.message.source.kind === 'model' &&
+    event.data.message.content.some(part => part.type === 'text' && part.text.trim())))
+}
+
+export function observedHeroHandoff(events, turn, cwd, material, contents, bindingArm) {
   const body = events.filter(event => event.data?.turn === turn)
   const calls = new Map(body.filter(event => event.type === 'tool/call').map(event => [event.data.callId, event]))
   const results = body.filter(event => event.type === 'tool/result' && event.surfaceOp === 'append' && !event.data.message.isError)
@@ -500,16 +521,14 @@ export function observedHeroHandoff(events, turn, cwd, material, contents, inclu
     data.message.content.filter(part => part.type === 'text' && part.text.trim()).map(part => part.text.trim()))
     .at(-1)?.slice(0, 1800)
   const result = { materialRead: Boolean(read), originalAttached: Boolean(original), ...(summary && { summary }) }
-  if (!includeBindings || !read || !original) return result
+  if (!bindingArm || !read) return result
   const readCall = calls.get(read.data.message.toolCallId)
-  const presentCall = calls.get(original.data.callId)
-  if (readCall?.data.name !== 'read' || !presentCall) return result
+  const presentCall = original && calls.get(original.data.callId)
+  const stockCalls = bindingArm === 'standard' && readCall?.data.name === 'read' && presentCall ? [readCall, presentCall]
+    : bindingArm === 'minimal' && readCall?.data.name === 'bash' && !original ? [readCall] : undefined
+  if (!stockCalls) return result
   // Tool attribution is written as a separate record without a turn field.
-  const bindings = [readCall, presentCall].map(call => {
-    const source = events.findLast(event => event.type === toolSourceRecord && event.ignorable === true &&
-      event.data.callSeq === call.seq && event.data.blocked !== true)?.data
-    return source?.id && validSourceId(source.sourceId) && { tool: call.data.name, id: source.id, sourceId: source.sourceId }
-  })
+  const bindings = stockCalls.map(call => recordedHandoffTool(events, call))
   return bindings.every(Boolean) ? { ...result, bindings } : result
 }
 
