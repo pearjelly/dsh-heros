@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { englishStrings, englishText, localizeDisplay } from './localization.js'
@@ -2400,18 +2400,20 @@ export async function apply(ctx) {
       art: art('gear', equipmentId, source) }
   }
 
-  async function fitDraftEquipment(draft, items, ecosystem, profile, initial) {
+  async function fitDraftEquipment(draft, items, ecosystem, profile, initial, { pinProfileTools = false } = {}) {
     let candidate = initial
     let gear = plannedGear(ecosystem, draft.presetId, candidate, profile)
+    const fits = item => matchesDraftGear(gear.get(item.id), item) && (!pinProfileTools ||
+      !isProfileToolSource(item.sourceId) || draft.equipmentSources[item.id] === item.sourceId)
     for (const item of items) {
-      if (matchesDraftGear(gear.get(item.id), item)) continue
+      if (fits(item)) continue
       const { repair, reason } = await repairDraftGear(draft, item, ecosystem, profile, { candidate }, { replaceConflicts: true })
       if (!repair) return { unavailable: items.length > 1 ? item.name + ' · ' + reason : reason }
       draft = repair.draft
       candidate = await plan(draft, ecosystem)
       gear = plannedGear(ecosystem, draft.presetId, candidate, profile)
     }
-    const displaced = items.find(item => !matchesDraftGear(gear.get(item.id), item))
+    const displaced = items.find(item => !fits(item))
     if (displaced) return { unavailable: '试装会使「' + displaced.name + '」失去所选来源或装配位置。请选择其他搭配。' }
     return { draft, candidate, gear }
   }
@@ -2935,6 +2937,125 @@ export async function apply(ctx) {
     const [uploaded, ecosystem] = await Promise.all([appearance.index(), active ? undefined : discover()])
     const art = active ? await matchHistoryArt(uploaded, active) : packageArt(uploaded, ecosystem)
     return { ...followUp, id: receiptId, gear: flagGear(followUp.gear, art) }
+  }
+
+  async function provenDeliverables({ sessionId, windows }, signal) {
+    const query = ctx.get('sessionQuery')
+    if (!windows.length || !query) return []
+    let source
+    try {
+      source = await query.observeSession(sessionId, { projectionMode: 'none', signal })
+      const files = new Map()
+      const ends = new Map(windows.map(({ endSeq, turn }) => [endSeq, turn]))
+      let turn
+      let pending = new Map()
+      for (const event of source.events.slice(source.inheritedEventCount)) {
+        if (event.type === 'turn/start') {
+          turn = event.data.turn
+          pending = new Map()
+        } else if (event.type === 'deliverables/presented' && turn !== undefined && event.data.turn === turn) {
+          for (const file of event.data.files ?? []) {
+            if (typeof file.path !== 'string') continue
+            const name = basename(file.path.replaceAll('\\', '/')).replace(/\p{Cc}/gu, '').slice(0, 200)
+            if (name) pending.set(file.path, { name, turn })
+          }
+        } else if (event.type === 'turn/end') {
+          if (turn !== undefined && ends.get(event.seq) === turn && event.data.turn === turn && event.data.reason?.kind === 'completed') {
+            for (const [path, file] of pending) files.set(path, file)
+          }
+          turn = undefined
+        }
+      }
+      return [...files.values()]
+    } catch {
+      signal?.throwIfAborted()
+      return []
+    } finally {
+      source?.[Symbol.dispose]()
+    }
+  }
+
+  async function previewProvenLoadout({ sessionId, receiptId, gearIds }, signal) {
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 512) {
+      throw new Error('找不到这场对局的结算。')
+    }
+    await growth.settle()
+    const proof = await growth.provenLoadout(sessionId, receiptId)
+    if (!proof) throw new Error('这条记录没有可核对的本局出装。')
+    const proved = new Set(proof.gear.map(item => item.id))
+    const picked = gearIds === undefined ? proved : new Set(Array.isArray(gearIds) ? gearIds : [])
+    if (gearIds !== undefined && (!Array.isArray(gearIds) || !gearIds.length || picked.size !== gearIds.length ||
+      gearIds.some(id => typeof id !== 'string' || !proved.has(id)))) {
+      throw new Error('请选择这条记录中已验证的装备。')
+    }
+    const [ecosystem, uploaded, deliverables] = await Promise.all([
+      discover(), appearance.index(), provenDeliverables(proof, signal),
+    ])
+    const art = packageArt(uploaded, ecosystem)
+    const { hero, id, title, turn, kind } = proof
+    const heroId = hero.id
+    const preset = ecosystem.presets.find(item => item.id === heroId)
+    const heroName = preset?.name ?? hero.name ?? presetLabels.get(heroId)?.[0] ?? heroId
+    const result = { id, sessionId, title, turn, kind, deliverables, hero: { id: heroId, name: heroName, art: art('hero', heroId) } }
+    const builtIn = presetEquipment(ecosystem, heroId)
+    const bounded = proof.gear.map(({ sources: observed, ...recorded }) => {
+      const currentId = currentEquipmentId(recorded.id, ecosystem)
+      const bindings = new Map((observed ?? []).map(source => [currentEquipmentId(source.sourceId, ecosystem), source.sourceName]))
+      const sourceId = recorded.kind === 'tool' && bindings.size === 1 ? bindings.keys().next().value : undefined
+      const sourceName = bindings.get(sourceId) ?? recorded.sourceName
+      const item = { ...recorded, id: currentId, sourceId, sourceName }
+      const profilePlugin = /^(?:host|bundle):/.test(currentId)
+      const selectByDefault = !(profilePlugin && recorded.evidence === 'provider')
+      const row = { ...recorded, sourceId, sourceName, selected: picked.has(recorded.id) && (gearIds !== undefined || selectByDefault),
+        art: art('gear', currentId, sourceId, recorded.kind === 'tool' ? recorded.name : undefined) }
+      let reason
+      if (recorded.kind === 'tool' && bindings.size !== 1) {
+        reason = bindings.size > 1 ? '该回合使用了同名工具的多个来源，请在装备库选择。' : '实战记录缺少能核对的工具来源。'
+      } else if (profilePlugin) {
+        reason = '这项记录依赖当前 Profile 插件，请在插件管理中核对。'
+      } else if (!preset || preset.broken) reason = '实战记录中的英雄当前不可用。'
+      return { row, item, reason }
+    })
+    if (!preset || preset.broken) {
+      return { ...result, gear: bounded.map(({ row, reason }) => ({ ...row, available: false, reason })),
+        reason: '实战记录中的英雄当前不可用。' }
+    }
+    const baseline = historicalDraft(heroId, [])
+    let initial
+    try {
+      initial = await plan(baseline, ecosystem)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '实战记录中的英雄当前不可用。'
+      return { ...result, reason, gear: bounded.map(({ row, reason: gearReason }) =>
+        ({ ...row, available: false, reason: gearReason ?? reason })) }
+    }
+    const profile = await profileGrowthGear(undefined, ecosystem.bundleRows ?? [])
+    const ready = plannedGear(ecosystem, heroId, initial, profile)
+    for (const entry of bounded) {
+      if (entry.reason) continue
+      const { item } = entry
+      if (matchesDraftGear(ready.get(item.id), item)) continue
+      const option = historicalEquipmentOption(item, preset, ecosystem, builtIn)
+      if (!option.item) entry.reason = option.reason ?? '本回合的装备或来源当前不可装配。'
+    }
+    const gear = bounded.map(({ row, item, reason }) => ({ ...row, available: !reason, reason,
+      currentSource: ready.get(item.id)?.sourceName }))
+    const selected = bounded.filter(entry => entry.row.selected)
+    if (!selected.length || selected.some(entry => entry.reason)) {
+      return { ...result, gear, reason: '请选择仍能核对来源的装备。' }
+    }
+    const items = selected.map(entry => entry.item)
+    if (new Set(items.map(item => item.id)).size !== items.length) {
+      return { ...result, gear, reason: '这些记录现在指向同一件装备，请只保留一个。' }
+    }
+    signal?.throwIfAborted()
+    const fit = order => fitDraftEquipment(baseline, order, ecosystem, profile, initial, { pinProfileTools: true })
+    let fitted = await fit(items)
+    if (!fitted.draft && items.length > 1) fitted = await fit([...items].reverse())
+    if (!fitted.draft) return { ...result, gear, reason: fitted.unavailable ?? '所选装备无法同时复用。' }
+    const { draft, candidate } = fitted
+    return { ...result, gear, draft, removed: historicalRemovals(candidate, builtIn, ecosystem),
+      comparison: await compare(draft, ecosystem, candidate) }
   }
 
   function growthQuest({ title, mode, gearId, gearIds, trialActionKey: selectedKey, heroActionKey, comboActionKey, staged, prepareActionKey,
@@ -4140,6 +4261,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'field-playbook-preview') value = await previewFieldPlaybook(selection)
         else if (selection?.action === 'match-settlements' || selection?.action === 'match-settlements-page') value = await matchSettlements(selection)
         else if (selection?.action === 'match-follow-up' || selection?.action === 'match-follow-up-preview') value = await matchFollowUp(selection)
+        else if (selection?.action === 'match-proven-loadout') value = await previewProvenLoadout(selection, request.signal)
         else if (selection?.action === 'settlement-dismiss') {
           requireMatch(selection.sessionId)
           if (closed) throw new Error('配装服务正在关闭，请重试。')

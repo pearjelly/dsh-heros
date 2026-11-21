@@ -205,6 +205,36 @@ function followUpItem({ id, name, kind, sourceId, sourceName }) {
   return { id, name, kind, sourceId, sourceName }
 }
 
+function provenRoundGear(receipt) {
+  const gear = roundEquipment(receipt)
+  const providers = new Set(gear.flatMap(item => receiptSources(item).filter(Boolean).map(source => source.sourceId)))
+  return gear.filter(item => item.kind === 'tool' || !providers.has(item.id) ||
+    item.activity?.some(event => event.kind !== 'provider'))
+}
+
+function provenGear(item, evidence, awards) {
+  const activity = awards.flatMap(award => award.activity ?? []).map(({ kind, name }) => ({ kind, name }))
+  const sources = awards[0] !== item && questToolSource(item) ? [item] : awards.flatMap(receiptSources).filter(Boolean)
+  return { ...followUpItem(item), evidence, ...(activity.length && { activity }),
+    ...(item.kind === 'tool' && { sources: sources.filter(source => knownToolSource(source.sourceId))
+      .map(({ sourceId, sourceName }) => ({ sourceId, sourceName })) }) }
+}
+
+function provenEvidence(item, awards, move) {
+  if (item.kind === 'tool') return 'tool'
+  const activity = awards.flatMap(award => award.activity ?? [])
+  if (move || activity.some(event => event.kind !== 'provider')) return 'action'
+  return activity.length ? 'provider' : 'ready'
+}
+
+function provenTurn(receipt) {
+  if (!receipt) return
+  const prefix = receipt.sessionId + ':'
+  const seq = receipt.id.startsWith(prefix) ? receipt.id.slice(prefix.length) : ''
+  const endSeq = /^\d+$/.test(seq) ? Number(seq) : undefined
+  if (Number.isSafeInteger(endSeq)) return { turn: receipt.turn, endSeq }
+}
+
 function comboMove(quest) {
   const combo = quest?.comboAction
   return combo?.staged && !quest.comboFirst ? combo.prepare : combo
@@ -597,6 +627,66 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
       recent: data.recent.filter(item => visibleReceipt(item, sessionId)).slice(0, settlementPageSize) }
   }
 
+  function provenComboHero(receipt) {
+    if (!receipt?.quest || receipt.pair?.length !== 2 || receipt.teamwork || receipt.relay || !(receipt.flag || receipt.comboRepeat)) return
+    const history = Object.hasOwn(data.questHistory, receipt.id) && data.questHistory[receipt.id]
+    return receipt.flag?.hero ?? (history?.sessionId === receipt.sessionId && history.mode === 'combo' ? history.hero : undefined)
+  }
+
+  function hasProvenLoadout(receipt) {
+    return Boolean(provenComboHero(receipt) || roundHero(receipt) && provenRoundGear(receipt).length)
+  }
+
+  function ownSettlementHistory(sessionId) {
+    const { recent, archivedThrough } = data
+    let archived
+    const entries = () => archived ??= archiveEntries(sessionId, archivedThrough)
+    async function read(receiptId) {
+      if (typeof receiptId !== 'string' || !receiptId || receiptId.length > 1024) throw new Error('找不到该回合的结算。')
+      const receipt = recent.find(item => item.sessionId === sessionId && item.id === receiptId)
+        ?? await readArchived(sessionId, (await entries()).find(entry => entry.key === receiptKey(receiptId)))
+      if (receipt?.sessionId === sessionId) return receipt
+    }
+    return { recent, entries, read }
+  }
+
+  async function provenLoadout(sessionId, receiptId) {
+    if (invalid) throw new Error('成长记录暂时无法读取。')
+    const { recent, entries, read } = ownSettlementHistory(sessionId)
+    const receipt = await read(receiptId)
+    const comboHero = provenComboHero(receipt)
+    const hero = comboHero ?? roundHero(receipt)
+    if (!hero) return
+    const turn = receipt.turn
+    if (!comboHero) {
+      const gear = provenRoundGear(receipt).map(item => provenGear(item, provenEvidence(item, [item]), [item]))
+      if (gear.length) return { id: receipt.id, sessionId, hero, turn, windows: [provenTurn(receipt)].filter(Boolean), kind: 'round', gear }
+      return
+    }
+    const { comboAction } = receipt
+    const recordedTurns = new Set()
+    if (Number.isSafeInteger(turn) && !comboAction?.proof) recordedTurns.add(turn)
+    if (comboAction?.first?.sessionId === sessionId && Number.isSafeInteger(comboAction.first.turn)) {
+      recordedTurns.add(comboAction.first.turn)
+    }
+    const rounds = await Promise.all([...recordedTurns].map(number =>
+      roundForReceipt({ quest: true, sessionId, turn: number }, recent, entries)))
+    const gear = receipt.pair.map(item => {
+      const source = questToolSource(item)
+      const awards = rounds.flatMap(round => round?.awards ?? []).filter(award =>
+        award.id === item.id && (!source || receiptSources(award).some(used => used?.sourceId === source)))
+      const move = [comboAction, comboAction?.prepare].find(action => action?.gearId === item.id)
+      const proof = provenGear(item, provenEvidence(item, awards, move), awards)
+      if (move && !proof.activity?.some(action => action.name === move.name)) {
+        proof.activity = [...(proof.activity ?? []), { kind: move.kind ?? 'action', name: move.name }]
+      }
+      return proof
+    })
+    const windows = rounds.map(provenTurn).filter(Boolean)
+    return { id: receipt.id, sessionId, hero, title: receipt.title, turn: Number.isSafeInteger(turn) ? turn : undefined,
+      windows, kind: comboAction?.staged ? 'staged' : 'combo', gear }
+  }
+
   async function settlements(sessionId, before) {
     if (invalid) throw new Error('成长记录暂时无法读取。')
     if (before !== undefined && (!Number.isSafeInteger(before) || before < 1)) throw new Error('找不到这页结算记录。')
@@ -621,6 +711,7 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
         return key && !nativeTrialMastered({ kind: action.kind, key })
       }) : roundEquipment(round)
       return { ...receipt, ...(action && { followUpAction: action }), followUpGear: gear.map(followUpItem),
+        ...(ownReceipt && hasProvenLoadout(receipt) && { provenLoadout: true }),
         awards: receipt.awards.map(award => ({ ...award,
           ...(Number.isSafeInteger(award.totalXp) && Number.isSafeInteger(award.previousXp)
             ? { before: rank(award.previousXp), after: rank(award.totalXp) } : {}),
@@ -640,21 +731,17 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
     const result = await Promise.all(endSeqs.map(async seq => {
       const id = sessionId + ':' + seq
       const receipt = receipts.get(id) ?? await readArchived(sessionId, (await read()).get(receiptKey(id)))
-      return [seq, { id, followUpGear: roundEquipment(receipt).map(followUpItem) }]
+      return [seq, { id, followUpGear: roundEquipment(receipt).map(followUpItem),
+        ...(hasProvenLoadout(receipt) && { provenLoadout: true }) }]
     }))
     return new Map(result.filter(([, receipt]) => receipt.followUpGear.length))
   }
 
   async function followUp(sessionId, receiptId, gearIds) {
     if (invalid) throw new Error('成长记录暂时无法读取。')
-    if (typeof receiptId !== 'string' || !receiptId || receiptId.length > 1024) throw new Error('找不到该回合的结算。')
-    const { recent, archivedThrough } = data
-    let archived
-    const entries = () => archived ??= archiveEntries(sessionId, archivedThrough)
-    const receipt = recent.find(item => item.sessionId === sessionId && item.id === receiptId)
-      ?? await readArchived(sessionId, (await entries()).find(entry => entry.key === receiptKey(receiptId)))
-    const ownReceipt = receipt?.sessionId === sessionId ? receipt : undefined
-    const action = nativeReceiptAction(ownReceipt)
+    const { recent, entries, read } = ownSettlementHistory(sessionId)
+    const receipt = await read(receiptId)
+    const action = nativeReceiptAction(receipt)
     if (action) {
       if (!Array.isArray(gearIds) || gearIds.length !== 1) throw new Error('请选择一件完成此操作的装备。')
       const item = receipt.awards.find(item => item.id === gearIds[0])
@@ -663,7 +750,7 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
       if (nativeTrialMastered({ kind: action.kind, key })) throw new Error('这件装备的此项试炼已领取奖励。')
       return { activity: action, gear: [followUpItem(item)], quest: { mode: 'trial', gearId: item.id, trialActionKey: key } }
     }
-    const round = ownReceipt && await roundForReceipt(ownReceipt, recent, entries)
+    const round = receipt && await roundForReceipt(receipt, recent, entries)
     const used = roundEquipment(round)
     if (!used.length) throw new Error('找不到这回合可带回备战的装备。')
     if (!Array.isArray(gearIds) || gearIds.length < 1 || gearIds.length > 2 || new Set(gearIds).size !== gearIds.length) {
@@ -1410,7 +1497,7 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
     equipmentHeroes, equipmentSourceProof, reportFollowUps,
     accept, settleQuest, read, flags, flagFor, displayFlag, signatureRules, signatureFor, signatureProgress, setSignature,
     teamTaskClaimed, teamQuest, recordTeamTask,
-    settlements, followUp, notice, dismissReceipt, continuationOffer, relayLoadout, recordBlankContinuation, handoff, journal,
+    settlements, followUp, provenLoadout, notice, dismissReceipt, continuationOffer, relayLoadout, recordBlankContinuation, handoff, journal,
     setFrame, validateQuest, comboPreview, flagPractice, recoverFlagPractice, nativeTrialMastered, openedWithQuest, openingQuest, questTask, questForAction,
     rewards, stagedLevel, relayGearLevel,
     get version() { return version }, settle: () => writes }

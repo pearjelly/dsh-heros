@@ -86,10 +86,15 @@ test('old settlements preserve the round, delegated awards and follow-up across 
   assert.deepEqual((await reopened.heroRounds(standard.id, firstHeroPage.before)).rounds.map(item => item.id), [parentRounds[0].id, firstRound.id])
   assert.deepEqual(await reopened.heroRounds(worker.id), firstWorkerPage)
   assert.deepEqual(await reopened.reportFollowUps(parent, [1, 7, 199]), new Map([
-    [1, { id: firstRound.id, followUpGear: [tool] }],
-    [7, { id: parentRounds.at(-1).id, followUpGear: [tool] }],
+    [1, { id: firstRound.id, followUpGear: [tool], provenLoadout: true }],
+    [7, { id: parentRounds.at(-1).id, followUpGear: [tool], provenLoadout: true }],
   ]))
   assert.deepEqual(await reopened.reportFollowUps(child, [199]), new Map())
+  const proof = await reopened.provenLoadout(parent, firstRound.id)
+  assert.deepEqual(proof.windows, [{ turn: 1, endSeq: 1 }])
+  assert.deepEqual(proof.gear, [{ ...tool, evidence: 'tool',
+    sources: [{ sourceId: tool.sourceId, sourceName: tool.sourceName }] }])
+  assert.equal(await reopened.provenLoadout(parent, delegatedRound.id), undefined)
   assert.deepEqual((await reopened.followUp(parent, quest.id, [tool.id])).gear, [tool])
   assert.deepEqual((await reopened.followUp(child, delegatedRound.id, [tool.id])).gear, [tool])
   assert.equal((await reopened.followUp(child, delegatedRound.id, [tool.id])).heroId, worker.id)

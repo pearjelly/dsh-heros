@@ -195,6 +195,18 @@ test('market installs a verified bundle and records its native actions and tool 
     const toolAward = dispatched.recent[0].awards.find(item => item.id === profileTool.id)
     assert.equal(toolAward.xp, 8)
     assert.equal(toolAward.sourceId, rootStatus.includedBy)
+    const profileProof = await match('match-proven-loadout', { receiptId: dispatched.recent[0].id })
+    assert.equal(profileProof.kind, 'round')
+    const provedProfile = profileProof.gear.find(item => item.id === profileTool.id)
+    assert.equal(provedProfile.available, true)
+    assert.equal(provedProfile.sourceId, rootStatus.includedBy)
+    assert.deepEqual(profileProof.draft?.equipmentIds, [profileTool.id])
+    assert.deepEqual(profileProof.draft.equipmentSources, { [profileTool.id]: rootStatus.includedBy })
+    assert.deepEqual(profileProof.gear.filter(item => [provider.id, bundleId].includes(item.id))
+      .map(({ evidence, selected }) => [evidence, selected]), [['provider', false], ['provider', false]])
+    const profileOnly = await match('match-proven-loadout', { receiptId: dispatched.recent[0].id, gearIds: [provider.id] })
+    assert.equal(profileOnly.gear.find(item => item.id === provider.id).available, false)
+    assert.equal(profileOnly.draft, undefined)
     const toolPreview = (await invoke('equipment-pairing-preview', { id: profileTool.id, heroId: target.id,
       sourceId: rootStatus.includedBy })).value
     assert.equal(toolPreview.placement, 'included')
@@ -1125,9 +1137,59 @@ test('Lighthouse starts two real loadouts without sending, and awards the delive
       const presented = events.filter(event => event.type === 'deliverables/presented')
       assert.equal(presented.length, combo ? 1 : 0)
       if (combo) assert.equal(basename(presented[0].data.files[0].path), '02-lighthouse.md')
+      const followUp = report.turns[0].followUp
+      assert.ok(followUp.provenLoadout)
+      if (combo) await invoke(sessionId, 'match-proven-loadout', { receiptId: questTask.id }, 422)
       const reward = await invoke(sessionId, 'growth-claim', { id: questTask.id })
       assert.equal(Boolean(reward.flag), combo)
-      if (combo) bannerId = reward.flag.id
+      if (combo) {
+        bannerId = reward.flag.id
+        const afterClaim = await invoke(sessionId, 'match-growth')
+        const listPlans = async () => (await host.request(endpoint)).value.plans
+        const beforePlans = await listPlans()
+        const historyPath = sourceId => '/api/loadout-fixture-history?sessionId=' + sourceId
+        const afterClaimEvents = (await host.request(historyPath(sessionId))).events
+        const ordinary = await invoke(sessionId, 'match-proven-loadout', { receiptId: followUp.id })
+        assert.equal(ordinary.kind, 'round')
+        assert.equal(ordinary.hero.id, 'standard')
+        assert.equal(ordinary.turn, 1)
+        assert.deepEqual(ordinary.deliverables, [{ name: '02-lighthouse.md', turn: 1 }])
+        const usedTools = report.turns[0].entries.filter(item => item.type === 'tool')
+        assert.deepEqual(new Set(ordinary.gear.map(item => item.id)), new Set(usedTools.map(item => item.id)))
+        const searchTool = report.turns[0].entries.find(item => item.type === 'tool' && item.name === 'glob')
+        assert.ok(ordinary.gear.some(item => item.id === searchTool.id && item.sourceId === searchTool.sourceId && item.selected))
+        const searchOnly = await invoke(sessionId, 'match-proven-loadout', { receiptId: followUp.id, gearIds: [searchTool.id] })
+        assert.ok(searchOnly.draft)
+        assert.deepEqual(searchOnly.gear.filter(item => item.selected).map(item => item.id), [searchTool.id])
+        await invoke(sessionId, 'match-proven-loadout', { receiptId: followUp.id, gearIds: [] }, 422)
+        await invoke(sessionId, 'match-proven-loadout', { receiptId: followUp.id, gearIds: [searchTool.id, searchTool.id] }, 422)
+        await invoke(sessionId, 'match-proven-loadout', { receiptId: followUp.id, gearIds: ['not-used'] }, 422)
+        await invoke(recon.value.sessionId, 'match-proven-loadout', { receiptId: followUp.id }, 422)
+        const history = await invoke(sessionId, 'match-settlements-page')
+        assert.ok(history.receipts.find(item => item.id === questTask.id).provenLoadout)
+        const proven = await invoke(sessionId, 'match-proven-loadout', { receiptId: questTask.id })
+        assert.equal(proven.kind, 'combo')
+        assert.deepEqual(proven.deliverables, ordinary.deliverables)
+        assert.deepEqual(new Set(proven.gear.map(item => item.id)), new Set([searchTool.id, 'present']))
+        assert.ok(proven.draft)
+        assert.ok(proven.comparison)
+        assert.deepEqual(await invoke(sessionId, 'match-growth'), afterClaim)
+        assert.deepEqual(await listPlans(), beforePlans)
+        assert.deepEqual((await host.request(historyPath(sessionId))).events, afterClaimEvents)
+
+        const plan = await invoke(sessionId, 'plan-save', { name: 'Lighthouse proven loadout', draft: proven.draft })
+        const fromProof = await host.request('/api/loadout-fixture-session', {
+          presetId: plan.presetId, workspacePath: cards,
+        })
+        await invoke(fromProof.sessionId, 'verify-live', { presetId: plan.presetId })
+        assert.ok((await listPlans()).some(item => item.id === plan.id))
+        assert.equal((await host.request(historyPath(fromProof.sessionId))).events.some(item => item.type === 'turn/start'), false)
+
+        const fork = await invoke(undefined, 'continue', { sourceSessionId: sessionId, presetId: 'standard' })
+        const inherited = await invoke(fork.sessionId, 'match-report')
+        assert.ok(inherited.turns.length && inherited.turns.every(item => item.inherited && !item.followUp?.provenLoadout))
+        await invoke(fork.sessionId, 'match-proven-loadout', { receiptId: followUp.id }, 422)
+      }
       await invoke(sessionId, 'growth-claim', { id: questTask.id }, 422)
     }
     assert.deepEqual(await starter('recon', launch), recon)
@@ -2616,6 +2678,13 @@ test('contracts open, carry and settle against native session evidence', { timeo
     assert.equal(mastered.flag.stagedAction.sessionId, stagedChild)
     const [stagedReceipt] = await invoke('match-settlements', stagedChild)
     assert.deepEqual(stagedReceipt.awards.map(item => [item.id, item.xp]), [['review', 16], [quartz.id, 16]])
+    assert.ok(stagedReceipt.provenLoadout)
+    const provenStage = await invoke('match-proven-loadout', stagedChild, { receiptId: stagedReceipt.id })
+    assert.equal(provenStage.kind, 'staged')
+    assert.deepEqual(new Set(provenStage.gear.map(item => item.id)), new Set(['review', quartz.id]))
+    assert.equal(provenStage.gear.find(item => item.id === quartz.id).sourceId,
+      stagedView.quest.pair.find(item => item.id === quartz.id).sourceId)
+    assert.ok(provenStage.draft)
     assert.match((await stagePreview()).combo.modes.find(mode => mode.id === 'staged').reason, /已经记录了分回合连携/)
     assert.deepEqual((await journal()).completed.find(item => item.id === stagedQuestId).comboAction, stagedReceipt.comboAction)
     await invoke('growth-accept', stagedChild, stagedLaunch.quest, 422)
@@ -4847,6 +4916,15 @@ test('traced providers equip third-party, MCP and session tools on real DSH agen
     const archivedReport = await reportFor(foundrySession.sessionId)
     const replayEntry = archivedReport.turns.find(item => item.followUp?.id === foundryReceipt.id)
     assert.equal(replayEntry.followUp.followUpGear.find(item => item.id === foundryCard.id).sourceId, archivedDiscovery.sourceId)
+    assert.ok(replayEntry.followUp.provenLoadout)
+    const archivedProof = { action: 'match-proven-loadout', sessionId: foundrySession.sessionId,
+      receiptId: foundryReceipt.id, gearIds: [foundryCard.id] }
+    const unavailableProof = (await host.request(endpoint, archivedProof)).value
+    assert.equal(unavailableProof.kind, 'round')
+    const historicalGear = unavailableProof.gear.find(item => item.id === foundryCard.id)
+    assert.equal(historicalGear.sourceId, archivedDiscovery.sourceId)
+    assert.equal(historicalGear.available, false)
+    assert.equal(unavailableProof.draft, undefined)
     const archivedProviderAward = (await settlements(foundrySession.sessionId))[0].awards.find(item => item.id === archivedDiscovery.sourceId)
     assert.deepEqual(archivedProviderAward.collection, archivedDiscovery.collection)
     const originalSource = { action: 'equipment-collection', itemId: archivedDiscovery.sourceId,
@@ -4870,6 +4948,9 @@ test('traced providers equip third-party, MCP and session tools on real DSH agen
     await host.request(endpoint, { ...originalSource, toolId: shared.id }, 422)
     const recoveredFoundry = await findFoundry()
     assert.equal(recoveredFoundry.discoverySources[0].collection.saved, true)
+    const availableProof = (await host.request(endpoint, archivedProof)).value
+    assert.equal(availableProof.gear.find(item => item.id === foundryCard.id).available, true)
+    assert.deepEqual(availableProof.draft?.equipmentSources, { [foundryCard.id]: archivedDiscovery.sourceId })
     const recoveredOpening = (await host.request(endpoint, { action: 'growth-opening-choices', draft: restore.draft })).value
     const recoveredChoice = recoveredOpening.choices.find(item => item.id === foundryCard.id)
     assert.ok(recoveredChoice.trialActions.some(item => item.key === foundryFollowUp.quest.trialActionKey))

@@ -2817,6 +2817,7 @@ window.__ModuleLoader__.load({
         event.preventDefault()
         if (saving.current) return
         const { mode, target } = editor
+        if ((mode === 'create' || mode === 'replace') && !canSave) return
         if (mode !== 'remove' && !name.trim()) return
         saving.current = true
         setBusy(true)
@@ -2839,6 +2840,7 @@ window.__ModuleLoader__.load({
 
       const mode = editor?.mode
       const subject = mode === 'create' ? current.hero?.name : editor?.target?.name
+      const cannotSaveDraft = (mode === 'create' || mode === 'replace') && !canSave
       return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
         'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing), 'aria-labelledby': title,
         onCancel: event => { event.preventDefault(); if (sharing) closeSharing(); else close() },
@@ -2869,12 +2871,13 @@ window.__ModuleLoader__.load({
                   value: name, disabled: busy, onChange: event => setName(event.target.value) })),
                 h('label', null, t('适用情形（选填）'), h('textarea', { value: note, rows: 3, maxLength: 240,
                   disabled: busy, onChange: event => setNote(event.target.value) }))),
+            cannotSaveDraft && h('p', { className: 'moba-alert', role: 'status' }, t('请先处理当前阵容中无法装配的装备。')),
             error && h('p', { className: 'moba-alert', role: 'alert' }, error)),
           h('footer', { className: 'moba-gallery-footer' },
             h('button', { className: 'moba-text', type: 'button', disabled: busy,
               ref: mode === 'remove' ? focus : undefined,
               onClick: () => mode === 'create' && initialMode === 'create' ? close() : setEditor(null) }, t('取消')),
-            h('button', { className: 'moba-start', type: 'submit', disabled: busy || (mode !== 'remove' && !name.trim()) },
+            h('button', { className: 'moba-start', type: 'submit', disabled: busy || cannotSaveDraft || (mode !== 'remove' && !name.trim()) },
               busy ? t('正在保存…') : mode === 'remove' ? t('确认移除方案') : t('保存方案')))) :
           h(Fragment, null,
             h('div', { className: 'moba-plan-library' },
@@ -3528,20 +3531,21 @@ window.__ModuleLoader__.load({
       const workspaceList = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [returning] = useState(getReturnDraft)
       const pendingReturn = useRef(returning)
-      const [matchMode, setMatchMode] = useState(returning?.followUp ? 'fresh'
+      const proven = returning?.proven
+      const [matchMode, setMatchMode] = useState(returning?.followUp || proven ? 'fresh'
         : returning?.sessionId ? returning.running ? 'after-turn' : 'continue' : undefined)
-      const choseMatchMode = useRef(Boolean(returning?.followUp))
+      const choseMatchMode = useRef(Boolean(returning?.followUp || proven))
       const [continuation, setContinuation] = useState(returning?.continuation)
       const [workspaceChoice, setWorkspaceChoice] = useState(returning?.workspaceId ?? '')
       const [data, setData] = useState(null)
       const [loadAttempt, setLoadAttempt] = useState(0)
-      const [presetChoice, setPresetChoice] = useState('')
-      const [equipmentIds, setEquipmentIds] = useState([])
-      const [equipmentSources, setEquipmentSources] = useState({})
-      const [removedEquipmentIds, setRemovedEquipmentIds] = useState([])
-      const [draftLabels, setDraftLabels] = useState({})
+      const [presetChoice, setPresetChoice] = useState(proven?.draft.presetId ?? '')
+      const [equipmentIds, setEquipmentIds] = useState(proven?.draft.equipmentIds ?? [])
+      const [equipmentSources, setEquipmentSources] = useState(proven?.draft.equipmentSources ?? {})
+      const [removedEquipmentIds, setRemovedEquipmentIds] = useState(proven?.draft.removedEquipmentIds ?? [])
+      const [draftLabels, setDraftLabels] = useState(() => Object.fromEntries(proven?.gear.map(item => [item.id, item.name]) ?? empty))
       const [savedId, setSavedId] = useState('')
-      const [inspected, setInspected] = useState('evidence')
+      const [inspected, setInspected] = useState(proven?.draft.equipmentIds[0] ?? 'evidence')
       const [requestedGear, setRequestedGear] = useState(null)
       const [error, setError] = useState('')
       const [pending, setPending] = useState(false)
@@ -3550,15 +3554,15 @@ window.__ModuleLoader__.load({
       const starterButton = useRef(null)
       const [playbooksOpen, setPlaybooksOpen] = useState(false)
       const playbooksButton = useRef(null)
-      const [notice, setNotice] = useState('')
+      const [notice, setNotice] = useState(proven ? t('已载入实战出装草稿。') : '')
       const [appearance, setAppearance] = useState(null)
       const [actionTarget, setActionTarget] = useState(null)
       const [galleryOpen, setGalleryOpen] = useState(false)
       const [pairingPreview, setPairingPreview] = useState(null)
       const [flagsOpen, setFlagsOpen] = useState(() => returning?.flagId ? { id: returning.flagId } : null)
-      const [historicalHero, setHistoricalHero] = useState(returning?.followUp?.heroId ?? '')
+      const [historicalHero, setHistoricalHero] = useState(proven?.draft.presetId ?? returning?.followUp?.heroId ?? '')
       const [journalOpen, setJournalOpen] = useState(false)
-      const [planMode, setPlanMode] = useState('')
+      const [planMode, setPlanMode] = useState(proven?.save ? 'create' : '')
       const [followUp, setFollowUp] = useState(returning?.followUp)
       const [trialTarget, setTrialTarget] = useState(null)
       const [deliveryTarget, setDeliveryTarget] = useState(null)
@@ -3647,7 +3651,7 @@ window.__ModuleLoader__.load({
           if (abort.signal.aborted) return
           const draft = pendingReturn.current
           pendingReturn.current = null
-          const selectedPreset = draft?.selectionPresetId ?? draft?.presetId
+          const selectedPreset = !draft?.proven && (draft?.selectionPresetId ?? draft?.presetId)
           if (selectedPreset) {
             const saved = value.saved.find(item => item.id === selectedPreset)
             if (saved && value.presets.some(item => item.id === saved.baseId && !item.broken)) {
@@ -4248,7 +4252,7 @@ window.__ModuleLoader__.load({
               else if (prepare) prepareEquipmentTrial(item)
             } }),
           journalOpen && h(QuestJournal, { request, onClose: () => setJournalOpen(false), onOpenMatch: openSource }),
-          planMode && h(BuildPlans, { initialMode: planMode, request, draft: loadoutDraft(), canSave: canCompare,
+          data && planMode && h(BuildPlans, { initialMode: planMode, request, draft: loadoutDraft(), canSave: canCompare,
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
             current: { hero: stagePreset, items: selections, removed: removedLabels },
             plans: plans.map(plan => {
@@ -4488,13 +4492,101 @@ window.__ModuleLoader__.load({
     ]))
     const reportTime = time => reportClocks[activeLanguage.getSnapshot()].format(time)
 
-    function MatchReport({ sessionId, request, refresh, onPrepare }) {
+    function ProvenLoadout({ sessionId, receiptId, request, onBack, onUse }) {
+      const language = useLanguage()
+      const [picked, setPicked] = useState(null)
+      const [state, setState] = useState(null)
+      const [attempt, retry] = useState(0)
+      const heading = useRef(null)
+      const key = JSON.stringify([picked, attempt, language])
+      const preview = state?.key === key && !state.error ? state.value : undefined
+      const shown = preview ?? state?.value
+      const error = state?.key === key ? state.error : undefined
+      const gear = shown?.gear ?? empty
+      const selected = picked ?? gear.filter(item => item.selected).map(item => item.id)
+      const lost = preview?.removed ?? empty
+      const canUse = Boolean(preview?.draft)
+      const kinds = { round: '回合出装', combo: '已验收连携', staged: '已验收分阶段连携' }
+      const evidence = { tool: '工具调用成功', action: '本回合有操作记录', ready: '验收时已就绪', provider: '记录为工具来源' }
+
+      useEffect(() => heading.current?.focus(), [])
+      useEffect(() => {
+        if (picked?.length === 0) return
+        const abort = new AbortController()
+        const action = 'match-proven-loadout'
+        request(action, { action, sessionId, receiptId, gearIds: picked ?? undefined }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setState({ key, value }) })
+          .catch(reason => {
+            if (!abort.signal.aborted) setState(current => ({ key, value: current?.value, error: reason.message }))
+          })
+        return () => abort.abort()
+      }, [request, sessionId, receiptId, picked, key, language])
+
+      function toggle(id, checked) {
+        setState(current => current && { value: current.value })
+        setPicked(current => {
+          const values = new Set(current ?? selected)
+          if (checked) values.add(id)
+          else values.delete(id)
+          return [...values]
+        })
+      }
+
+      return h('section', { className: 'moba-match-body moba-match-plan moba-proven-loadout',
+        onKeyDown: event => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          onBack()
+        } },
+        h('h3', { className: 'moba-follow-up-title', ref: heading, tabIndex: -1 }, t('核对已验证出装')),
+        shown && h(Fragment, null,
+          h('div', { className: 'moba-proven-hero' },
+            h(HeroArt, { ...shown.hero, className: 'moba-match-plan-portrait' }),
+            h('div', null, h('strong', null, shown.hero.name),
+              h('p', { className: 'moba-match-action-note' }, [t(kinds[shown.kind]),
+                shown.turn && t('第 ') + shown.turn + t(' 回合'), shown.title].filter(Boolean).join(' · ')))),
+          shown.deliverables?.length > 0 && h('section', { className: 'moba-proven-files' },
+            h('h4', null, t('已交付的文件')),
+            h('ul', null, shown.deliverables.map((file, index) => h('li', { key: index },
+              h('strong', null, file.name), file.turn && h('small', null, t('第 ') + file.turn + t(' 回合'))))),
+            h('p', { className: 'moba-match-action-note' }, t('在原会话中查看文件内容。'))),
+          h('fieldset', { className: 'moba-proven-gear' },
+            h('legend', null, t('选择要复用的装备')),
+            gear.map(item => h('label', { key: item.id, 'data-available': item.available },
+              h('input', { type: 'checkbox', checked: selected.includes(item.id), disabled: item.evidence === 'provider' && !item.available,
+                onChange: event => toggle(item.id, event.target.checked) }),
+              h(ItemArt, { item }),
+              h('span', null,
+                h('strong', null, item.name),
+                item.evidence && h('small', null, t(evidence[item.evidence])),
+                item.sourceName && h('small', null, t('原来源 ') + item.sourceName),
+                item.currentSource && item.currentSource !== item.sourceName && h('small', null, t('当前来源 ') + item.currentSource),
+                item.activity?.length > 0 && h('small', null, item.activity.map(entry => actionLabel(entry)).join(' / ')),
+                item.reason ? h('small', { className: 'moba-proven-blocker' }, item.reason)
+                  : item.available && h('small', null, t('原来源已核对'))))))),
+        picked?.length === 0 ? h('p', { className: 'moba-match-action-note', role: 'status' }, t('至少选一件已验证的装备。'))
+          : error ? h('p', { className: 'moba-match-action-error', role: 'alert' }, error, ' ',
+            h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重试')))
+          : !preview ? h('p', { className: 'moba-match-action-note', role: 'status' }, t('正在核对本回合出装…'))
+            : preview.reason && h('p', { className: 'moba-match-action-note', role: 'status' }, preview.reason),
+        lost.length > 0 && h('p', { className: 'moba-match-action-note' }, t('要卸下的自带装备') + ' · ' + lost.join(' / ')),
+        canUse && h(SharedPlanCapabilities, { comparison: preview.comparison }),
+        h('div', { className: 'moba-proven-actions' },
+          h('button', { type: 'button', className: 'moba-text', onClick: onBack }, t('返回记录')),
+          h('button', { type: 'button', className: 'moba-match-move', disabled: !canUse,
+            onClick: () => onUse(preview, true) }, t('保存为方案')),
+          h('button', { type: 'button', className: 'moba-match-move', disabled: !canUse,
+            onClick: () => onUse(preview, false) }, t('试装复练'), h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
+    function MatchReport({ sessionId, request, refresh, onPrepare, onUse }) {
       const [before, setBefore] = useState(undefined)
       const [result, setResult] = useState(null)
       const [error, setError] = useState('')
       const [revision, setRevision] = useState(0)
       const [selected, setSelected] = useState(null)
-      const followUpButtons = useRef(new Map())
+      const previewButtons = useRef(new Map())
       useEffect(() => {
         if (before !== undefined) return
         let timer
@@ -4525,6 +4617,21 @@ window.__ModuleLoader__.load({
         setError('')
       }
 
+      function returnToReport() {
+        const key = selected.mode + ':' + selected.item.seq
+        setSelected(null)
+        requestAnimationFrame(() => previewButtons.current.get(key)?.focus())
+      }
+
+      function previewButton(item, mode, label) {
+        const key = mode + ':' + item.seq
+        return h('button', { className: 'moba-text', type: 'button',
+          ref: button => {
+            if (button) previewButtons.current.set(key, button)
+            else previewButtons.current.delete(key)
+          }, onClick: () => setSelected({ item, mode }) }, label)
+      }
+
       function eventRow(entry) {
         const action = entry.type === 'action'
         return h('li', { key: entry.seq, className: 'moba-report-row', 'data-type': entry.type, 'data-nested': entry.nested },
@@ -4553,11 +4660,10 @@ window.__ModuleLoader__.load({
         ...(result.compactions ?? empty).map(activity => ({ ...activity, heading: t('压缩上下文'), status: activity.state,
           label: t(reportToolStates[activity.state]) })),
       ].sort((a, b) => b.seq - a.seq)
-      if (selected) return h(SettlementFollowUp, { key: selected.followUp.id, sessionId, receipt: selected.followUp, request, onPrepare,
-        backLabel: t('返回对局战报'), onBack: () => {
-          setSelected(null)
-          requestAnimationFrame(() => followUpButtons.current.get(selected.seq)?.focus())
-        } })
+      if (selected?.mode === 'proven') return h(ProvenLoadout, { key: selected.item.followUp.id, sessionId,
+        receiptId: selected.item.followUp.id, request, onUse, onBack: returnToReport })
+      if (selected) return h(SettlementFollowUp, { key: selected.item.followUp.id, sessionId, receipt: selected.item.followUp,
+        request, onPrepare, backLabel: t('返回对局战报'), onBack: returnToReport })
       return h('div', { className: 'moba-match-body moba-report' },
         error && h('p', { className: 'moba-match-action-error', role: 'alert' }, error,
           h('button', { type: 'button', onClick: () => setRevision(value => value + 1) }, t('重试'))),
@@ -4572,11 +4678,9 @@ window.__ModuleLoader__.load({
               h('span', { className: 'moba-report-turn-state', 'data-state': item.status }, item.label)),
             item.source && h('small', { className: 'moba-report-meta' }, item.source),
             item.entries && h('ul', { className: 'moba-report-entries' }, item.entries.map(eventRow)),
-            item.followUp && h('button', { className: 'moba-text', type: 'button',
-              ref: button => {
-                if (button) followUpButtons.current.set(item.seq, button)
-                else followUpButtons.current.delete(item.seq)
-              }, onClick: () => setSelected(item) }, t('用本回合打法备战'))))),
+            item.followUp && h('div', { className: 'moba-report-actions' },
+              item.followUp.provenLoadout && previewButton(item, 'proven', t('核对已验证出装')),
+              item.followUp.followUpGear?.length > 0 && previewButton(item, 'follow-up', t('用本回合打法备战')))))),
         (before !== undefined || result?.nextBefore !== undefined) && h('footer', { className: 'moba-report-pages' },
           before !== undefined && h('button', { type: 'button', onClick: () => openPage(undefined) }, t('最新记录')),
           result?.nextBefore !== undefined && h('button', { type: 'button', onClick: () => openPage(result.nextBefore) },
@@ -5090,12 +5194,14 @@ window.__ModuleLoader__.load({
     }
 
     function MatchSettlement({ sessionId, version, request, initialId, initialCursors = empty, focusGearId, quest, equipped,
-      onQuest, onReport, onOpenMatch, onOpenFlag, onPrepare, onInspect, onSignature }) {
+      onQuest, onReport, onOpenMatch, onOpenFlag, onPrepare, onUse, onInspect, onSignature }) {
       const [history, setHistory] = useState(null)
       const [cursors, setCursors] = useState(initialCursors)
       const [picked, setPicked] = useState(initialId ?? '')
       const [preparing, setPreparing] = useState(false)
+      const [provenId, setProvenId] = useState('')
       const followUpButton = useRef(null)
+      const provenButton = useRef(null)
       const focusedAward = useRef(null)
       const awardFocused = useRef(false)
       const [attempt, retry] = useState(0)
@@ -5123,6 +5229,13 @@ window.__ModuleLoader__.load({
         setPicked('')
         setError('')
         setCursors(current => older ? [...current, history.before] : current.slice(0, -1))
+      }
+      if (provenId) {
+        return h(ProvenLoadout, { key: provenId, sessionId, receiptId: provenId, request, onUse,
+          onBack: () => {
+            setProvenId('')
+            requestAnimationFrame(() => provenButton.current?.focus())
+          } })
       }
       if (preparing && receipt?.followUpGear?.length) {
         return h(SettlementFollowUp, { key: receipt.id, sessionId, receipt, request,
@@ -5224,6 +5337,8 @@ window.__ModuleLoader__.load({
               parentSessionId: receipt.delegation.ancestors[0], childSessionId: receipt.sessionId, mode: receipt.delegation.mode,
             }) }, t('回看队友工作'))
               : h('button', { type: 'button', className: 'moba-text', onClick: onReport }, t('查看对局战报')),
+            receipt.provenLoadout && h('button', { ref: provenButton, type: 'button', className: 'moba-text',
+              onClick: () => { setPicked(receipt.id); setProvenId(receipt.id) } }, t('核对已验证出装')),
             receipt.followUpGear?.length > 0 && h('button', { ref: followUpButton, type: 'button', className: 'moba-text', onClick: () => {
               setPicked(receipt.id)
               setPreparing(true)
@@ -5811,6 +5926,11 @@ window.__ModuleLoader__.load({
         setAction({ kind, item })
       }
 
+      function reuseProvenLoadout(preview, save) {
+        popover.current.hidePopover()
+        openLobby(sessionId, snapshot, { proven: { ...preview, save } })
+      }
+
       function show(event, target) {
         const element = popover.current
         const panel = ['report', 'plan', 'growth', 'settlement', 'teammate'].includes(target?.kind)
@@ -6162,7 +6282,7 @@ window.__ModuleLoader__.load({
               : h('button', { type: 'button', 'aria-label': t('关闭对局装备'), popoverTarget: id, popoverTargetAction: 'hide' },
                 h(Glyph, { kind: 'close', size: 17 }))),
           pinError && h('p', { className: 'moba-match-action-error moba-match-pin-error', role: 'alert' }, pinError),
-          reporting ? h(MatchReport, { sessionId, request, refresh: refreshReport, onPrepare: followUp => {
+          reporting ? h(MatchReport, { sessionId, request, refresh: refreshReport, onUse: reuseProvenLoadout, onPrepare: followUp => {
             popover.current.hidePopover()
             openLobby(sessionId, snapshot, { followUp,
               selectionPresetId: followUp.heroId === snapshot?.heroId ? undefined : followUp.heroId })
@@ -6188,6 +6308,7 @@ window.__ModuleLoader__.load({
           : settling ? h(MatchSettlement, { key: JSON.stringify([action.item.id, action.focusGearId]), sessionId, request, version: snapshot?.growthVersion,
             initialId: action.item.id, initialCursors: action.cursors, focusGearId: action.focusGearId, quest: questReady,
             equipped: new Set(shortcuts.map(item => item.id)), onQuest: () => setAction(growthAction),
+            onUse: reuseProvenLoadout,
             onReport: () => setAction({ kind: 'report', item: { name: t('对局战报') } }),
             onOpenFlag: flagId => { popover.current.hidePopover(); openLobby(sessionId, snapshot, { flagId }) },
             onSignature: (heroId, heroSignature) => setSnapshot(current => current?.heroId === heroId ? { ...current, heroSignature } : current),
@@ -6665,6 +6786,27 @@ window.__ModuleLoader__.load({
       .moba-settlement-signatures small { color: #e1cdb2; }
       .moba-settlement-signatures button { min-height: 30px; color: #f7dba3; white-space: nowrap; }
       .moba-follow-up-title { margin: 0; color: var(--gold); font-size: 16px; }
+      .moba-proven-hero { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+      .moba-proven-hero p { margin: 2px 0 0; }
+      .moba-proven-files h4, .moba-proven-gear legend { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
+      .moba-proven-files ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+      .moba-proven-files li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 8px;
+        padding: 5px 7px; background: #171c27; border: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+      .moba-proven-files li small { color: var(--muted); }
+      .moba-proven-gear { display: grid; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
+      .moba-proven-gear label { display: grid; grid-template-columns: auto 30px minmax(0, 1fr); gap: 7px; align-items: start;
+        padding: 6px; border: 1px solid var(--line); background: #161c28; overflow-wrap: anywhere; cursor: pointer; }
+      .moba-proven-gear label:has(input:checked) { border-color: #a27c48; }
+      .moba-proven-gear label:has(input:disabled) { cursor: default; }
+      .moba-proven-gear label:focus-within { outline: 1px solid var(--gold); }
+      .moba-proven-gear input { accent-color: var(--gold); margin: 3px 0 0; }
+      .moba-proven-gear .moba-item-art { width: 30px; }
+      .moba-proven-gear strong, .moba-proven-gear small { display: block; }
+      .moba-proven-gear small { color: var(--muted); font-size: 11px; }
+      .moba-proven-gear .moba-proven-blocker { color: #ffccd4; }
+      .moba-proven-actions { position: sticky; inset-block-end: 0; z-index: 1; display: flex; flex-wrap: wrap;
+        justify-content: flex-end; align-items: center; gap: 6px; padding: 6px 0 1px; background: #121721; }
+      .moba-proven-actions .moba-match-move { flex: 1; min-height: 40px; }
       .moba-follow-up-gear { display: grid; gap: 5px; min-width: 0; padding: 0; margin: 0; border: 0; }
       .moba-follow-up-gear label { display: grid; grid-template-columns: auto 32px minmax(0, 1fr); align-items: center; gap: 8px; padding: 5px 7px; border: 1px solid #41434b; background: #182131; overflow-wrap: anywhere; }
       .moba-follow-up-gear label[data-picked="true"] { border-color: #a6814f; background: #2d2721; }
@@ -6675,6 +6817,7 @@ window.__ModuleLoader__.load({
       .moba-report { padding: 10px 14px 14px; }
       .moba-report-rounds, .moba-report-entries { list-style: none; padding: 0; margin: 0; }
       .moba-report-round + .moba-report-round { margin-top: 13px; }
+      .moba-report-actions { display: flex; flex-wrap: wrap; gap: 4px 9px; }
       .moba-report-turn { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; padding-bottom: 6px; border-bottom: 1px solid #675439; }
       .moba-report-turn h3 { margin: 0; color: #f2d8a8; font-size: 13px; }
       .moba-report-meta { color: #bbb7b3; font-size: 11px; }
@@ -7498,11 +7641,11 @@ window.__ModuleLoader__.load({
         function consumeReturnDraft(draft) {
           if (returnDraft === draft) returnDraft = undefined
         }
-        function openLobby(sessionId, snapshot, { selectionPresetId, followUp, inspect, relaySetup, flagId } = {}) {
+        function openLobby(sessionId, snapshot, { selectionPresetId, followUp, inspect, relaySetup, flagId, proven } = {}) {
           const workspace = ctx.workspaces.list.getSnapshot().items.find(item => item.sessionIds.includes(sessionId))
           const projection = ctx.sessions.list.getSnapshot().byId[sessionId]?.projectionValues?.agentPreset
           returnDraft = { sessionId, workspaceId: workspace?.workspaceId, presetId: snapshot?.presetId ?? projection, selectionPresetId,
-            running: snapshot?.running, continuation: snapshot?.continuation, followUp, inspect, relaySetup, flagId }
+            running: snapshot?.running, continuation: snapshot?.continuation, followUp, inspect, relaySetup, flagId, proven }
           ctx.get('layout')?.selectPanel(panelId)
         }
         ctx.effect(() => {
