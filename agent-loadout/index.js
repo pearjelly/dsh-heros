@@ -1158,19 +1158,26 @@ export async function apply(ctx) {
     }
   }
 
-  async function planTaskSession(sessionId, signal) {
+  function planTaskDetails({ header, inheritedEventCount, events }) {
+    const firstTurn = events.findIndex(event => event.type === 'turn/start' || event.type === 'user/message' && event.data.source.kind === 'user')
+    const launch = !header.isSeeded && inheritedEventCount === 0 && events.slice(0, firstTurn < 0 ? undefined : firstTurn)
+      .find(event => event.type === planTaskRecord && event.ignorable === true && event.data.owner === planTaskOwner)?.data
+    return { header, inheritedEventCount, started: firstTurn >= 0, launch }
+  }
+
+  function observePlanTask(sessionId, signal, projectionMode) {
     const query = ctx.get('sessionQuery')
     if (!query || typeof sessionId !== 'string' || !sessionId.startsWith(planTaskSessionPrefix)) return
-    const source = await query.observeSession(sessionId, { projectionMode: 'none', signal }).catch(error => {
+    return query.observeSession(sessionId, { projectionMode, signal }).catch(error => {
       if (error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
     })
+  }
+
+  async function planTaskSession(sessionId, signal) {
+    const source = await observePlanTask(sessionId, signal, 'none')
     if (!source) return
     try {
-      const { header, inheritedEventCount, events } = source
-      const firstTurn = events.findIndex(event => event.type === 'turn/start' || event.type === 'user/message' && event.data.source.kind === 'user')
-      const launch = !header.isSeeded && inheritedEventCount === 0 && events.slice(0, firstTurn < 0 ? undefined : firstTurn)
-        .find(event => event.type === planTaskRecord && event.ignorable === true && event.data.owner === planTaskOwner)?.data
-      return { header, inheritedEventCount, started: firstTurn >= 0, launch }
+      return planTaskDetails(source)
     } finally {
       source[Symbol.dispose]()
     }
@@ -3972,6 +3979,54 @@ export async function apply(ctx) {
     return { items, ...(last && inspected < matches.length && { before: `${last.createdAt}:${last.kind}:${last.id}` }) }
   }
 
+  function recordedComparisonGear(original, draft, ecosystem, art, choices) {
+    return (original?.equipmentIds ?? []).map(key => {
+      const id = currentEquipmentId(key, ecosystem)
+      const card = equipmentById.get(id) ?? ecosystem.equipment.get(id)
+      const sourceId = draft.equipmentSources[id]
+      return { id, name: original?.equipmentLabels?.[key] ?? card?.name ?? id, kind: card?.kind ?? 'featured',
+        art: art('gear', id, sourceId), sourceName: original?.equipmentSourceLabels?.[key],
+        evidence: id === 'review' && choices.length ? 'decision' : 'equipped' }
+    })
+  }
+
+  async function readLessonTaskResult({ sessionId, review }, signal) {
+    const source = await observePlanTask(sessionId, signal, 'all')
+    if (!source) return null
+    let launch
+    let observed
+    const { cwd, agentPreset: presetId } = source.header
+    try {
+      launch = planTaskDetails(source).launch
+      if (!launch?.source || !validRematchReference(launch.source)) return null
+      observed = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
+        verifyMaterialProof: false, verifyMaterialDelivery: true, includeWindows: true }, receipts)
+    } finally {
+      source[Symbol.dispose]()
+    }
+    const { windows = [], ...evidence } = observed
+    const choices = comparisonChoices(evidence)
+    const canReview = evidence.status === 'complete' && (evidence.materialDelivered || choices.length > 0)
+    const result = { source: launch.source, material: launch.material, ...evidence,
+      receiptIds: windows.map(({ endSeq }) => sessionId + ':' + endSeq), ...(canReview && { canReview }) }
+    if (review !== true || !canReview) return result
+    try {
+      const [checked, uploaded] = await Promise.all([verifiedLessonTaskSource(launch.source, signal), appearance.index()])
+      if (checked.proof.presetId !== presetId) throw new Error('本机配置已变化，无法核对这局的原出装。')
+      const { draft, candidate, ecosystem } = checked
+      const art = packageArt(uploaded, ecosystem)
+      const hero = { id: draft.presetId, name: checked.view.heroName, art: art('hero', draft.presetId) }
+      const gear = recordedComparisonGear(records.get(presetId), draft, ecosystem, art, choices)
+      const removed = historicalRemovals(candidate, presetEquipment(ecosystem, draft.presetId), ecosystem)
+      const comparison = await compare(draft, ecosystem, candidate)
+      signal?.throwIfAborted()
+      return { ...result, sessionId, hero, draft, gear, removed, comparison }
+    } catch (error) {
+      signal?.throwIfAborted()
+      return { ...result, reason: error instanceof Error ? error.message : '本机配置已变化，无法核对这局的原出装。' }
+    }
+  }
+
   async function comparisonLoadout({ kind, comparisonId, arm }, signal) {
     const store = Object.hasOwn(comparisonStores, kind) ? comparisonStores[kind] : undefined
     const record = store?.read(comparisonId)
@@ -3997,16 +4052,8 @@ export async function apply(ctx) {
     if (!saved?.presetId || (!original && saved.presetId !== heroId)) {
       return { ...result, reason: '实战中的原出装目前无法读取。' }
     }
-    const ids = original?.equipmentIds ?? []
     const draft = recordedLoadoutDraft(original, heroId, ecosystem)
-    result.gear = ids.map(key => {
-      const id = currentEquipmentId(key, ecosystem)
-      const card = equipmentById.get(id) ?? ecosystem.equipment.get(id)
-      const sourceId = draft.equipmentSources[id]
-      return { id, name: original?.equipmentLabels?.[key] ?? card?.name ?? id, kind: card?.kind ?? 'featured',
-        art: art('gear', id, sourceId), sourceName: original?.equipmentSourceLabels?.[key],
-        evidence: id === 'review' && choices.length ? 'decision' : 'equipped' }
-    })
+    result.gear = recordedComparisonGear(original, draft, ecosystem, art, choices)
     try {
       signal?.throwIfAborted()
       const verified = pinned && await verifiedPlanComparisonArm(pinned, ecosystem)
@@ -5067,9 +5114,10 @@ export async function apply(ctx) {
         const { lesson, loadout } = rematchComparisons.read(rematch.id)
         value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }) }
       }
-      if (savedTask?.launch && !savedTask.started) {
+      if (savedTask?.launch) {
         const { planName, material, task, source } = savedTask.launch
-        value.planTask = { planName, material, task, ...(source && { source }) }
+        if (!savedTask.started) value.planTask = { planName, material, task, ...(source && { source }) }
+        else if (source) value.lessonTaskResult = true
       }
       return Response.json({ ok: true, value: englishRequest(request) ? localizeDisplay(value) : value },
         { headers: { 'Cache-Control': 'no-store' } })
@@ -5309,6 +5357,8 @@ export async function apply(ctx) {
           value = await previewReviewedTask(await checkLessonTask(requestedLessonTask(selection, english), request.signal), request.signal)
         } else if (selection?.action === 'lesson-task-open') {
           value = await openReviewedTask(selection, english, request.signal, true)
+        } else if (selection?.action === 'lesson-task-result') {
+          value = await readLessonTaskResult(selection, request.signal)
         } else if (selection?.action === 'plan-share-export') {
           value = await exportBuildShare(selection)
         } else if (selection?.action === 'plan-share-preview') {

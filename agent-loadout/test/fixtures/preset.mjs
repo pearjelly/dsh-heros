@@ -134,7 +134,7 @@ export async function apply(ctx) {
       const lastUser = users.at(-1)
       const latestText = lastUser?.content[0]?.text
       const comparisonMaterial = latestText?.match(/^(?:【工作区同题对照】|\[Workspace comparison\])\n(?:选定材料 |Selected material: )"(02-lighthouse\.md|materials\/workspace-fixture\.md)"\n/u)?.[1]
-      const taskMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(materials\/reuse-fixture\.md|案件 材料\/交接 记录\.md)"\n/u)?.[1]
+      const taskMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(materials\/reuse-fixture\.md|案件 材料\/交接 记录\.md|会签 文件\.md)"\n/u)?.[1]
       const results = messages.slice(messages.lastIndexOf(lastUser) + 1).filter(message => message.role === 'tool')
       let name
       let args
