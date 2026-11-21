@@ -1901,6 +1901,7 @@ window.__ModuleLoader__.load({
       const [removeId, setRemoveId] = useState('')
       const [addId, setAddId] = useState()
       const [sourceId, setSourceId] = useState('')
+      const [gearQuery, setGearQuery] = useState('')
       const [checked, setChecked] = useState(null)
       const [working, setWorking] = useState('')
       const [error, setError] = useState('')
@@ -1925,6 +1926,13 @@ window.__ModuleLoader__.load({
         item.id === removed.id && item.sources?.some(source => source.id !== removed.sourceId)) : additions
       const requestedAddId = addId ?? (operation === 'add' ? suggested?.id : undefined)
       const added = operation !== 'remove' ? addChoices.find(item => item.id === requestedAddId) : undefined
+      const canChooseAddition = operation === 'add' || operation === 'swap' && Boolean(removed)
+      const words = gearQuery.normalize('NFKC').toLowerCase().trim().split(/\s+/u).filter(Boolean)
+      const matchingAddChoices = words.length ? addChoices.filter(item => {
+        const searchable = [item.name, item.summary, ...(item.searchTerms ?? empty)].join(' ').normalize('NFKC').toLowerCase()
+        return words.every(word => searchable.includes(word))
+      }) : addChoices
+      const visibleAddChoices = added && !matchingAddChoices.includes(added) ? [added, ...matchingAddChoices] : matchingAddChoices
       const sources = (added?.sources ?? empty).filter(source => added.id !== removed?.id || source.id !== removed.sourceId)
       const selectedSource = sources.find(source => source.id === sourceId) ?? (sources.length === 1 ? sources[0] : undefined)
       const canReview = Boolean(options && !reading && !loaded?.error && !working && !needsRefresh &&
@@ -2040,10 +2048,25 @@ window.__ModuleLoader__.load({
                 h('option', { value: '' }, t('选择要卸下的装备')),
                 equipped.map(item => h('option', { key: item.id, value: item.id },
                   [item.name, item.sourceName, item.included && t('自带装备')].filter(Boolean).join(' · '))))),
+              canChooseAddition && addChoices.length > 0 && h('label', { className: 'moba-search' }, h(Glyph, { kind: 'search', size: 15 }),
+                h('input', { type: 'search', value: gearQuery, maxLength: 96, placeholder: t('按名称或用途搜索装备'),
+                  'aria-label': t('按名称或用途搜索装备'), onChange: event => setGearQuery(event.target.value),
+                  onKeyDown: event => {
+                    if (event.key !== 'Escape' || !gearQuery && !event.nativeEvent.isComposing) return
+                    event.stopPropagation()
+                    if (event.nativeEvent.isComposing) return
+                    event.preventDefault()
+                    setGearQuery('')
+                  } })),
+              canChooseAddition && words.length > 0 && addChoices.length > 0 && !matchingAddChoices.length &&
+                h('p', { className: 'moba-lighthouse-note', role: 'status' },
+                  t(added ? '没有匹配的装备。已保留当前选择。' : '没有匹配的装备。')),
+              canChooseAddition && !addChoices.length && equipped.length > 0 &&
+                h('p', { className: 'moba-lighthouse-note', role: 'status' }, t('这次换装没有可加装的装备。')),
               operation !== 'remove' && h('label', null, t('装上的装备'), h('select', { value: added?.id ?? '',
-                disabled: operation === 'swap' && !removed, onChange: event => { setAddId(event.target.value); setSourceId('') } },
+                disabled: !canChooseAddition || !visibleAddChoices.length, onChange: event => { setAddId(event.target.value); setSourceId('') } },
                 h('option', { value: '' }, t('选择要装上的装备')),
-                addChoices.map(item => h('option', { key: item.id, value: item.id }, item === suggested
+                visibleAddChoices.map(item => h('option', { key: item.id, value: item.id }, item === suggested
                   ? item.name + ' · ' + t('练习推荐') : item.name)))),
               sources.length > 0 && h('label', null, t('装备来源'), h('select', { value: selectedSource?.id ?? '',
                 onChange: event => setSourceId(event.target.value) },
@@ -9071,6 +9094,7 @@ window.__ModuleLoader__.load({
       .moba-rematch-fields { display: grid; gap: 7px; min-width: 0; margin: 8px 0; padding: 8px; border: 1px solid var(--line); }
       .moba-rematch-fields legend { color: var(--gold); font-size: 13px; }
       .moba-rematch-fields label { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 12px; }
+      .moba-rematch-fields .moba-search { display: flex; }
       .moba-rematch-fields select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 35px; padding: 5px 7px;
         border: 1px solid #4b655f; background: #111b24; color: var(--ink); font: inherit; }
       .moba-rematch-fields p { margin: 0; }
