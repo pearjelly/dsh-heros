@@ -9,7 +9,7 @@ import { englishStrings, englishText, localizeDisplay } from './localization.js'
 import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, roles } from './catalog.js'
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
-import { openBuildPlans } from './build-plans.js'
+import { openBuildPlans, planTaskPrompt } from './build-plans.js'
 import { decodeBuildShare, encodeBuildShare } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
@@ -46,6 +46,8 @@ const route = '/api/agent-loadout'
 const englishRequest = request => request.headers.get('X-DSH-Heros-Language') === 'en'
 const validOpeningId = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id)
 const teamworkRecord = 'plugin:dsh-agent-loadout/teamwork'
+const planTaskRecord = 'plugin:dsh-agent-loadout/plan-task'
+const planTaskSessionPrefix = 'session-a076'
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
 const equipmentById = new Map(equipment.map(item => [item.id, item]))
@@ -418,6 +420,7 @@ export async function apply(ctx) {
   const planReviews = planReviewActivities(ctx)
   const compactionProofs = observeCompaction()
   const directory = join(ctx.profileContext.dir, 'agent-loadouts')
+  const planTaskOwner = createHash('sha256').update(directory).digest('hex')
   const equipmentDirectory = join(directory, 'equipment')
   const collectionDirectory = join(directory, 'collection')
   const artRoute = route + '/art'
@@ -1054,6 +1057,148 @@ export async function apply(ctx) {
         ?? presetLabels.get(heroId)?.[0] ?? heroId
       return { presetId, heroId, heroName }
     })
+  }
+
+  function recordedLoadoutDraft(original, heroId, ecosystem) {
+    const sources = original ? savedToolSources(original, ecosystem) : {}
+    return { presetId: heroId, equipmentIds: (original?.equipmentIds ?? []).map(id => currentEquipmentId(id, ecosystem)),
+      equipmentSources: Object.fromEntries(Object.entries(sources).map(([id, source]) =>
+        [currentEquipmentId(id, ecosystem), currentEquipmentId(source, ecosystem)])),
+      removedEquipmentIds: (original?.removedEquipmentIds ?? []).map(id => currentEquipmentId(id, ecosystem)) }
+  }
+
+  async function verifyRecordedLoadout(presetId, draft, ecosystem) {
+    const preset = await ctx.agentPresets.resolve(presetId)
+    const candidate = await plan(draft, ecosystem)
+    if (preset.broken || candidate.id !== presetId) throw new Error('本机配置已变化，无法核对这局的原出装。')
+    return candidate
+  }
+
+  function requestedPlanTask(selection, english) {
+    const { id, revision, workspaceId } = selection
+    if (![id, revision, workspaceId].every(value => typeof value === 'string' && value.length > 0 && value.length <= 512)) {
+      throw new Error('请选择出装方案和工作区。')
+    }
+    const fields = { id, revision, workspaceId, ...planTaskPrompt(selection, english) }
+    const hash = createHash('sha256').update(JSON.stringify(fields)).digest('hex')
+    return { ...fields, hash }
+  }
+
+  async function checkPlanTask(input, signal) {
+    const { id, revision, workspaceId, material, task, hash } = input
+    const saved = buildPlans.read(id, revision)
+    const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
+    if (!workspace) throw new Error('请选择一个现有的工作区。')
+    const digest = await digestWorkspaceMaterial(workspace.path, material, signal).catch(() => {
+      signal?.throwIfAborted()
+      throw new Error('无法读取所选材料，请核对工作区内的文件路径。')
+    })
+    const view = { id, revision, workspaceId, workspaceTitle: workspace.title, material, planName: saved.name, task }
+    const cwd = workspace.path
+    try {
+      const ecosystem = await discover()
+      const original = records.get(saved.presetId)
+      if (!original && saved.presetId !== saved.heroId) throw new Error('方案的英雄或阵容当前不可用。')
+      const draft = recordedLoadoutDraft(original, saved.heroId, ecosystem)
+      const candidate = await verifyRecordedLoadout(saved.presetId, draft, ecosystem)
+      const sources = equippedToolBindings(candidate.record).filter(item => item.profileSourceId).map(item => {
+        const entry = ecosystem.profileSources.get(item.profileSourceId)?.entry
+        return [item.profileSourceId, entry?.options?.config ?? null]
+      })
+      const identity = jsonFingerprint([draft, candidate.record?.definition.plugins ?? ecosystem.definitions.get(saved.heroId), sources])
+      if (!identity) throw new Error('无法核对当前出装的配置。')
+      const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, saved.presetId, identity])).digest('hex')
+      signal?.throwIfAborted()
+      return { view, cwd, draft, candidate, ecosystem, token }
+    } catch (error) {
+      signal?.throwIfAborted()
+      return { view, reason: error instanceof Error ? error.message : '无法核对当前出装的配置。' }
+    }
+  }
+
+  async function previewPlanTask(selection, english, signal) {
+    const checked = await checkPlanTask(requestedPlanTask(selection, english), signal)
+    const { view, reason, draft, candidate, ecosystem, token } = checked
+    if (!token) return { ...view, reason }
+    try {
+      const comparison = await compare(draft, ecosystem, candidate)
+      signal?.throwIfAborted()
+      const removed = historicalRemovals(candidate, presetEquipment(ecosystem, draft.presetId), ecosystem)
+      return { ...view, comparison, gear: comparison.after.outfit, removed, token }
+    } catch (error) {
+      signal?.throwIfAborted()
+      return { ...view, reason: error instanceof Error ? error.message : '无法核对当前出装的配置。' }
+    }
+  }
+
+  async function planTaskSession(sessionId, signal) {
+    const query = ctx.get('sessionQuery')
+    if (!query || typeof sessionId !== 'string' || !sessionId.startsWith(planTaskSessionPrefix)) return
+    const source = await query.observeSession(sessionId, { projectionMode: 'none', signal }).catch(error => {
+      if (error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
+    })
+    if (!source) return
+    try {
+      const { header, inheritedEventCount, events } = source
+      const firstTurn = events.findIndex(event => event.type === 'turn/start' || event.type === 'user/message' && event.data.source.kind === 'user')
+      const launch = !header.isSeeded && inheritedEventCount === 0 && events.slice(0, firstTurn < 0 ? undefined : firstTurn)
+        .find(event => event.type === planTaskRecord && event.ignorable === true && event.data.owner === planTaskOwner)?.data
+      return { header, inheritedEventCount, started: firstTurn >= 0, launch }
+    } finally {
+      source[Symbol.dispose]()
+    }
+  }
+
+  async function openPlanTask(selection, english, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    const { launchId, token } = selection
+    if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+      throw new Error('请先核对新任务的材料和出装。')
+    }
+    const input = requestedPlanTask(selection, english)
+    const controller = ctx.get('sessionController')
+    const registry = ctx.get('workspaceRegistry')
+    if (!controller?.create || !ctx.get('sessionQuery') || !registry) throw new Error('当前 DSH 无法从出装方案开启新任务。')
+    const sessionId = planTaskSessionPrefix + createHash('sha256').update(JSON.stringify([planTaskOwner, launchId, token, input.hash])).digest('hex').slice(0, 28)
+    if (openingMatches.has(sessionId)) return openingMatches.get(sessionId)
+    const reply = { sessionId, task: input.task, workspaceId: input.workspaceId }
+
+    const open = async () => {
+      const existing = await planTaskSession(sessionId, signal)
+      if (existing?.launch?.token === token && existing.launch.request === input.hash) return reply
+      const checked = await checkPlanTask(input, signal)
+      if (checked.token !== token) throw new Error('材料、任务或出装已变化，请重新核对。')
+      const { presetId, verifyLive: verify } = await prepare(checked.draft, checked.candidate)
+      const workspace = registry.get(input.workspaceId)
+      buildPlans.read(input.id, input.revision)
+      if (workspace?.path !== checked.cwd) throw new Error('请选择一个现有的工作区。')
+      signal?.throwIfAborted()
+      if (closed) throw new Error('配装服务正在关闭，请重试。')
+      if (existing) {
+        if (existing.launch || existing.started || existing.header.isSeeded || existing.inheritedEventCount !== 0 ||
+          existing.header.cwd !== checked.cwd || existing.header.agentPreset !== presetId) {
+          throw new Error('已有会话与核对过的出装任务不一致。')
+        }
+        if (!workspace.sessionIds.includes(sessionId)) await workspace.attachSession(sessionId)
+      } else {
+        const opened = await controller.create({ sessionId, workspaceId: input.workspaceId, agentPreset: presetId })
+        if (opened.sessionId !== sessionId) throw new Error('新对局的会话标识已变化，请重新开局。')
+      }
+      let agent = ctx.get('agents')?.get(sessionId)
+      if (!agent) {
+        const result = await controller.resolveAgent(sessionId)
+        if (!result.agent) throw new Error(result.error?.message ?? '无法打开新对局。')
+        agent = result.agent
+      }
+      if (verify) verifyLive({ presetId, sessionId })
+      const { planName, material, task } = checked.view
+      appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task })
+      updates.notify(sessionId)
+      return reply
+    }
+    const work = open().finally(() => openingMatches.delete(sessionId))
+    openingMatches.set(sessionId, work)
+    return work
   }
 
   async function shareEnvironment() {
@@ -3392,11 +3537,7 @@ export async function apply(ctx) {
       return { ...result, reason: '实战中的原出装目前无法读取。' }
     }
     const ids = original?.equipmentIds ?? []
-    const sources = original ? savedToolSources(original, ecosystem) : {}
-    const draft = { presetId: heroId, equipmentIds: ids.map(id => currentEquipmentId(id, ecosystem)),
-      equipmentSources: Object.fromEntries(Object.entries(sources).map(([id, source]) =>
-        [currentEquipmentId(id, ecosystem), currentEquipmentId(source, ecosystem)])),
-      removedEquipmentIds: (original?.removedEquipmentIds ?? []).map(id => currentEquipmentId(id, ecosystem)) }
+    const draft = recordedLoadoutDraft(original, heroId, ecosystem)
     result.gear = ids.map(key => {
       const id = currentEquipmentId(key, ecosystem)
       const card = equipmentById.get(id) ?? ecosystem.equipment.get(id)
@@ -3407,9 +3548,7 @@ export async function apply(ctx) {
     })
     try {
       signal?.throwIfAborted()
-      const preset = await ctx.agentPresets.resolve(saved.presetId)
-      const candidate = await plan(draft, ecosystem)
-      if (preset.broken || candidate.id !== saved.presetId) throw new Error('本机配置已变化，无法核对这局的原出装。')
+      const candidate = await verifyRecordedLoadout(saved.presetId, draft, ecosystem)
       const comparison = await compare(draft, ecosystem, candidate)
       return { ...result, gear: result.gear.map(item => ({ ...item, available: true })), draft, comparison }
     } catch (error) {
@@ -4393,11 +4532,15 @@ export async function apply(ctx) {
     requestBody: 'buffered',
     async fetch(request) {
       const sessionId = new URL(request.url).searchParams.get('sessionId')
-      const value = await sessionEquipment(sessionId)
+      const [value, savedTask] = await Promise.all([sessionEquipment(sessionId), planTaskSession(sessionId, request.signal).catch(() => undefined)])
       const comparison = lighthouseComparisons.member(sessionId)
       if (comparison) value.lighthouseComparison = comparison
       const workspaceComparison = workspaceComparisons.member(sessionId)
       if (workspaceComparison) value.workspaceComparison = workspaceComparison
+      if (savedTask?.launch && !savedTask.started) {
+        const { planName, material, task } = savedTask.launch
+        value.planTask = { planName, material, task }
+      }
       return Response.json({ ok: true, value: englishRequest(request) ? localizeDisplay(value) : value },
         { headers: { 'Cache-Control': 'no-store' } })
     },
@@ -4611,6 +4754,10 @@ export async function apply(ctx) {
         else if (selection?.action === 'plan-save') {
           value = await saveBuildPlan(selection)
           updates.notify()
+        } else if (selection?.action === 'plan-task-preview') {
+          value = await previewPlanTask(selection, english, request.signal)
+        } else if (selection?.action === 'plan-task-open') {
+          value = await openPlanTask(selection, english, request.signal)
         } else if (selection?.action === 'plan-share-export') {
           value = await exportBuildShare(selection)
         } else if (selection?.action === 'plan-share-preview') {

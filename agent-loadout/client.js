@@ -1212,7 +1212,7 @@ window.__ModuleLoader__.load({
     const runHistoryLabel = () => t('实战记录', '实战记录（同题对照）')
     const backToRunHistoryLabel = () => t('返回实战记录', '返回实战记录（同题对照）')
 
-    function closeComparisonOnEscape(event, close) {
+    function closeDialogOnEscape(event, close) {
       if (event.key !== 'Escape') return
       event.preventDefault()
       event.stopPropagation()
@@ -1266,27 +1266,41 @@ window.__ModuleLoader__.load({
               h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function WorkspaceComparisonForm({ form, workspaces, workspaceId, setWorkspaceId, material, setMaterial,
-      brief, defaultBrief, setBrief, busy }) {
+    function WorkspaceFileFields({ workspaces, workspaceId, setWorkspaceId, material, setMaterial, busy, workspaceField, materialField }) {
       const helpId = useId()
-      return h('form', { ref: form, className: 'moba-lighthouse-task moba-workspace-comparison-form',
-        onSubmit: event => event.preventDefault() },
-        h('label', null, t('工作区'), h('select', { value: workspaceId, disabled: busy || !workspaces.length, required: true,
-          onChange: event => setWorkspaceId(event.target.value) },
+      return h(Fragment, null,
+        h('label', null, t('工作区'), h('select', { ref: workspaceField, value: workspaceId, disabled: busy || !workspaces.length,
+          required: true, onChange: event => setWorkspaceId(event.target.value) },
         h('option', { value: '' }, t(workspaces.length ? '选择材料所在的工作区' : '请先添加工作区')),
-        workspaces.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceTitle(item))))),
+        workspaces.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceFileLabel(item, workspaces))))),
         h('label', null, t('材料文件相对路径'),
-          h('input', { required: true, disabled: busy, 'aria-describedby': helpId, value: material, maxLength: 1024,
+          h('input', { ref: materialField, required: true, disabled: busy, 'aria-describedby': helpId, value: material, maxLength: 1024,
             placeholder: 'docs/brief.md', autoComplete: 'off', spellCheck: false,
             onChange: event => { event.target.setCustomValidity(''); setMaterial(event.target.value) } })),
-        h('p', { id: helpId, className: 'moba-lighthouse-note' }, t('填入一个相对于工作区根目录的文件路径，例如 docs/brief.md。')),
+        h('p', { id: helpId, className: 'moba-lighthouse-note' }, t('填入一个相对于工作区根目录的文件路径，例如 docs/brief.md。')))
+    }
+
+    function workspaceMaterialIsRelative(path) {
+      return !/[\p{Cc}:]/u.test(path) && path.split(/[\\/]/).every(part => part && part !== '.' && part !== '..')
+    }
+
+    function WorkspaceComparisonForm({ form, brief, defaultBrief, setBrief, ...fileFields }) {
+      return h('form', { ref: form, className: 'moba-lighthouse-task moba-workspace-comparison-form',
+        onSubmit: event => event.preventDefault() },
+        h(WorkspaceFileFields, fileFields),
         h('label', null, t('两边共用的任务'),
-          h('textarea', { disabled: busy, rows: 3, value: brief, placeholder: defaultBrief, maxLength: 1200,
+          h('textarea', { disabled: fileFields.busy, rows: 3, value: brief, placeholder: defaultBrief, maxLength: 1200,
             onChange: event => setBrief(event.target.value) })))
     }
 
     function workspaceTitle(item) {
       return item.title === 'default-workspace' ? t('默认工作区') : item.title
+    }
+
+    function workspaceFileLabel(item, workspaces) {
+      const title = workspaceTitle(item)
+      const duplicate = workspaces.some(other => other.workspaceId !== item.workspaceId && workspaceTitle(other) === title)
+      return item.path && duplicate ? title + ' · ' + item.path : title
     }
 
     function RunComparison({ kind = 'lighthouse', request, comparisonId, sessionId, onClose, onVisit, putTask,
@@ -1348,9 +1362,7 @@ window.__ModuleLoader__.load({
         if (starting.current || !value) return
         if (setup && workspaceForm.current) {
           const pathInput = workspaceForm.current.querySelector('input')
-          const relative = !/[\p{Cc}:]/u.test(materialPath) && materialPath.split(/[\\/]/)
-            .every(part => part && part !== '.' && part !== '..')
-          pathInput.setCustomValidity(relative ? '' : t('请输入工作区内的相对文件路径。'))
+          pathInput.setCustomValidity(workspaceMaterialIsRelative(materialPath) ? '' : t('请输入工作区内的相对文件路径。'))
           if (!workspaceForm.current.reportValidity()) return
         }
         starting.current = true
@@ -1409,7 +1421,7 @@ window.__ModuleLoader__.load({
       return h(InstallDialog, { title: t(config.title), className: 'moba-lighthouse-comparison', busy: Boolean(launch),
         onCancel: onBack ?? onClose, initialFocus: reuseFocus.current
           ? `[data-reuse-arm="${reuseFocus.current}"]` : '.moba-lighthouse-close',
-        onKeyDown: event => closeComparisonOnEscape(event, () => { if (!starting.current) (onBack ?? onClose)() }) },
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!starting.current) (onBack ?? onClose)() }) },
         h('p', { className: 'moba-lighthouse-note' }, t(personal
           ? '用同一份材料试两种交付方式。进入各自会话后，用输入栏手动发送任务。'
           : '两边用同一段任务。进入各自会话后，用输入栏手动发送。')),
@@ -1537,7 +1549,7 @@ window.__ModuleLoader__.load({
         workspaces, initialWorkspaceId, onBack: back, onClose, onVisit, onUse })
 
       return h(InstallDialog, { title: runHistoryLabel(), className: 'moba-lighthouse-comparison moba-comparison-history',
-        onCancel: onClose, initialFocus: '.moba-comparison-history-query', onKeyDown: event => closeComparisonOnEscape(event, onClose) },
+        onCancel: onClose, initialFocus: '.moba-comparison-history-query', onKeyDown: event => closeDialogOnEscape(event, onClose) },
         h('div', { className: 'moba-history-filters' },
           h('label', { className: 'moba-search' }, h(Glyph, { kind: 'search', size: 17 }),
             h('input', { className: 'moba-comparison-history-query', type: 'search', maxLength: 200, value: query,
@@ -1590,7 +1602,7 @@ window.__ModuleLoader__.load({
       }, [request, key, kind, comparisonId, arm, language])
 
       return h(InstallDialog, { title: t('核对并复用出装'), className: 'moba-lighthouse-comparison moba-history-reuse',
-        onCancel: onBack, initialFocus: '.moba-history-reuse-back', onKeyDown: event => closeComparisonOnEscape(event, onBack) },
+        onCancel: onBack, initialFocus: '.moba-history-reuse-back', onKeyDown: event => closeDialogOnEscape(event, onBack) },
         !current && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对本回合出装…')),
         current?.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
           h('button', { type: 'button', className: 'moba-text', onClick: () => retry(attempt => attempt + 1) }, t('重试'))),
@@ -1660,6 +1672,47 @@ window.__ModuleLoader__.load({
     function WorkspaceComparisonAnchor({ workspaces, ...props }) {
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       return h(RunComparisonAnchor, { ...props, kind: 'workspace', workspaces: items })
+    }
+
+    function PlanTaskDraftAnchor({ plan, sessionId, consumeDraft, putTask }) {
+      const [notice, setNotice] = useState('')
+      const [showText, setShowText] = useState(false)
+      const field = useRef(null)
+      const notices = {
+        applied: '任务已填入输入栏。请检查后手动发送。',
+        preserved: '已保留原有草稿。你可以复制这次的任务后手动粘贴。',
+        blocked: '可以复制任务，再粘贴到会话输入栏。',
+      }
+
+      useEffect(() => {
+        const outcome = consumeDraft(sessionId)
+        if (outcome) setNotice(notices[outcome] ?? notices.blocked)
+      }, [sessionId, consumeDraft])
+      useEffect(() => {
+        if (!showText) return
+        field.current?.focus()
+        field.current?.select()
+      }, [showText])
+
+      async function copy() {
+        try {
+          await navigator.clipboard.writeText(plan.task)
+          setNotice('任务已复制。')
+        } catch {
+          setShowText(true)
+          setNotice('已选中任务文字，可以手动复制。')
+        }
+      }
+
+      return h('div', { className: 'moba-lighthouse-anchor moba-plan-task-draft' },
+        h('div', null, h('strong', null, t('出装方案新任务')), h('span', null, plan.planName),
+          plan.material && h('span', null, plan.material)),
+        h('div', null,
+          h('button', { type: 'button', className: 'moba-settlement-button',
+            onClick: () => setNotice(notices[putTask(sessionId, plan.task)] ?? notices.blocked) }, t('填入任务')),
+          h('button', { type: 'button', className: 'moba-settlement-button', onClick: copy }, t('复制任务'))),
+        notice && h('p', { role: 'status' }, t(notice)),
+        showText && h('textarea', { ref: field, readOnly: true, rows: 4, value: plan.task, 'aria-label': t('即将填入会话的任务') }))
     }
 
     function ActionEditor({ target, request, onClose, onSaved }) {
@@ -3246,9 +3299,152 @@ window.__ModuleLoader__.load({
             adapted ? t('采用换装草稿') : t('采用分享出装'), h(Glyph, { kind: 'arrow', size: 17 }))))
     }
 
-    function BuildPlans({ plans, initialMode, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport }) {
+    function SavedPlanTask({ plan, workspaces, initialWorkspaceId, request, onBack, onOpened, onOpeningChange }) {
+      const language = useLanguage()
+      const [version, setVersion] = useState(plan)
+      const [chosenWorkspaceId, setWorkspace] = useState(initialWorkspaceId ?? '')
+      const [material, setMaterial] = useState('')
+      const [brief, setBrief] = useState('')
+      const [reviewed, setReviewed] = useState(null)
+      const [working, setWorking] = useState('')
+      const [error, setError] = useState('')
+      const [needsRefresh, setNeedsRefresh] = useState(false)
+      const pending = useRef(null)
+      const launch = useRef(null)
+      const workspaceField = useRef(null)
+      const materialField = useRef(null)
+      const briefField = useRef(null)
+      const reviewHeading = useRef(null)
+      const workspace = workspaces.find(item => item.workspaceId === chosenWorkspaceId)
+      const preview = reviewed?.value
+
+      useEffect(() => () => pending.current?.abort(), [])
+      useEffect(() => {
+        if (preview) reviewHeading.current?.focus()
+        else (workspaceField.current?.disabled ? materialField.current : workspaceField.current)?.focus()
+      }, [preview])
+
+      function editTask() {
+        if (pending.current) return
+        setReviewed(null)
+        setError('')
+      }
+
+      async function review(refresh = false) {
+        if (!workspace || !brief.trim() || pending.current) return
+        const abort = pending.current = new AbortController()
+        setWorking('review')
+        setError('')
+        try {
+          let selected = version
+          if (refresh) {
+            const latest = await request('list', null, abort.signal, language)
+            if (abort.signal.aborted) return
+            selected = latest.plans.find(item => item.id === plan.id)
+            if (!selected) throw new Error(t('这份出装方案已不可用。'))
+            setVersion(selected)
+          }
+          const input = { id: selected.id, revision: selected.revision, workspaceId: workspace.workspaceId,
+            material: material.trim(), task: brief.trim() }
+          const action = 'plan-task-preview'
+          const value = await request(action, { action, ...input }, abort.signal, language)
+          if (!abort.signal.aborted) {
+            setReviewed({ value, input, language })
+            setNeedsRefresh(false)
+          }
+        } catch (reason) {
+          if (!abort.signal.aborted) {
+            setError(reason.message)
+            setNeedsRefresh(true)
+          }
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setWorking('')
+        }
+      }
+
+      function submit(event) {
+        event.preventDefault()
+        materialField.current.setCustomValidity(workspaceMaterialIsRelative(material.trim()) ? '' : t('请输入工作区内的相对文件路径。'))
+        briefField.current.setCustomValidity(brief.trim() ? '' : t('请填写新任务说明。'))
+        if (event.currentTarget.reportValidity()) void review(needsRefresh)
+      }
+
+      async function open() {
+        if (pending.current || !preview?.token || needsRefresh) return
+        const abort = pending.current = new AbortController()
+        const { input, language: reviewLanguage } = reviewed
+        const key = JSON.stringify([input, reviewLanguage])
+        if (launch.current?.key !== key) {
+          const bytes = crypto.getRandomValues(new Uint8Array(16))
+          launch.current = { key, id: Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('') }
+        }
+        setWorking('open')
+        setError('')
+        onOpeningChange(true)
+        const action = 'plan-task-open'
+        let result
+        try {
+          result = await request(action, { action, ...input, token: preview.token, launchId: launch.current.id }, abort.signal, reviewLanguage)
+        } catch (reason) {
+          if (!abort.signal.aborted) {
+            setError(reason.message)
+            setNeedsRefresh(true)
+          }
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) {
+            onOpeningChange(false)
+            setWorking('')
+          }
+        }
+        if (!abort.signal.aborted && result) onOpened(result)
+      }
+
+      const messages = h(Fragment, null,
+        error && h('p', { className: 'moba-alert', role: 'alert' }, error),
+        working && h('p', { className: 'moba-empty', role: 'status' }, t(working === 'review' ? '正在核对材料和出装…' : '正在准备对局…')))
+
+      return !preview ? h('form', { className: 'moba-plan-form moba-plan-task', onSubmit: submit },
+        h('div', { className: 'moba-plan-fields' },
+          h('p', { className: 'moba-plan-note' }, version.name),
+          h(WorkspaceFileFields, { workspaces, workspaceId: workspace?.workspaceId ?? '', setWorkspaceId: setWorkspace,
+            material, setMaterial, workspaceField, materialField, busy: Boolean(working) }),
+          h('label', null, t('新任务说明'),
+            h('textarea', { ref: briefField, required: true, disabled: Boolean(working), value: brief, rows: 4, maxLength: 1200,
+              onChange: event => { event.target.setCustomValidity(''); setBrief(event.target.value) } })), messages),
+        h('footer', { className: 'moba-gallery-footer' },
+          h('button', { className: 'moba-roster-open', type: 'button', onClick: onBack }, t('返回方案库')),
+          h('button', { className: 'moba-start', type: 'submit', disabled: Boolean(working) || !workspace },
+            t('核对材料和出装'), h(Glyph, { kind: 'arrow', size: 16 }))))
+        : h('section', { className: 'moba-plan-form moba-plan-task', onKeyDown: event => closeDialogOnEscape(event, editTask) },
+          h('div', { className: 'moba-plan-fields' },
+            h('h3', { ref: reviewHeading, tabIndex: -1 }, t('核对材料和出装')),
+            h(InstallFacts, { facts: [
+              [t('出装方案'), preview.planName ?? version.name],
+              [t('工作区'), workspace ? workspaceFileLabel(workspace, workspaces) : preview.workspaceTitle],
+              [t('材料文件相对路径'), preview.material],
+            ] }),
+            (preview.gear?.length || preview.token) && h(PlanEquipment, {
+              items: preview.gear ?? plan.items, removed: preview.removed ?? plan.removed }),
+            h(SharedPlanCapabilities, { comparison: preview.comparison }),
+            preview.task && h('label', null, t('即将填入会话的任务'), h('textarea', { readOnly: true, rows: 5, value: preview.task })),
+            h('p', { className: 'moba-plan-note' }, t('确认后打开新会话。检查输入栏的任务，再手动发送。')),
+            preview.reason && h('p', { className: 'moba-alert', role: 'status' }, preview.reason), messages),
+          h('footer', { className: 'moba-gallery-footer' },
+            h('button', { className: 'moba-roster-open', type: 'button', disabled: Boolean(working), onClick: editTask }, t('返回编辑任务')),
+            (needsRefresh || !preview.token) && h('button', { className: 'moba-roster-open', type: 'button', disabled: Boolean(working) || !workspace,
+              onClick: () => review(true) }, t('重新核对材料和出装')),
+            h('button', { className: 'moba-start', type: 'button', disabled: Boolean(working) || needsRefresh || !preview.token,
+              onClick: open }, t('确认并打开会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
+    function BuildPlans({ plans, initialMode, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport,
+      workspaces, workspaceId, onOpenTask }) {
       const [editor, setEditor] = useState(initialMode === 'create' ? { mode: 'create' } : null)
       const [sharing, setSharing] = useState(null)
+      const [taskPlan, setTaskPlan] = useState(null)
+      const [taskOpening, setTaskOpening] = useState(false)
       const [name, setName] = useState('')
       const [note, setNote] = useState('')
       const [query, setQuery] = useState('')
@@ -3257,9 +3453,11 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const dialog = useRef(null)
       const saving = useRef(false)
+      const openingTask = useRef(false)
       const focus = useRef(null)
       const shareButton = useRef(null)
       const importButton = useRef(null)
+      const taskButton = useRef(null)
       const title = useId()
       const group = useId()
       const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
@@ -3283,7 +3481,7 @@ window.__ModuleLoader__.load({
       }
 
       function close() {
-        if (saving.current) return
+        if (saving.current || openingTask.current) return
         dialog.current.close()
         onClose()
       }
@@ -3292,6 +3490,17 @@ window.__ModuleLoader__.load({
         const button = sharing.mode === 'import' ? importButton : shareButton
         setSharing(null)
         requestAnimationFrame(() => button.current?.focus())
+      }
+
+      function taskOpeningChanged(value) {
+        openingTask.current = value
+        setTaskOpening(value)
+      }
+
+      function closeTask() {
+        if (openingTask.current) return
+        setTaskPlan(null)
+        requestAnimationFrame(() => taskButton.current?.focus())
       }
 
       async function submit(event) {
@@ -3323,23 +3532,27 @@ window.__ModuleLoader__.load({
       const subject = mode === 'create' ? current.hero?.name : editor?.target?.name
       const cannotSaveDraft = (mode === 'create' || mode === 'replace') && !canSave
       return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
-        'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing), 'aria-labelledby': title,
-        onCancel: event => { event.preventDefault(); if (sharing) closeSharing(); else close() },
+        'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan), 'aria-labelledby': title,
+        onCancel: event => { event.preventDefault(); if (taskPlan) closeTask(); else if (sharing) closeSharing(); else close() },
         onKeyDown: event => {
           if (event.key !== 'Escape') return
           event.preventDefault()
           event.stopPropagation()
-          if (sharing) closeSharing()
+          if (taskPlan) closeTask()
+          else if (sharing) closeSharing()
           else close()
         } },
         h('header', { className: 'moba-gallery-heading' },
-          h('h2', { id: title }, sharing?.mode === 'export' ? t('分享出装方案') : sharing?.mode === 'import' ? t('导入分享码')
+          h('h2', { id: title }, taskPlan ? t('用这套出装开新任务')
+            : sharing?.mode === 'export' ? t('分享出装方案') : sharing?.mode === 'import' ? t('导入分享码')
             : mode === 'create' ? t('保存出装方案') : mode === 'edit' ? t('编辑方案')
             : mode === 'replace' ? t('更新方案出装')
             : mode === 'remove' ? t('移除方案') : t('出装方案')),
-          h('button', { className: 'moba-icon-action', type: 'button', 'aria-label': t('关闭出装方案'), disabled: busy, onClick: close },
+          h('button', { className: 'moba-icon-action', type: 'button', 'aria-label': t('关闭出装方案'), disabled: busy || taskOpening, onClick: close },
             h(Glyph, { kind: 'close' }))),
-        sharing?.mode === 'export' ? h(ExportPlanShare, { plan: sharing.plan, request, onBack: closeSharing })
+        taskPlan ? h(SavedPlanTask, { plan: taskPlan, workspaces, initialWorkspaceId: workspaceId, request,
+          onBack: closeTask, onOpeningChange: taskOpeningChanged, onOpened: result => { close(); onOpenTask(result) } })
+          : sharing?.mode === 'export' ? h(ExportPlanShare, { plan: sharing.plan, request, onBack: closeSharing })
           : sharing?.mode === 'import' ? h(ImportPlanShare, { request, hasOpening, onBack: closeSharing,
             onImport: value => { close(); onImport(value) } })
           : editor ? h('form', { className: 'moba-plan-form', onSubmit: submit },
@@ -3385,6 +3598,8 @@ window.__ModuleLoader__.load({
                   plan.broken && h('p', { className: 'moba-alert', role: 'status' }, plan.broken),
                   (plan.items.length || plan.removed.length || !plan.broken) &&
                     h(PlanEquipment, { items: plan.items, removed: plan.removed }),
+                  h('button', { className: 'moba-start moba-plan-task-start', type: 'button', ref: taskButton, disabled: Boolean(plan.broken),
+                    onClick: () => setTaskPlan(plan) }, t('用这套出装开新任务'), h(Glyph, { kind: 'arrow', size: 16 })),
                   h('div', { className: 'moba-plan-manage' },
                     h('button', { className: 'moba-text', type: 'button', ref: shareButton,
                       onClick: () => setSharing({ mode: 'export', plan }) }, t('分享方案')),
@@ -4007,7 +4222,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-text', disabled: pending, onClick: onReturn }, t('回原对局'))))
     }
 
-    function Lobby({ request, workspaces, open, manage, openSource, openComparisonSession, getReturnDraft, consumeReturnDraft }) {
+    function Lobby({ request, workspaces, open, manage, openSource, openDraftSession, getReturnDraft, consumeReturnDraft }) {
       const language = useLanguage()
       const workspaceList = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [returning] = useState(getReturnDraft)
@@ -4715,7 +4930,7 @@ window.__ModuleLoader__.load({
             requestAnimationFrame(() => lighthouseCompareButton.current?.focus())
           }, onVisit: (sessionId, task) => {
             setLighthouseCompareOpen(false)
-            openComparisonSession(sessionId, task)
+            openDraftSession(sessionId, task)
           } }),
           playbooksOpen && h(FieldPlaybooks, { request, draftKey: canCompare ? draftKey : '', sourceSessionId: returning?.sessionId,
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
@@ -4727,7 +4942,7 @@ window.__ModuleLoader__.load({
               requestAnimationFrame(() => workspaceCompareButton.current?.focus())
             }, onVisit: (sessionId, task) => {
               setWorkspaceCompareOpen(false)
-              openComparisonSession(sessionId, task)
+              openDraftSession(sessionId, task)
             } }),
           runHistory && h(ComparisonHistory, { request, workspaces: comparableWorkspaces, initialWorkspaceId: workspace?.workspaceId,
             initialKind: runHistory, onClose: closeRunHistory, onUse: adoptComparisonLoadout, onSource: sessionId => {
@@ -4735,7 +4950,7 @@ window.__ModuleLoader__.load({
               openSource(sessionId)
             }, onVisit: (sessionId, task) => {
               setRunHistory('')
-              openComparisonSession(sessionId, task)
+              openDraftSession(sessionId, task)
             } }),
           error && h('div', { className: 'moba-alert', role: 'alert' }, error,
             !data && h('button', { type: 'button', onClick: () => {
@@ -4799,6 +5014,8 @@ window.__ModuleLoader__.load({
             } }),
           journalOpen && h(QuestJournal, { request, onClose: () => setJournalOpen(false), onOpenMatch: openSource }),
           data && planMode && h(BuildPlans, { initialMode: planMode, request, draft: loadoutDraft(), canSave: canCompare,
+            workspaces: comparableWorkspaces, workspaceId: workspace?.workspaceId,
+            onOpenTask: ({ sessionId, task }) => openDraftSession(sessionId, task),
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
             current: { hero: stagePreset, items: selections, removed: removedLabels },
             plans: plans.map(plan => {
@@ -6407,8 +6624,8 @@ window.__ModuleLoader__.load({
         }))
     }
 
-    function MatchEquipment({ sessionId, request, openLobby, openContinuation, openComparisonSession,
-      consumeComparisonDraft, putComparisonTask, send, workspaces }) {
+    function MatchEquipment({ sessionId, request, openLobby, openContinuation, openDraftSession,
+      consumeTaskDraft, putTaskDraft, send, workspaces }) {
       const language = useLanguage()
       const id = useId()
       const anchor = '--moba-match-' + id.replace(/[^a-zA-Z0-9-]/g, '')
@@ -6714,13 +6931,14 @@ window.__ModuleLoader__.load({
         h('span', null, snapshot.heroName))
       return h(Fragment, null,
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
+        snapshot?.planTask && h(PlanTaskDraftAnchor, { plan: snapshot.planTask, sessionId, consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
         snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
-          kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openComparisonSession,
-          consumeDraft: consumeComparisonDraft, putTask: putComparisonTask, hasTurn: Boolean(snapshot.running || receipt), onUse: reuseComparisonLoadout,
+          kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openDraftSession,
+          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), onUse: reuseComparisonLoadout,
         }),
         snapshot?.workspaceComparison && h(WorkspaceComparisonAnchor, {
-          member: snapshot.workspaceComparison, sessionId, request, onVisit: openComparisonSession,
-          consumeDraft: consumeComparisonDraft, putTask: putComparisonTask, hasTurn: Boolean(snapshot.running || receipt), workspaces, onUse: reuseComparisonLoadout,
+          member: snapshot.workspaceComparison, sessionId, request, onVisit: openDraftSession,
+          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), workspaces, onUse: reuseComparisonLoadout,
         }),
         showReceipt && h(SettlementRibbon, { key: receipt.id, receipt, quest: questReady, snapshot, controls: id,
           onDetails: event => show(event, settlementAction), onQuest: event => show(event, growthAction),
@@ -7669,8 +7887,14 @@ window.__ModuleLoader__.load({
       .moba-plan-save-preview { display: grid; gap: 6px; margin-bottom: 2px; }
       .moba-plan-save-preview strong { font-size: 13px; color: var(--gold); overflow-wrap: anywhere; }
       .moba-plan-fields label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
-      .moba-plan-fields input, .moba-plan-fields textarea { width: 100%; min-width: 0; min-height: 40px; padding: 8px; border: 1px solid #515666; background: var(--deep); color: var(--ink); font: inherit; font-size: 14px; }
+      .moba-plan-fields input, .moba-plan-fields textarea, .moba-plan-task select { width: 100%; min-width: 0; min-height: 40px; padding: 8px; border: 1px solid #515666; background: var(--deep); color: var(--ink); font: inherit; font-size: 14px; }
       .moba-plan-fields textarea { resize: vertical; }
+      .moba-plan-task-start { justify-self: start; max-width: 100%; white-space: normal; }
+      .moba-plan-task h3 { margin: 0; color: var(--gold); font-size: 15px; }
+      .moba-plan-task dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 9px; margin: 0; font-size: 12px; }
+      .moba-plan-task dt { color: var(--muted); }
+      .moba-plan-task dd { margin: 0; overflow-wrap: anywhere; }
+      .moba-plan-task .moba-lighthouse-note { margin: 0; }
       .moba-plan-fields .moba-share-code { font: 12px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
       .moba-share-fields > h3, .moba-share-review > h3, .moba-share-section h3 { margin: 0; overflow-wrap: anywhere; }
       .moba-share-fields > h3, .moba-share-review > h3 { color: var(--gold); font-size: 17px; }
@@ -7929,6 +8153,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor div { display: flex; flex-wrap: wrap; gap: 1px 7px; overflow-wrap: anywhere; }
       .moba-lighthouse-anchor span { color: #b8ded4; }
       .moba-lighthouse-anchor p { grid-column: 1 / -1; margin: 0; color: #ccdcd8; font-size: 11px; }
+      .moba-plan-task-draft textarea { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 5px; resize: vertical;
+        border: 1px solid #607d78; background: #111b24; color: inherit; font: inherit; }
       .moba-starter-dialog h2 { margin: 0 0 12px; font-size: 22px; }
       .moba-starter-brief { display: grid; grid-template-columns: 45px minmax(0, 1fr); align-items: center; gap: 9px;
         padding: 8px; background: #16252b; border: 1px solid #4b655f; }
@@ -8279,7 +8505,7 @@ window.__ModuleLoader__.load({
           // The host can still expose the source-language UI while reconnecting.
         }
         let returnDraft
-        let comparisonDraft
+        let sessionTaskDraft
         function consumeReturnDraft(draft) {
           if (returnDraft === draft) returnDraft = undefined
         }
@@ -8291,7 +8517,7 @@ window.__ModuleLoader__.load({
             running: snapshot?.running, continuation: snapshot?.continuation, followUp, inspect, relaySetup, flagId, proven }
           ctx.get('layout')?.selectPanel(panelId)
         }
-        function putComparisonTask(sessionId, task) {
+        function putTaskDraft(sessionId, task) {
           const binding = ctx.sessions.binding(sessionId)
           const input = ctx.get('conversation')?.input
           if (!binding || typeof input?.requestDraftInitialization !== 'function') return 'blocked'
@@ -8301,15 +8527,15 @@ window.__ModuleLoader__.load({
             return 'blocked'
           }
         }
-        function openComparisonSession(sessionId, task) {
-          comparisonDraft = task ? { sessionId, task } : undefined
+        function openDraftSession(sessionId, task) {
+          sessionTaskDraft = task ? { sessionId, task } : undefined
           ctx.uiWorkspace.openSession(sessionId)
         }
-        function consumeComparisonDraft(sessionId) {
-          if (comparisonDraft?.sessionId !== sessionId) return
-          const { task } = comparisonDraft
-          comparisonDraft = undefined
-          return putComparisonTask(sessionId, task)
+        function consumeTaskDraft(sessionId) {
+          if (sessionTaskDraft?.sessionId !== sessionId) return
+          const { task } = sessionTaskDraft
+          sessionTaskDraft = undefined
+          return putTaskDraft(sessionId, task)
         }
         ctx.effect(() => {
           const sheet = document.createElement('style')
@@ -8371,8 +8597,8 @@ window.__ModuleLoader__.load({
           { name: 'conversation.input.dock', id: panelId, order: 5 },
           ({ sessionId, session }) => {
             const id = sessionId ?? session?.sessionId
-            return id ? h(MatchEquipment, { key: id, sessionId: id, request, openLobby, send, openComparisonSession,
-              consumeComparisonDraft, putComparisonTask, workspaces: ctx.workspaces.list,
+            return id ? h(MatchEquipment, { key: id, sessionId: id, request, openLobby, send, openDraftSession,
+              consumeTaskDraft, putTaskDraft, workspaces: ctx.workspaces.list,
               openContinuation: next => ctx.uiWorkspace.openSession(next) }) : null
           }))
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
@@ -8380,7 +8606,7 @@ window.__ModuleLoader__.load({
           ({ sessionId }) => sessionId ? h(InteractionReturn, { sessionId, status: ctx.uiSession.sessionStatus, openLobby }) : null))
         ctx.slots.inject('main', () => ctx.slots.register(
           { name: 'main', key: panelId, inject: () => ({
-            request, workspaces: ctx.workspaces.list, manage, openSource: id => ctx.uiWorkspace.openSession(id), openComparisonSession,
+            request, workspaces: ctx.workspaces.list, manage, openSource: id => ctx.uiWorkspace.openSession(id), openDraftSession,
             getReturnDraft: () => returnDraft, consumeReturnDraft,
             async open(workspaceId, { presetId: agentPreset, verifyLive }, matchMode, sourceSessionId) {
               if (!matchMode && !verifyLive) return ctx.uiWorkspace.openWorkspace(workspaceId, undefined, { agentPreset })

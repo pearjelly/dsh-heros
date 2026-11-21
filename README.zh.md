@@ -15,13 +15,19 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.75.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.76.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 桌面版用应用随附的 CLI，把 `--profile web` 改为 `--profile desktop`，安装后退出并重新打开应用。如果已安装早期版本，先从同一 Profile 移除 `dsh-agent-loadout` 再安装。发布包沿用这个内部名称，便于兼容原有阵容。
 
 从 DSH 侧栏打开 **深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
+
+## 用已保存的方案做新任务
+
+1. 在 **出装方案** 里选中方案，点 **用这套出装开新任务**。选一个已有工作区，填写一份材料相对于工作区根目录的路径，并描述这次要做的任务。
+2. 点 **核对材料和出装**，查看本次会话的英雄、装备与来源。选 **确认并打开会话** 后，在新的 DSH 会话看过准备好的任务，再手动发送。
+3. 使用复核后交付的打法时，可先看草稿，在 DSH 提问卡上确认交付或退回修改。成功交付后，在本次会话打开实际附件。
 
 ## 找回并保存跑通的打法
 

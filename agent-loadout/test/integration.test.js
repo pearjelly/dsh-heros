@@ -1690,6 +1690,161 @@ test('workspace comparison uses the same material and records real review choice
   }
 })
 
+test('saved Review loadout opens a manually submitted task on new workspace material', { timeout: 75_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-plan-task-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const workspacePath = join(directory, 'selected-workspace')
+  const otherPath = join(directory, 'other-workspace')
+  const material = 'materials/reuse-fixture.md'
+  const alternate = 'materials/alternate.md'
+  const content = '# Evidence for a fresh handoff\n\nPrivate fixture body.\n'
+  const task = 'Check the selected document and prepare its handoff.'
+  const launchId = 'a'.repeat(32)
+  let host
+  try {
+    for (const path of [workspacePath, otherPath]) {
+      await mkdir(join(path, 'materials'), { recursive: true })
+      await writeFile(join(path, material), content)
+    }
+    await writeFile(join(workspacePath, alternate), content)
+    await symlink(join(otherPath, material), join(workspacePath, 'materials/linked.md'))
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, payload, status) => (await host.request(endpoint, { action, ...payload }, status)).value
+    const workspace = '/api/loadout-fixture-session'
+    const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
+    const membership = id => host.request(workspace, { inspectWorkspaceId: id })
+    const catalog = async () => {
+      const { plans, saved, presets } = (await host.request(endpoint)).value
+      return { plans, saved: saved.map(item => item.id), xp: presets.find(item => item.id === 'standard').rank?.xp ?? 0 }
+    }
+    const previewTask = (fields, status) => invoke('plan-task-preview', fields, status)
+    const openTask = (fields, token, id = launchId, status) => invoke('plan-task-open', { ...fields, token, launchId: id }, status)
+
+    const selected = await host.request(workspace, { presetId: 'standard', workspacePath })
+    const other = await host.request(workspace, { presetId: 'standard', workspacePath: otherPath })
+    const originalWorkspace = await membership(selected.workspaceId)
+    assert.deepEqual(originalWorkspace.sessionIds, [selected.sessionId])
+    const originalOther = await membership(other.workspaceId)
+    const playbook = await invoke('field-playbook-preview', { id: 'review' })
+    const originalPlan = await invoke('plan-save', { name: 'Workspace review', draft: playbook.draft })
+    const originalFields = { id: originalPlan.id, revision: originalPlan.revision, workspaceId: selected.workspaceId, material, task }
+    const firstPreview = await previewTask(originalFields)
+    const plan = await invoke('plan-save', { id: originalPlan.id, revision: originalPlan.revision, name: 'Workspace review v2' })
+    assert.notEqual(plan.revision, originalPlan.revision)
+    assert.equal(plan.presetId, originalPlan.presetId)
+    await openTask(originalFields, firstPreview.token, launchId, 422)
+    await previewTask(originalFields, 422)
+
+    const fields = { ...originalFields, revision: plan.revision }
+    const before = await catalog()
+    const preview = await previewTask(fields)
+    assert.equal(preview.id, plan.id)
+    assert.equal(preview.revision, plan.revision)
+    assert.equal(preview.planName, plan.name)
+    assert.equal(preview.workspaceId, selected.workspaceId)
+    assert.equal(preview.workspaceTitle, 'Fixture workspace')
+    assert.equal(preview.material, material)
+    assert.match(preview.task, /^【出装任务】\n/u)
+    assert.ok(preview.task.split('\n')[1].includes(JSON.stringify(material)))
+    assert.ok(preview.task.includes(task))
+    assert.ok(!JSON.stringify(preview).includes(workspacePath))
+    assert.ok(!JSON.stringify(preview).includes('Private fixture body.'))
+    assert.ok(preview.comparison.gained.some(item => item.id === 'review'))
+    assert.ok(preview.token)
+    const english = await host.requestRaw(endpoint, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+      body: JSON.stringify({ action: 'plan-task-preview', ...fields }),
+    })
+    assert.equal(english.status, 200)
+    assert.match((await english.json()).value.task, /^\[Loadout task\]\n/u)
+    for (const unusable of ['../other-workspace/materials/reuse-fixture.md', join(workspacePath, material), 'materials/linked.md', 'materials', 'missing.md']) {
+      await previewTask({ ...fields, material: unusable }, 422)
+    }
+    await previewTask({ ...fields, workspaceId: randomUUID() }, 422)
+    await openTask(fields, preview.token + 'x', launchId, 422)
+    await openTask({ ...fields, task: task + ' Changed.' }, preview.token, launchId, 422)
+    await openTask({ ...fields, material: alternate }, preview.token, launchId, 422)
+    await openTask({ ...fields, workspaceId: other.workspaceId }, preview.token, launchId, 422)
+    await appendFile(join(workspacePath, material), '\nThe selected file changed after preview.\n')
+    await openTask(fields, preview.token, launchId, 422)
+    await writeFile(join(workspacePath, material), content)
+    assert.deepEqual(await catalog(), before)
+    assert.deepEqual(await membership(selected.workspaceId), originalWorkspace)
+    assert.deepEqual(await membership(other.workspaceId), originalOther)
+
+    const fresh = await previewTask(fields)
+    const [opened, retried] = await Promise.all([openTask(fields, fresh.token), openTask(fields, fresh.token)])
+    assert.deepEqual(opened, retried)
+    assert.equal(opened.workspaceId, selected.workspaceId)
+    assert.equal(opened.task, fresh.task)
+    assert.notEqual(opened.sessionId, selected.sessionId)
+    const existing = await history(opened.sessionId)
+    const resolved = await realpath(workspacePath)
+    assert.equal(existing.workspaceId, selected.workspaceId)
+    assert.equal(existing.workspacePath, resolved)
+    assert.equal(existing.presetId, plan.presetId)
+    assert.equal(existing.inherited, 0)
+    assert.ok(!existing.events.some(item => item.type === 'turn/start' || item.type === 'user/message'))
+    assert.deepEqual(new Set((await membership(selected.workspaceId)).sessionIds), new Set([selected.sessionId, opened.sessionId]))
+    assert.deepEqual(await catalog(), before)
+    await invoke('verify-live', { sessionId: opened.sessionId, presetId: plan.presetId })
+    assert.deepEqual((await equipmentIn(host, opened.sessionId)).planTask, { planName: plan.name, material, task: fresh.task })
+
+    const turn = host.request(turnEndpoint, { sessionId: opened.sessionId, text: opened.task, requestId: opened.requestId })
+    turn.catch(() => {})
+    const questionPath = '/api/loadout-fixture-handoff-question'
+    let question
+    try {
+      for (let i = 0; i < 100 && !question; i++) {
+        question = (await host.request(questionPath, { sessionId: opened.sessionId })).question
+        if (!question) await delay(40)
+      }
+      assert.deepEqual(question?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
+      assert.ok(!(await history(opened.sessionId)).events.some(item => item.type === 'deliverables/presented'))
+    } finally {
+      if (question) await host.request(questionPath, { sessionId: opened.sessionId, choice: 'Confirm handoff' })
+      await turn
+    }
+    const played = await history(opened.sessionId)
+    const sent = played.events.find(item => item.type === 'user/message' && item.data.source.kind === 'user')
+    assert.equal(sent.data.content[0].text, fresh.task)
+    assert.deepEqual(played.events.filter(item => item.type === 'tool/call').map(item => item.data.name), ['ask_user_question', 'present'])
+    const delivery = played.events.find(item => item.type === 'deliverables/presented')
+    assert.equal(delivery.data.files[0].path, join(resolved, material))
+    assert.equal(await readFile(join(workspacePath, material), 'utf8'), content)
+    assert.equal((await equipmentIn(host, opened.sessionId)).planTask, undefined)
+    assert.deepEqual((await catalog()).plans, before.plans)
+
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual(await openTask(fields, fresh.token), opened)
+    assert.deepEqual(new Set((await membership(selected.workspaceId)).sessionIds), new Set([selected.sessionId, opened.sessionId]))
+    const restored = await history(opened.sessionId)
+    assert.equal(restored.presetId, plan.presetId)
+    assert.equal(restored.events.filter(item => item.type === 'turn/start').length, 1)
+    assert.deepEqual((await catalog()).plans, before.plans)
+
+    const standard = await invoke('plan-save', { name: 'Standard without extra gear', draft: { presetId: 'standard', equipmentIds: [] } })
+    assert.equal(standard.presetId, 'standard')
+    const standardFields = { ...fields, id: standard.id, revision: standard.revision, material: alternate }
+    const standardPreview = await previewTask(standardFields)
+    assert.ok(standardPreview.token)
+    const standardTask = await openTask(standardFields, standardPreview.token, 'b'.repeat(32))
+    assert.notEqual(standardTask.sessionId, opened.sessionId)
+    assert.equal(standardTask.task, standardPreview.task)
+    const standardHistory = await history(standardTask.sessionId)
+    assert.equal(standardHistory.presetId, 'standard')
+    assert.equal(standardHistory.workspaceId, selected.workspaceId)
+    assert.ok(!standardHistory.events.some(item => item.type === 'turn/start' || item.type === 'user/message'))
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('shared plans resolve in a fresh profile without saving or copying private equipment', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-share-'))
   const root = await realpath(directory)

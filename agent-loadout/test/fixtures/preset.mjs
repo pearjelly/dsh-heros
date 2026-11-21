@@ -172,8 +172,11 @@ export async function apply(ctx) {
           : { files: [{ path: '02-lighthouse.md', description: 'Lighthouse supply card' }] }
       } else if (latestText === 'Hand off the workspace file handoff.md in this conversation.' ||
         ((latestText?.startsWith('【工作区同题对照】') || latestText?.startsWith('[Workspace comparison]')) &&
-          latestText.includes('materials/workspace-fixture.md'))) {
-        const file = latestText.startsWith('Hand off') ? 'handoff.md' : 'materials/workspace-fixture.md'
+          latestText.includes('materials/workspace-fixture.md')) ||
+        ((latestText?.startsWith('【出装任务】') || latestText?.startsWith('[Loadout task]')) &&
+          latestText.includes('materials/reuse-fixture.md'))) {
+        const file = latestText.includes('materials/reuse-fixture.md') ? 'materials/reuse-fixture.md'
+          : latestText.startsWith('Hand off') ? 'handoff.md' : 'materials/workspace-fixture.md'
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')
         const review = systemText.includes('whether to proceed with the handoff or revise the draft')
@@ -423,7 +426,12 @@ export async function apply(ctx) {
     methods: ['POST'],
     requestBody: 'buffered',
     async fetch(request) {
-      const { presetId, sessionOnly, runtimePlugin, workspacePath, initialPresetId } = await request.json()
+      const { presetId, sessionOnly, runtimePlugin, workspacePath, initialPresetId, inspectWorkspaceId } = await request.json()
+      if (inspectWorkspaceId !== undefined) {
+        const existing = ctx.workspaceRegistry.get(inspectWorkspaceId)
+        if (!existing) return Response.json({ error: 'No fixture workspace' }, { status: 404 })
+        return Response.json({ sessionIds: existing.sessionIds })
+      }
       const workspace = workspacePath && await ctx.workspaceRegistry.create(workspacePath, 'Fixture workspace')
       const session = await ctx.sessionController.create({
         agentPreset: initialPresetId ?? presetId, workspaceId: workspace?.id,

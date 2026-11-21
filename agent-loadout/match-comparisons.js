@@ -76,7 +76,7 @@ export async function openMatchComparisons(directory, name, arms, saveEntry, war
     writeArm: (id, arm, info) => saveEntry(armDirectory(id), arm, info) }
 }
 
-function materialPath(value) {
+export function workspaceMaterialPath(value) {
   if (typeof value !== 'string' || !value.trim() || value.length > 1024 || /[\p{Cc}:]/u.test(value)) return
   const normalized = value.trim().replaceAll('\\', '/')
   if (normalized.split('/').some(part => !part || part === '.' || part === '..')) return
@@ -89,7 +89,7 @@ export function workspaceComparisonDraft(english) {
 }
 
 export function workspaceComparisonTask({ material: value, task }, english) {
-  const material = materialPath(value)
+  const material = workspaceMaterialPath(value)
   if (!material) throw new Error('请选择工作区内的普通文件，填写相对路径。')
   if (task !== undefined && (typeof task !== 'string' || task.length > 1200)) throw new Error('任务说明最多 1200 字。')
   const brief = task?.trim() || workspaceComparisonDraft(english)
@@ -101,7 +101,7 @@ export function workspaceComparisonTask({ material: value, task }, english) {
 
 export function validWorkspaceComparison(record) {
   return typeof record.workspaceId === 'string' && Boolean(record.workspaceId) && typeof record.cwd === 'string' &&
-    isAbsolute(record.cwd) && materialPath(record.material) === record.material && /^[a-f0-9]{64}$/.test(record.digest)
+    isAbsolute(record.cwd) && workspaceMaterialPath(record.material) === record.material && /^[a-f0-9]{64}$/.test(record.digest)
 }
 
 export async function digestWorkspaceMaterial(cwd, material, signal) {

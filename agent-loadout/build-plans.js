@@ -1,8 +1,19 @@
 import { randomUUID } from 'node:crypto'
 import { readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { workspaceMaterialPath } from './match-comparisons.js'
 
 const planKey = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/
+
+export function planTaskPrompt({ material: value, task }, english) {
+  const material = workspaceMaterialPath(value)
+  if (!material) throw new Error('请选择工作区内的普通文件，填写相对路径。')
+  if (typeof task !== 'string' || !task.trim() || task.length > 1200) throw new Error('请输入 1 到 1200 字的新任务。')
+  const brief = task.trim()
+  return { material, task: english
+    ? `[Loadout task]\nSelected material: ${JSON.stringify(material)}\n${brief}\nUse the current loadout’s workflow for this task in this conversation.`
+    : `【出装任务】\n选定材料 ${JSON.stringify(material)}\n${brief}\n在本对话中，按当前出装的工作流程处理。` }
+}
 
 function metadata({ name, note = '' }) {
   if (typeof name !== 'string' || !name.trim() || name.length > 48) {

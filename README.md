@@ -15,13 +15,19 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.75.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.76.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
 For the desktop app, use its bundled CLI with `--profile desktop`, then quit and reopen the app. If an earlier copy is installed, remove `dsh-agent-loadout` from the same profile before installing the release. The package keeps that identifier for compatibility.
 
 Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
+
+## Use saved gear for a new task
+
+1. In **Loadout plans**, select a plan and choose **Start a task with this loadout**. Choose an existing workspace, enter one material path relative to its root, and describe the new task.
+2. Choose **Review file and loadout** to check the preset and the equipment sources available now. Choose **Confirm and open session** to open a fresh DSH session. Review the prepared task in the conversation and send it yourself.
+3. With a review-first loadout, check the draft and answer the DSH question card when it asks whether to confirm delivery or request changes. Open the actual attachment from that session after it is delivered.
 
 ## Find a run worth keeping
 
