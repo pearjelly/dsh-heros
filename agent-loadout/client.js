@@ -1299,6 +1299,7 @@ window.__ModuleLoader__.load({
     }
 
     const lessonTaskLabel = '用这套出装做自己的任务'
+    const rebaselineTaskLabel = '以当前材料重跑原局'
 
     function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart, onReuse, onRematch, onLessonTask, outfit }) {
       const files = arm.deliverables ?? empty
@@ -1892,7 +1893,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-roster-open', onClick: onClose }, t('关闭'))))
     }
 
-    function RematchEditor({ kind, comparisonId, arm, sourceSessionId, request, lesson, onBack, onClose, onVisit }) {
+    function RematchEditor({ kind, comparisonId, arm, sourceSessionId, request, lesson, backLabel = '返回记录', onBack, onClose, onVisit }) {
       const language = useLanguage()
       const [loaded, setLoaded] = useState(null)
       const [attempt, retry] = useState(0)
@@ -1930,8 +1931,8 @@ window.__ModuleLoader__.load({
         (operation === 'add' || removed) && (operation === 'remove' || added && (!sources.length || selectedSource)))
       const source = options?.baseline?.sessionId ?? sourceSessionId
       const baseline = preview?.baseline ?? options?.baseline
-      const originalArm = comparisonKinds[kind].arms.find(item => item.id === arm)
-      const baselineName = [baseline?.planName ?? t(originalArm?.name), baseline?.heroName].filter(Boolean).join(' · ')
+      const originalArm = comparisonKinds[kind]?.arms.find(item => item.id === arm)
+      const baselineName = [baseline?.planName ?? t(originalArm?.name ?? '原局'), baseline?.heroName].filter(Boolean).join(' · ')
       const baselineChange = rematchChangeSummary(baseline?.change)
       const originalItem = preview?.change.removed && equippedById.get(preview.change.removed.id)
       const changeFacts = preview && { ...preview.change, removed: preview.change.removed &&
@@ -2014,8 +2015,9 @@ window.__ModuleLoader__.load({
         if (!abort.signal.aborted && opened) onVisit(opened.sessionId, opened.task)
       }
 
-      const returnStep = () => { if (working !== 'open') (preview ? edit : onBack)() }
       const failed = !reading && loaded?.error || error
+      const recoveryFocus = failed && kind === 'personal' ? 'rebaseline' : undefined
+      const returnStep = () => { if (working !== 'open') preview ? edit() : onBack(recoveryFocus) }
       return h(InstallDialog, { title: t('换一件再试'), className: 'moba-lighthouse-comparison moba-rematch-editor',
         busy: working === 'open', onCancel: returnStep, initialFocus: '.moba-rematch-back', onKeyDown: event => closeDialogOnEscape(event, returnStep) },
         options && h(Fragment, null,
@@ -2052,11 +2054,13 @@ window.__ModuleLoader__.load({
         (reading || working) && h('p', { className: 'moba-empty', role: 'status' }, t(working === 'open' ? '正在准备对局…'
           : working === 'review' ? '正在核对换装…' : '正在读取换装选项…')),
         failed && h(Fragment, null, h('p', { className: 'moba-alert', role: 'alert' }, failed),
-          h('p', { className: 'moba-lighthouse-note' }, t(lesson ? '若练习材料已移动或修改，返回记录后可以另开一局。'
-            : '若材料已移动或修改，可恢复原文件后重试，也可用新材料建立新对照。'))),
+          h('p', { className: 'moba-lighthouse-note' }, t(kind === 'personal'
+            ? '如果材料已移动或修改，可返回任务结果，用当前材料重跑原局。'
+            : lesson ? '若练习材料已移动或修改，返回记录后可以另开一局。'
+              : '若材料已移动或修改，可恢复原文件后重试，也可用新材料建立新对照。'))),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
           h('button', { type: 'button', className: 'moba-roster-open moba-rematch-back', disabled: Boolean(working),
-            onClick: returnStep }, t(preview ? '返回修改换装' : '返回记录')),
+            onClick: returnStep }, t(preview ? '返回修改换装' : backLabel)),
           source && h('button', { type: 'button', className: 'moba-roster-open', disabled: working === 'open',
             onClick: () => onVisit(source) }, t('查看原会话')),
           failed && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(working) || reading,
@@ -2066,7 +2070,7 @@ window.__ModuleLoader__.load({
             : h('button', { type: 'button', className: 'moba-start', disabled: !canReview,
               onClick: review }, t('核对换装'), h(Glyph, { kind: 'arrow', size: 16 })),
           preview && h('button', { type: 'button', className: 'moba-roster-open', disabled: working === 'open',
-            onClick: onClose }, t('关闭'))))
+            onClick: () => onClose(recoveryFocus) }, t('关闭'))))
     }
 
     function ComparisonLoadoutReview({ kind, comparisonId, arm, request, onBack, onClose, onUse }) {
@@ -3795,7 +3799,7 @@ window.__ModuleLoader__.load({
             adapted ? t('采用换装草稿') : t('采用分享出装'), h(Glyph, { kind: 'arrow', size: 17 }))))
     }
 
-    function LessonLoadoutTask({ source, workspaces, initialWorkspaceId, request, onBack, onVisit }) {
+    function LessonLoadoutTask({ source, workspaces, initialWorkspaceId, rebaseline, request, onBack, onVisit }) {
       const language = useLanguage()
       const [loaded, setLoaded] = useState(null)
       const [attempt, retry] = useState(0)
@@ -3814,25 +3818,34 @@ window.__ModuleLoader__.load({
         return () => abort.abort()
       }, [request, kind, comparisonId, arm, attempt, language])
 
-      return h(InstallDialog, { title: t(lessonTaskLabel), className: 'moba-lighthouse-comparison', busy: opening,
+      const backLabel = rebaseline ? '返回任务结果' : '返回记录'
+      return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : lessonTaskLabel), className: 'moba-lighthouse-comparison', busy: opening,
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
-        options ? h(LoadoutTaskForm, { lessonSource: options.source, workspaces: allowed, initialWorkspaceId, request,
+        rebaseline && h('p', { className: 'moba-lighthouse-note' }, t('用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
+        options ? h(LoadoutTaskForm, { lessonSource: options.source, workspaces: allowed, request,
+          initialWorkspaceId: rebaseline?.workspaceId ?? initialWorkspaceId, initialMaterial: rebaseline?.material, initialBrief: rebaseline?.brief, backLabel,
           onBack, onOpened: ({ sessionId, task }) => onVisit(sessionId, task), onOpeningChange: setOpening })
           : h(Fragment, null, current?.error
             ? h('p', { className: 'moba-alert', role: 'alert' }, current.error)
             : h('p', { className: 'moba-empty', role: 'status' }, t('正在核对练习出装…')),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
-            h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t('返回记录')),
+            h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t(backLabel)),
             current?.error && h('button', { className: 'moba-roster-open', type: 'button',
               onClick: () => retry(value => value + 1) }, t('重试')))))
     }
 
-    function LoadoutTaskForm({ plan, lessonSource, workspaces, initialWorkspaceId, request, onBack, onOpened, onOpeningChange }) {
+    function PersonalBaselineTask({ workspaces, ...props }) {
+      const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
+      return h(LessonLoadoutTask, { ...props, workspaces: items })
+    }
+
+    function LoadoutTaskForm({ plan, lessonSource, workspaces, initialWorkspaceId, initialMaterial = '', initialBrief = '',
+      backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange }) {
       const language = useLanguage()
       const [version, setVersion] = useState(plan)
       const [chosenWorkspaceId, setWorkspace] = useState(initialWorkspaceId ?? '')
-      const [material, setMaterial] = useState('')
-      const [brief, setBrief] = useState('')
+      const [material, setMaterial] = useState(initialMaterial)
+      const [brief, setBrief] = useState(initialBrief)
       const [reviewed, setReviewed] = useState(null)
       const [working, setWorking] = useState('')
       const [error, setError] = useState('')
@@ -3952,8 +3965,7 @@ window.__ModuleLoader__.load({
             h('textarea', { ref: briefField, required: true, disabled: Boolean(working), value: brief, rows: 4, maxLength: 1200,
               onChange: event => { event.target.setCustomValidity(''); setBrief(event.target.value) } })), messages),
         h('footer', { className: 'moba-gallery-footer' },
-          h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack },
-            t(lessonSource ? '返回记录' : '返回方案库')),
+          h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t(backLabel)),
           h('button', { className: 'moba-start', type: 'submit', disabled: Boolean(working) || !workspace },
             t('核对材料和出装'), h(Glyph, { kind: 'arrow', size: 16 }))))
         : h('section', { className: 'moba-plan-form moba-plan-task', onKeyDown: event => closeDialogOnEscape(event, editTask) },
@@ -6766,7 +6778,7 @@ window.__ModuleLoader__.load({
           h('span', null, '+' + award.xp + ' XP')))))
     }
 
-    function LessonTaskResult({ sessionId, version, request, onSource, onUse }) {
+    function LessonTaskResult({ sessionId, version, request, onSource, onUse, onPersonalFlow, initialPersonalFocus }) {
       const language = useLanguage()
       const headingId = useId()
       const [review, setReview] = useState(false)
@@ -6775,6 +6787,9 @@ window.__ModuleLoader__.load({
       const reviewHeading = useRef(null)
       const reviewButton = useRef(null)
       const returnFocus = useRef(false)
+      const rematchButton = useRef(null)
+      const rebaselineButton = useRef(null)
+      const restoredPersonalFocus = useRef(false)
       const action = 'lesson-task-result'
       const pane = review ? 'review' : 'result'
       const cached = state[pane]
@@ -6810,6 +6825,13 @@ window.__ModuleLoader__.load({
         const target = reviewButton.current ?? reviewHeading.current
         target?.focus()
       }, [review, current])
+      useEffect(() => {
+        if (review || !current || !initialPersonalFocus || restoredPersonalFocus.current) return
+        restoredPersonalFocus.current = true
+        const button = initialPersonalFocus === 'rebaseline' ? rebaselineButton.current : rematchButton.current
+        const target = button ?? rebaselineButton.current ?? reviewHeading.current
+        target?.focus()
+      }, [review, current, initialPersonalFocus])
 
       function returnToResult() {
         returnFocus.current = true
@@ -6845,12 +6867,18 @@ window.__ModuleLoader__.load({
               onClick: () => onUse(result, true) }, t('保存为方案')))
             : h(Fragment, null,
               h('button', { type: 'button', className: 'moba-text', onClick: onSource }, t('查看原会话')),
+              result?.rebaseline && h('button', { ref: rebaselineButton, type: 'button',
+                className: result.rematchSource ? 'moba-text' : 'moba-match-move', 'aria-haspopup': 'dialog',
+                onClick: () => onPersonalFlow({ mode: 'rebaseline', source: result.source, rebaseline: result.rebaseline }) }, t(rebaselineTaskLabel)),
               result?.canReview && h('button', { ref: reviewButton, type: 'button', className: 'moba-match-move',
-                onClick: () => setReview(true) }, t('核对本次出装'), h(Glyph, { kind: 'arrow', size: 16 })))))
+                onClick: () => setReview(true) }, t('核对本次出装'), h(Glyph, { kind: 'arrow', size: 16 })),
+              result?.rematchSource && h('button', { ref: rematchButton, type: 'button', className: 'moba-match-move',
+                'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'rematch', source: result.rematchSource }) },
+                t('换一件再试'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
     function MatchSettlement({ sessionId, version, request, initialId, initialCursors = empty, focusGearId, quest, equipped, lessonTaskResult,
-      onQuest, onReport, onOpenMatch, onOpenFlag, onPrepare, onUse, onInspect, onSignature }) {
+      onQuest, onReport, onOpenMatch, onOpenFlag, onPrepare, onUse, onInspect, onSignature, onPersonalFlow, initialPersonalFocus }) {
       const [history, setHistory] = useState(null)
       const [cursors, setCursors] = useState(initialCursors)
       const [picked, setPicked] = useState(initialId ?? '')
@@ -6943,7 +6971,8 @@ window.__ModuleLoader__.load({
       const totalXp = receipt?.awards.reduce((sum, item) => sum + item.xp, 0)
       const review = quest && !receipts?.some(item => item.id === quest.id) ? quest : undefined
       return h('div', { className: 'moba-match-body moba-match-plan moba-settlement' },
-        lessonTaskResult && h(LessonTaskResult, { key: sessionId, sessionId, version, request, onSource: () => onOpenMatch(sessionId), onUse }),
+        lessonTaskResult && h(LessonTaskResult, { key: sessionId, sessionId, version, request, onSource: () => onOpenMatch(sessionId), onUse,
+          initialPersonalFocus, onPersonalFlow: flow => onPersonalFlow(flow, receipt?.id, cursors) }),
         lessonTaskResult && h('h3', { className: 'moba-session-settlement-title' }, t('会话结算记录')),
         collectionError && h('p', { className: 'moba-match-action-error', role: 'alert' }, collectionError),
         error && h('div', { className: 'moba-match-plan-error', role: 'alert' }, h('p', { className: 'moba-match-action-error' }, error),
@@ -7534,6 +7563,7 @@ window.__ModuleLoader__.load({
       const [role, setRole] = useState('')
       const [profileOpen, setProfileOpen] = useState(false)
       const [action, setAction] = useState(null)
+      const [personalFlow, setPersonalFlow] = useState(null)
       const [pinPending, setPinPending] = useState('')
       const [pinError, setPinError] = useState('')
       const [receiptPending, setReceiptPending] = useState(false)
@@ -7592,6 +7622,29 @@ window.__ModuleLoader__.load({
 
       function reuseComparisonLoadout(preview, save) {
         openLobby(preview.sessionId, undefined, { proven: { ...preview, save } })
+      }
+
+      function beginPersonalFlow(flow, receiptId, cursors) {
+        const returnAction = { ...action, item: { ...action.item, id: receiptId ?? action.item.id }, cursors }
+        popover.current.hidePopover()
+        setPersonalFlow({ ...flow, returnAction })
+      }
+
+      function closePersonalFlow(focus = personalFlow.mode) {
+        const { returnAction } = personalFlow
+        setPersonalFlow(null)
+        requestAnimationFrame(() => {
+          const element = popover.current
+          if (!element) return
+          const source = opener.current?.isConnected ? opener.current : undefined
+          setAction({ ...returnAction, initialPersonalFocus: focus })
+          if (!element.matches(':popover-open')) element.showPopover(source ? { source } : undefined)
+        })
+      }
+
+      function visitPersonalFlow(nextSessionId, task) {
+        setPersonalFlow(null)
+        openDraftSession(nextSessionId, task)
       }
 
       function show(event, target) {
@@ -7825,6 +7878,10 @@ window.__ModuleLoader__.load({
           'data-level': snapshot.heroRank.level }, 'Lv.' + snapshot.heroRank.level),
         h('span', null, snapshot.heroName))
       return h(Fragment, null,
+        personalFlow?.mode === 'rematch' && h(RematchEditor, { ...personalFlow.source, sourceSessionId: sessionId, request,
+          backLabel: '返回任务结果', onBack: closePersonalFlow, onClose: closePersonalFlow, onVisit: visitPersonalFlow }),
+        personalFlow?.mode === 'rebaseline' && h(PersonalBaselineTask, { source: personalFlow.source, rebaseline: personalFlow.rebaseline,
+          workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
         snapshot?.planTask && h(PlanTaskDraftAnchor, { plan: snapshot.planTask, sessionId, consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
         snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
@@ -7991,6 +8048,7 @@ window.__ModuleLoader__.load({
           : settling ? h(MatchSettlement, { key: JSON.stringify([action.item.id, action.focusGearId]), sessionId, request, version: snapshot?.growthVersion,
             initialId: action.item.id, initialCursors: action.cursors, focusGearId: action.focusGearId, quest: questReady,
             lessonTaskResult: snapshot?.lessonTaskResult,
+            onPersonalFlow: beginPersonalFlow, initialPersonalFocus: action.initialPersonalFocus,
             equipped: new Set(shortcuts.map(item => item.id)), onQuest: () => setAction(growthAction),
             onUse: reuseProvenLoadout,
             onReport: () => setAction({ kind: 'report', item: { name: t('对局战报') } }),
@@ -8480,6 +8538,7 @@ window.__ModuleLoader__.load({
       .moba-lesson-result { display: grid; gap: 8px; min-width: 0; padding: 8px; border: 1px solid #705a3c; background: #201d26; }
       .moba-lesson-result > h3 { margin: 0; color: var(--gold); font-size: 15px; overflow-wrap: anywhere; }
       .moba-lesson-result .moba-lighthouse-results { margin: 0; }
+      .moba-lesson-result .moba-settlement-footer button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
       .moba-lesson-result-files li > div { display: flex; flex-wrap: wrap; align-items: baseline; min-width: 0; gap: 3px 8px; }
       .moba-lesson-result-awards h4, .moba-session-settlement-title { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
       .moba-lesson-result-awards ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
