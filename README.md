@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.119.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.120.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -52,7 +52,7 @@ After verified delivery, [try a review step on the same task](#try-a-review-step
 
 ### Give Minimal one more tool
 
-When the trial called for an **Openable original** and Minimal produced a verified text summary alone, choose **Add Deliverable Preview to Minimal**. The preview adds the native `present` tool and keeps Minimal's existing shell and tool sources. Choose **Open the equipped session** and manually send the same task against a new copy of the same supply card. Under **Minimal + Deliverable Preview**, check whether the original file was actually attached and open the equipped session to inspect the result.
+If the next shift needed an **Openable original** and Minimal’s verified round read the card and handed off text, choose **Add Deliverable Preview to Minimal** in the original DSH conversation or on the trial board. Once you open a replay, return to it from the board. The preview adds the native `present` tool and keeps Minimal's existing shell and tool sources. Choose **Open the equipped session** and manually send the same task against a new copy of the same supply card. Under **Minimal + Deliverable Preview**, check whether the original file was actually attached and open the equipped session to inspect the result.
 
 After **Minimal + Deliverable Preview** delivers the original sample card and passes verification, choose **Use this loadout on my task** on that result. Select a workspace or **Add a materials folder**, choose your own file, and write a new brief. In **Review file and loadout**, check Minimal and the equipment sources from the trial. Confirm and manually send the new task in DSH. The original Standard, Minimal, and equipped runs remain available in the trial comparison.
 

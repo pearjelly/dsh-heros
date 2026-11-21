@@ -1411,6 +1411,7 @@
   "请先完成这局灯塔交接，再核对战报。": "Finish this Lighthouse handoff before checking the report.",
   "这份战报的题目语言或接班需求与本局不同。": "This report uses a different task language or handoff requirement.",
   "给极简模式装上交付物预览": "Add Deliverable Preview to Minimal",
+  "这局交接了文字，接班人还需要可打开的原件。": "This round handed off text. The next shift still needs to open the original.",
   "核对极简模式加装": "Review Minimal’s gear addition",
   "打开加装会话": "Open the equipped session",
   "正在打开加装会话…": "Opening the equipped session…",

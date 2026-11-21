@@ -1817,7 +1817,7 @@ window.__ModuleLoader__.load({
               : h('button', { type: 'submit', className: 'moba-start', disabled: busy || !input.trim() }, t('对照这两局')))))
     }
 
-    function MinimalDeliveryReplay({ request, comparisonId, onBack, onVisit }) {
+    function MinimalDeliveryReplay({ request, comparisonId, onBack, onVisit, backLabel = '返回试玩对照' }) {
       const language = useLanguage()
       const [checked, setChecked] = useState(null)
       const [attempt, retry] = useState(0)
@@ -1867,7 +1867,7 @@ window.__ModuleLoader__.load({
         !state && h('p', { role: 'status' }, t('正在核对极简模式加装…')),
         (state?.error || openError) && h('p', { role: 'alert', className: 'moba-alert' }, state?.error || openError),
         h('div', { className: 'moba-install-actions moba-starter-actions' },
-          h('button', { type: 'button', className: 'moba-text', disabled: opening, onClick: onBack }, t('返回试玩对照')),
+          h('button', { type: 'button', className: 'moba-text', disabled: opening, onClick: onBack }, t(backLabel)),
           (state?.error || openError) && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
             onClick: () => { setOpenError(''); retry(count => count + 1) } }, t('重新核对')),
           preview?.token && h('button', { type: 'button', className: 'moba-start', disabled: opening || Boolean(openError),
@@ -2105,9 +2105,12 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
       const [personalSource, setPersonalSource] = useState(null)
+      const [replayOpen, setReplayOpen] = useState(false)
       const trigger = useRef(null)
       const personalTrigger = useRef(null)
+      const replayTrigger = useRef(null)
       const availablePersonalTask = member.arm === 'standard' && member.lessonTaskSource
+      const availableReplay = member.arm === 'minimal' && member.canReplayMinimalDelivery === true
       const hero = member.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === member.arm)
       useEffect(() => {
         const status = consumeDraft(sessionId)
@@ -2124,6 +2127,11 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (personalTrigger.current ?? trigger.current)?.focus())
       }
 
+      function closeReplay() {
+        setReplayOpen(false)
+        requestAnimationFrame(() => (replayTrigger.current ?? trigger.current)?.focus())
+      }
+
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor' },
           h('div', null, h('strong', null, t(heroTrialTitle)), hero && h('span', null, t(hero.name))),
@@ -2132,8 +2140,13 @@ window.__ModuleLoader__.load({
               onClick: () => setOpen(true) }, t(heroTrialView)),
             availablePersonalTask && h('button', { ref: personalTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setPersonalSource(availablePersonalTask) },
-              t(standardTrialTaskLabel))),
-          !hasTurn && !availablePersonalTask && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
+              t(standardTrialTaskLabel)),
+            availableReplay && h('button', { ref: replayTrigger, type: 'button', 'aria-haspopup': 'dialog',
+              className: 'moba-settlement-button', onClick: () => setReplayOpen(true) }, t(minimalDeliveryReplayLabel))),
+          availableReplay ? h('p', { role: 'status' }, t('这局交接了文字，接班人还需要可打开的原件。'))
+            : !hasTurn && !availablePersonalTask && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
+        replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: member.id, onBack: closeReplay,
+          backLabel: '返回试玩会话', onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
         personalSource && h(LessonLoadoutTask, { source: personalSource, workspaces: items, request,
           backLabel: '返回试玩会话', onBack: closePersonalTask,
           onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }),

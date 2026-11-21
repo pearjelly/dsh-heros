@@ -6083,6 +6083,13 @@ export async function apply(ctx) {
           const lessonTaskSource = await standardTrialTaskReference(record, observed, request.signal)
           if (lessonTaskSource) value.heroTrial = { ...heroTrial, lessonTaskSource }
         }
+        if (heroTrial.arm === 'minimal' && !value.running) {
+          const record = heroTrials.read(heroTrial.id)
+          if (record.need === 'original' && !(await heroTrials.readArm(heroTrial.id, lighthouseHeroDelivery))?.opened) {
+            const observed = await readHeroTrialArm(record, 'minimal', request.signal)
+            if (canReplayHeroDelivery(record, observed)) value.heroTrial = { ...heroTrial, canReplayMinimalDelivery: true }
+          }
+        }
       }
       if (savedTask?.launch) {
         const { planName, material, task, source } = savedTask.launch

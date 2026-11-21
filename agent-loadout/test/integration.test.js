@@ -1469,6 +1469,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const challengeCode = (sample, need) => 'DSHC2.' + Buffer.from(JSON.stringify({ sample, need })).toString('base64url')
     const reportCode = fields => 'DSHR1.' + Buffer.from(JSON.stringify(fields)).toString('base64url')
     const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
+    const minimalShortcut = async sessionId => (await equipmentIn(host, sessionId)).heroTrial.canReplayMinimalDelivery
     const send = ({ sessionId, task, requestId }) => host.request(turnEndpoint, { sessionId, text: task, requestId })
     const byHero = (trial, hero) => trial.arms.find(arm => arm.id === hero)
     const traceTools = native => native.events.filter(event => event.type === 'tool/call')
@@ -1551,6 +1552,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(byHero(between, 'standard').lessonTaskSource, standardTransfer)
     assert.deepEqual((await equipmentIn(host, standard.sessionId)).heroTrial.lessonTaskSource, standardTransfer)
     assert.notEqual(between.canReplayMinimalDelivery, true)
+    assert.equal(await minimalShortcut(minimal.sessionId), undefined)
     await previewReplay(trial.id, 422)
     assert.equal(between.canShareHeroChallenge, true)
     const singleRoundInvitation = await shareTrial(trial.id)
@@ -1692,6 +1694,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
 
     assert.equal(result.canReplayMinimalDelivery, true)
     assert.equal(result.minimalReplay, undefined)
+    assert.equal(await minimalShortcut(minimal.sessionId), true)
     const replayPreview = await previewReplay(trial.id)
     assert.match(replayPreview.token, /^[a-f0-9]{64}$/u)
     assert.equal(replayPreview.task, trial.task)
@@ -1713,11 +1716,13 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const originalCard = join(original.workspacePath, material)
     await appendFile(originalCard, '\nChanged after reviewing the replay.\n')
     assert.notEqual((await read(trial.id)).canReplayMinimalDelivery, true)
+    assert.equal(await minimalShortcut(minimal.sessionId), undefined)
     await shareHandoff(trial.id, 'minimal', 422)
     await previewReplay(trial.id, 422)
     await openReplay(trial.id, replayPreview.token, 422)
     assert.deepEqual(await nativeSessions(), [...beforeSessions, standard.sessionId, minimal.sessionId].sort())
     await writeFile(originalCard, materialBytes)
+    assert.equal(await minimalShortcut(minimal.sessionId), true)
 
     const [replay, retryReplay] = await Promise.all([
       openReplay(trial.id, replayPreview.token), openReplay(trial.id, replayPreview.token),
@@ -1743,6 +1748,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(replayWaiting.minimalReplay.status, 'waiting')
     assert.equal(replayWaiting.minimalReplay.summary, undefined)
     assert.equal(replayWaiting.minimalReplay.lessonTaskSource, undefined)
+    assert.equal(await minimalShortcut(minimal.sessionId), undefined)
     await shareHandoff(trial.id, 'minimal-present', 422)
     await invoke('lesson-task-options', transfer, 422)
 
@@ -1981,6 +1987,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(textOnly.originalAttached, false)
     assert.equal(textOnly.meetsNeed, true)
     assert.notEqual((await read(summary.id)).canReplayMinimalDelivery, true)
+    assert.equal(await minimalShortcut(minimalSummary.sessionId), undefined)
     await previewReplay(summary.id, 422)
     await openReplay(summary.id, replayPreview.token, 422)
     const changed = await open(summary.id, 'standard')
