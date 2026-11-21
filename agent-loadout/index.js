@@ -1472,6 +1472,7 @@ export async function apply(ctx) {
   }
 
   const challengeChanged = '灯塔挑战出装已变化，请重新核对挑战码。'
+  const noLocalChallenge = '无法用本机标准出装复现这项灯塔挑战。'
 
   function completedLighthouseChallenge(record, arm) {
     return record?.lesson === evidenceLesson && record.scenario === 'gap' && arm?.id === 'evidence' &&
@@ -1494,10 +1495,54 @@ export async function apply(ctx) {
     return { code: encodeLighthouseChallenge(share.code) }
   }
 
-  async function checkLighthouseChallenge(code, signal) {
-    const preview = await previewBuildShare({ code: decodeLighthouseChallenge(code) })
+  function challengeSourceIdentities(recipe) {
+    const slotIdentity = ref => JSON.stringify([ref.hero.id, ref.hero.owner.package, ref.entry])
+    return [
+      recipe.hero.owner.package,
+      recipe.gear.map(item => item.kind === 'featured' ? item.id : slotIdentity(item.source)).sort(),
+      recipe.dependencies.map(item => item.package).sort(),
+      recipe.companions.map(slotIdentity).sort(),
+    ]
+  }
+
+  async function localLighthouseChallenge(original, signal) {
+    try {
+      const { ecosystem, sources, runtime } = await shareEnvironment()
+      const hero = sources.hero('standard')
+      if (!hero) return
+      const draft = standardDeliveryDraft(ecosystem, ['present', 'evidence'])
+      const gear = draft.equipmentIds.map(id => ({ kind: 'featured', operation: 'equip', id }))
+      for (const id of draft.removedEquipmentIds) {
+        const source = sources.slot(id, 'standard')
+        if (!source) return
+        gear.push({ kind: 'plugin', operation: 'remove', source })
+      }
+      const expected = await plan(draft, ecosystem)
+      const recipe = { name: lighthouseChallengeName, host: runtime, hero, gear, ...shareRequirements(gear, expected, sources) }
+      if (!isDeepStrictEqual(challengeSourceIdentities(original), challengeSourceIdentities(recipe))) return
+      const code = encodeBuildShare(recipe)
+      const preview = await previewBuildShare({ code })
+      signal?.throwIfAborted()
+      if (!preview.blocked) return { code, preview, presetId: expected.id }
+    } catch {
+      signal?.throwIfAborted()
+    }
+  }
+
+  async function checkLighthouseChallenge(code, signal, useLocal = false) {
+    const loadout = decodeLighthouseChallenge(code)
+    const preview = await previewBuildShare({ code: loadout })
     signal?.throwIfAborted()
-    if (preview.blocked) return { preview }
+    if (preview.blocked) {
+      const original = decodeBuildShare(loadout)
+      const local = await localLighthouseChallenge(original, signal)
+      if (!useLocal) return { preview: { ...preview, ...(local && { canUseLocalLoadout: true }) } }
+      if (!local) return { preview: { ...preview, reason: noLocalChallenge } }
+      const { presetId } = local
+      const token = createHash('sha256').update(JSON.stringify([code.trim(), local.code, presetId])).digest('hex')
+      return { preview: { ...local.preview, localLoadout: true, originalHost: original.host, token }, presetId }
+    }
+    if (useLocal) return { preview: { ...preview, blocked: true, reason: noLocalChallenge } }
     const ecosystem = await discover()
     const [imported, expected] = await Promise.all([
       plan(preview.draft, ecosystem), plan(standardDeliveryDraft(ecosystem, ['present', 'evidence']), ecosystem),
@@ -1508,9 +1553,9 @@ export async function apply(ctx) {
     return { preview: { ...preview, token }, presetId: expected.id }
   }
 
-  async function openLighthouseChallenge({ code, token, launchId, openingChoice }, english, signal) {
+  async function openLighthouseChallenge({ code, token, launchId, openingChoice, useLocal }, english, signal) {
     if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw new Error(challengeChanged)
-    const { preview, presetId } = await checkLighthouseChallenge(code, signal)
+    const { preview, presetId } = await checkLighthouseChallenge(code, signal, useLocal === true)
     if (preview.token !== token) throw new Error(challengeChanged)
     const challengeId = createHash('sha256').update('lighthouse-challenge-v1:' + launchId).digest('hex').slice(0, 32)
     return openLighthouseLesson({ launchId: challengeId, scenario: 'gap', openingChoice }, english, signal, evidenceLesson, presetId)
@@ -5797,7 +5842,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-rematch-open') value = await openLighthouseLesson(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-evidence-open') value = await openLighthouseLesson(selection, english, request.signal, evidenceLesson)
         else if (selection?.action === 'lighthouse-challenge-share') value = await shareLighthouseChallenge(selection, request.signal)
-        else if (selection?.action === 'lighthouse-challenge-preview') value = (await checkLighthouseChallenge(selection.code, request.signal)).preview
+        else if (selection?.action === 'lighthouse-challenge-preview') value = (await checkLighthouseChallenge(selection.code, request.signal, selection.useLocal === true)).preview
         else if (selection?.action === 'lighthouse-challenge-open') value = await openLighthouseChallenge(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-comparison') value = await readComparison(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'lighthouse-comparison-open') value = await openComparisonArm(lighthouseComparisons, selection, english, request.signal)

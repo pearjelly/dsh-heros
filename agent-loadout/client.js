@@ -1349,20 +1349,21 @@ window.__ModuleLoader__.load({
       const trimmed = code.trim()
       const preview = checked?.code === trimmed && checked.language === language ? checked.value : undefined
       const canOpen = !preview?.blocked && preview?.token
+      const canReviewLocal = preview?.blocked && preview.canUseLocalLoadout === true
+      const localLoadout = preview?.localLoadout === true
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => { if (preview) heading.current?.focus() }, [preview])
 
-      async function check(event) {
-        event.preventDefault()
-        if (!trimmed || pending.current) return
+      async function check(useLocal = false) {
+        if (!trimmed || pending.current || (useLocal && !canReviewLocal)) return
         const abort = new AbortController()
         pending.current = abort
         setBusy('check')
         setError('')
-        setChecked(null)
+        if (!useLocal) setChecked(null)
         try {
           const action = 'lighthouse-challenge-preview'
-          const value = await request(action, { action, code: trimmed }, abort.signal, language)
+          const value = await request(action, { action, code: trimmed, ...(useLocal && { useLocal: true }) }, abort.signal, language)
           if (!abort.signal.aborted) setChecked({ value, code: trimmed, language })
         } catch (reason) {
           if (!abort.signal.aborted) setError(reason.message)
@@ -1380,11 +1381,11 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           const action = 'lighthouse-challenge-open'
-          const key = JSON.stringify([trimmed, preview.token, openingChoice, language])
+          const key = JSON.stringify([trimmed, preview.token, localLoadout, openingChoice, language])
           if (!launchIds.current.has(key)) launchIds.current.set(key, Array.from(crypto.getRandomValues(new Uint8Array(16)),
             byte => byte.toString(16).padStart(2, '0')).join(''))
           const result = await request(action, { action, code: trimmed, token: preview.token, launchId: launchIds.current.get(key),
-            ...(openingChoice && { openingChoice }) }, abort.signal, language)
+            ...(localLoadout && { useLocal: true }), ...(openingChoice && { openingChoice }) }, abort.signal, language)
           if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
         } catch (reason) {
           if (!abort.signal.aborted) {
@@ -1401,7 +1402,7 @@ window.__ModuleLoader__.load({
       return h(InstallDialog, { title: t('加入灯塔挑战'), className: 'moba-starter-dialog',
         busy: Boolean(busy), onCancel, initialFocus: '.moba-share-code',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onCancel() }) },
-        h('form', { onSubmit: check },
+        h('form', { onSubmit: event => { event.preventDefault(); void check() } },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
             h('label', null, t('挑战码'),
               h('textarea', { className: 'moba-share-code', ref: field, required: true, value: code, rows: 3, maxLength: lighthouseChallengeLimit,
@@ -1410,8 +1411,10 @@ window.__ModuleLoader__.load({
             error && h('p', { className: 'moba-alert', role: 'alert' }, error),
             busy === 'check' && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对挑战要求…')),
             preview && h('div', { className: 'moba-share-review' },
-              h('h3', { ref: heading, tabIndex: -1 }, t('关键证据缺失')),
-              h(PlanShareRequirements, { value: preview }),
+              h('h3', { ref: heading, tabIndex: -1 }, t(localLoadout ? '本机标准出装' : '关键证据缺失')),
+              localLoadout && h(InstallFacts, { facts: [[t('原挑战的 DSH 版本'), preview.originalHost],
+                [t('本机 DSH 版本'), preview.host?.current ?? preview.host?.version]] }),
+              h(PlanShareRequirements, { value: preview, showHost: !localLoadout }),
               h(SharedPlanCapabilities, { comparison: preview.comparison }),
               preview.blocked && h('p', { className: 'moba-alert', role: 'status' },
                 t(preview.reason ?? '请处理上方的装备或版本要求，再重新核对。')),
@@ -1421,8 +1424,10 @@ window.__ModuleLoader__.load({
             canOpen && h('p', { className: 'moba-starter-note' }, t('手动发送练习任务。如果出现证据取舍卡，请在会话里选择。'))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(busy), onClick: onCancel }, t('返回')),
-            h('button', { type: 'submit', className: canOpen ? 'moba-roster-open' : 'moba-start',
+            h('button', { type: 'submit', className: canOpen || canReviewLocal ? 'moba-roster-open' : 'moba-start',
               disabled: Boolean(busy) || !trimmed }, t('核对挑战码')),
+            canReviewLocal && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy),
+              onClick: () => void check(true) }, t('核对本机标准出装')),
             canOpen && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy), onClick: start },
               t(busy === 'start' ? '正在准备对局…' : '开始灯塔挑战'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
@@ -4289,10 +4294,10 @@ window.__ModuleLoader__.load({
         })))
     }
 
-    function PlanShareRequirements({ value }) {
+    function PlanShareRequirements({ value, showHost = true }) {
       const { host, hero, gear, dependencies } = value
       return h(Fragment, null,
-        host && h('dl', { className: 'moba-share-host', 'data-state': host.state },
+        showHost && host && h('dl', { className: 'moba-share-host', 'data-state': host.state },
           h('dt', null, t('分享码的 DSH 版本')), h('dd', null, host.version),
           host.current && h(Fragment, null, h('dt', null, t('当前 DSH 版本')), h('dd', null, host.current)),
           host.state && h(Fragment, null, h('dt', null, t('版本核对')), h('dd', null, t(planShareStates[host.state] ?? '不可用')))),

@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.103.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.104.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -44,6 +44,7 @@ dsh web
 
 1. 完成公开样例的 **关键证据缺失** 练习，点 **查看取舍记录**。这局通过核验后，点 **分享灯塔挑战**，复制挑战码。挑战码携带插件内置的公开样例版本和标准出装配方。你的选择、结果和文件留在自己的 Profile。
 2. 收到挑战码后，从装备库的灯塔入口点 **加入灯塔挑战**，粘贴挑战码。核对样例和装备来源后，可以先记下自己的开局选择，再打开新会话。在 DSH 手动发送任务，根据核验结果在原生提问卡决定。
+3. 如果公开样例和标准出装一致，只有来源包版本不同，可以点 **核对本机标准出装**。对照发起时的 DSH 版本与这局实际使用的本机装备和来源，核对后可记录开局选择，再打开原生会话手动发送。缺少原装来源或本机阵容有变化时，这个入口不可用。版本和来源完全一致时，仍按原有流程开局。
 
 ## 挑一套留到下次
 

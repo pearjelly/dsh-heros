@@ -1861,7 +1861,8 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     await installProfile(directory, recipientEnv)
     recipient = await startHost(recipientEnv, patch)
     const receive = async (action, fields, status) => (await recipient.request(endpoint, { action, ...fields }, status)).value
-    const previewChallenge = (text, status) => receive('lighthouse-challenge-preview', { code: text }, status)
+    const previewChallenge = (text, status, useLocal) =>
+      receive('lighthouse-challenge-preview', { code: text, ...(useLocal && { useLocal }) }, status)
     const openChallenge = (fields, status) => receive('lighthouse-challenge-open', fields, status)
     const recipientSessions = () => readdir(join(recipientEnv.DSH_HOME, 'sessions')).catch(error => {
       if (error.code === 'ENOENT') return []
@@ -1881,13 +1882,52 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const unavailable = await previewChallenge(unavailableCode)
     assert.equal(unavailable.blocked, true)
     assert.equal(unavailable.token, undefined)
+    assert.equal(unavailable.canUseLocalLoadout, undefined)
+    const unavailableLocal = await previewChallenge(unavailableCode, undefined, true)
+    assert.equal(unavailableLocal.blocked, true)
+    assert.equal(unavailableLocal.token, undefined)
+
     const preview = await previewChallenge(code)
     assert.ok(preview.token, JSON.stringify(preview))
     assert.equal(preview.hero.id, 'standard')
     assert.deepEqual(new Set(preview.draft.equipmentIds), new Set(['evidence', 'present']))
-    const challengeFields = { code, token: preview.token, launchId: 'b'.repeat(32), openingChoice: 'qualify' }
+
+    const senderVersion = recipe.host === '0.2.2-rc.3' ? '0.2.2-rc.5' : '0.2.2-rc.3'
+    const skewVersion = ref => ({ ...ref, version: senderVersion })
+    const skewHero = hero => ({ ...hero, owner: skewVersion(hero.owner) })
+    const skewSlot = slot => ({ ...slot, hero: skewHero(slot.hero) })
+    const skewedRecipe = { ...recipe, host: senderVersion, hero: skewHero(recipe.hero),
+      gear: recipe.gear.map(item => item.kind === 'plugin' ? { ...item, source: skewSlot(item.source) } : item),
+      dependencies: recipe.dependencies.map(skewVersion), companions: recipe.companions.map(skewSlot) }
+    const challengeWithRecipe = changed => encodeCode({ ...challenge, loadout: encodeCode(changed, 'DSHH1.') }, 'DSHC1.')
+    const crossVersionCode = challengeWithRecipe(skewedRecipe)
+    const strict = await previewChallenge(crossVersionCode)
+    assert.equal(strict.blocked, true)
+    assert.equal(strict.canUseLocalLoadout, true)
+    assert.equal(strict.token, undefined)
+    const useLocal = await previewChallenge(crossVersionCode, undefined, true)
+    assert.ok(useLocal.token, JSON.stringify(useLocal))
+    assert.equal(useLocal.localLoadout, true)
+    assert.equal(useLocal.originalHost, senderVersion)
+    assert.deepEqual({ ...useLocal.draft, equipmentIds: [...useLocal.draft.equipmentIds].sort() },
+      { ...preview.draft, equipmentIds: [...preview.draft.equipmentIds].sort() })
+    assert.notEqual(useLocal.token, preview.token)
+
+    const wrongOwner = { ...skewedRecipe.hero, owner: { ...skewedRecipe.hero.owner, package: 'dsh-fixture-foreign-standard' } }
+    const wrongOwnerCode = challengeWithRecipe({ ...skewedRecipe, hero: wrongOwner,
+      gear: skewedRecipe.gear.map(item => item.kind === 'plugin' ? { ...item, source: { ...item.source, hero: wrongOwner } } : item) })
+    const foreign = await previewChallenge(wrongOwnerCode, undefined, true)
+    assert.equal(foreign.blocked, true)
+    assert.equal(foreign.canUseLocalLoadout, undefined)
+    assert.equal(foreign.token, undefined)
+
+    const challengeFields = { code: crossVersionCode, token: useLocal.token, useLocal: true, launchId: 'b'.repeat(32), openingChoice: 'qualify' }
     await openChallenge({ ...challengeFields, token: '0'.repeat(64) }, 422)
     await openChallenge({ ...challengeFields, code: unavailableCode }, 422)
+    await openChallenge({ ...challengeFields, code: wrongOwnerCode }, 422)
+    await openChallenge({ ...challengeFields, useLocal: undefined }, 422)
+    await openChallenge({ ...challengeFields, token: preview.token }, 422)
+    await openChallenge({ ...challengeFields, code }, 422)
     assert.deepEqual(await recipientSessions(), [])
     assert.deepEqual((await recipient.request(endpoint)).value.saved, cleanCatalog.saved)
     const [accepted, retried] = await Promise.all([openChallenge(challengeFields), openChallenge(challengeFields)])
@@ -1929,6 +1969,12 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.deepEqual((await readdir(played.workspacePath)).sort(), sampleFiles)
     assert.deepEqual((await recipient.request(endpoint)).value.plans, [])
     assert.equal((await receive('lighthouse-challenge-share', { comparisonId: accepted.id })).code, code)
+    const exact = await openChallenge({ code, token: preview.token, launchId: 'c'.repeat(32) })
+    assert.notEqual(exact.sessionId, accepted.sessionId)
+    assert.equal(exact.task, accepted.task)
+    const exactDraft = await recipient.request('/api/loadout-fixture-history?sessionId=' + exact.sessionId)
+    assert.equal(exactDraft.presetId, blank.presetId)
+    assert.ok(!exactDraft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
   } finally {
     await recipient?.stop()
     await host?.stop()
