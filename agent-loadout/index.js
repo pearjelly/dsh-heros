@@ -3720,7 +3720,7 @@ export async function apply(ctx) {
   async function checkedPersonalRematchBaseline(selection, signal) {
     const original = await personalRematchEvidence(selection, signal)
     if (!original || !original.canReuse) throw new Error('请选择一局已核验的实战作为原局。')
-    const { target, hero, observed, sessionId } = original
+    const { target, hero, observed, sessionId, evidenceReplay } = original
     const { workspaceId, cwd, material, digest, task, presetId, identity } = target
     const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
     if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
@@ -3736,7 +3736,8 @@ export async function apply(ctx) {
       throw new Error('本机配置已变化，无法核对这局的原出装。')
     }
     const { kind, comparisonId, arm } = selection
-    const baseline = { kind, comparisonId, arm, sessionId, presetId, heroId, heroName: hero.name, identity }
+    const baseline = { kind, comparisonId, arm, sessionId, presetId, heroId, heroName: hero.name, identity,
+      ...(evidenceReplay && { evidenceReplay }) }
     const { title: workspaceTitle } = workspace
     const view = { workspaceId, workspaceTitle, material, task, baseline: { sessionId, heroName: hero.name } }
     const brief = task.split('\n').slice(2, -1).join('\n').trim()
@@ -3797,8 +3798,23 @@ export async function apply(ctx) {
     return { builtIn, removed, equipped }
   }
 
+  function sameRematchPresent({ ecosystem, draft, candidate: before }, after) {
+    const presentModule = equipmentById.get('present').module
+    const rows = build => flatten(build.record.definition.plugins)
+      .filter(row => row.disabled !== true && legacy.moduleName(row.name) === presentModule)
+    const original = rows(before)
+    if (original.length !== 1 || !isDeepStrictEqual(original, rows(after))) return false
+    const tools = build => [...summarizeCapabilities(ecosystem, draft.presetId, build).values()]
+      .filter(item => item.kind === 'tool' && item.name === 'present')
+    const beforeTools = tools(before)
+    const afterTools = tools(after)
+    const [present] = beforeTools
+    return beforeTools.length === 1 && !present.timing && afterTools.length === 1 && afterTools[0].id === present.id &&
+      afterTools[0].timing === present.timing && afterTools[0].sourceId === present.sourceId
+  }
+
   async function personalHandoffSuggestion(selection, checked, signal) {
-    const { observed, ecosystem, draft, candidate: before, personalReviewRematch } = checked
+    const { observed, ecosystem, draft, personalReviewRematch } = checked
     if (observed?.status !== 'complete' || !observed.materialDelivered || observed.continuationReason ||
       draft.presetId !== 'standard' || !draft.equipmentIds.includes('present') ||
       !observed.entries.some(item => item.name === 'present' && item.state === 'completed')) return
@@ -3812,20 +3828,10 @@ export async function apply(ctx) {
         if (!original.canReuse || !original.materialDelivered) return
       }
       const { candidate } = await checkRematch(requestedRematch({ ...selection, change }), signal, checked)
-      const presentModule = equipmentById.get('present').module
-      const presentRows = build => flatten(build.record.definition.plugins)
-        .filter(row => row.disabled !== true && legacy.moduleName(row.name) === presentModule)
-      const beforeRows = presentRows(before)
-      if (beforeRows.length !== 1 || !isDeepStrictEqual(beforeRows, presentRows(candidate))) return
-      const tools = (build, name) => [...summarizeCapabilities(ecosystem, draft.presetId, build).values()]
-        .filter(item => item.kind === 'tool' && item.name === name)
-      const beforeTools = tools(before, 'present')
-      const after = tools(candidate, 'present')
-      const questions = tools(candidate, 'ask_user_question')
-      const [present] = beforeTools
-      if (beforeTools.length === 1 && !present.timing && after.length === 1 && after[0].id === present.id &&
-        after[0].timing === present.timing && after[0].sourceId === present.sourceId &&
-        (reviewed || questions.length === 1 && !questions[0].timing)) return change
+      if (!sameRematchPresent(checked, candidate)) return
+      const questions = [...summarizeCapabilities(ecosystem, draft.presetId, candidate).values()]
+        .filter(item => item.kind === 'tool' && item.name === 'ask_user_question')
+      if (reviewed || questions.length === 1 && !questions[0].timing) return change
     } catch {
       signal?.throwIfAborted()
     }
@@ -3835,6 +3841,11 @@ export async function apply(ctx) {
     const checked = await checkedRematchBaseline(selection, signal)
     const { ecosystem, preset, view } = checked
     const { removed, equipped } = rematchGear(checked)
+    if (checked.baseline.evidenceReplay) {
+      await checkRematch(requestedRematch({ ...selection, change: { removeId: 'evidence' } }), signal, checked)
+      const baseline = { ...view.baseline, choices: comparisonChoices(checked.observed), deliverables: checked.observed.deliverables }
+      return { ...view, baseline, equipped, available: [], evidenceReplay: true }
+    }
     const cards = [...equipment, ...visibleEquipment(ecosystem).values()]
     const available = cards.flatMap(item => {
       if (!validEquipmentIds([item.id])) return []
@@ -3878,6 +3889,9 @@ export async function apply(ctx) {
     const checked = baselineCheck ?? await checkedRematchBaseline(input, signal)
     const { ecosystem, baseline, fields, view, candidate: before } = checked
     const { removeId, addId, sourceId } = input.change
+    if (baseline.evidenceReplay && (removeId !== 'evidence' || addId !== undefined)) {
+      throw new Error('这次对照只能卸下证据核验。')
+    }
     const { removed, equipped } = rematchGear(checked)
     const removedGear = equipped.find(item => item.id === removeId)
     if (removeId !== undefined && !removedGear) throw new Error('原局没有可单独卸下的这件装备。')
@@ -3909,6 +3923,9 @@ export async function apply(ctx) {
       (!assembled.equipmentIds.includes(id) || checked.draft.equipmentSources[id] !== assembled.equipmentSources[id]))) {
       throw new Error('这次变更还会影响其他已装备项目或来源。')
     }
+    if (baseline.evidenceReplay && !sameRematchPresent(checked, candidate)) {
+      throw new Error('原局的交付工具或来源已变化，请重新核对。')
+    }
     const identity = comparisonLoadoutIdentity(assembled, candidate, ecosystem)
     if (!identity) throw new Error('无法核对当前出装的配置。')
     const loadout = { presetId: candidate.id, heroId: baseline.heroId, heroName: baseline.heroName, identity }
@@ -3917,7 +3934,8 @@ export async function apply(ctx) {
     const { inputHash } = input
     const token = createHash('sha256').update(JSON.stringify([inputHash, fields.cwd, fields.digest, baseline, loadout])).digest('hex')
     signal?.throwIfAborted()
-    return { view: { ...view, change, token }, record: { ...fields, baseline, loadout, change, edit: input.change, inputHash, token },
+    return { view: { ...view, change, token, ...(baseline.evidenceReplay && { evidenceReplay: true }) },
+      record: { ...fields, baseline, loadout, change, edit: input.change, inputHash, token },
       draft, before, candidate, ecosystem, againstDraft: checked.draft }
   }
 
@@ -3964,17 +3982,20 @@ export async function apply(ctx) {
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
       const lessonBaseline = comparisons === workspaceComparisons && comparison.lesson === lighthouseLesson
       const evidencePractice = comparisons === workspaceComparisons && comparison.lesson === evidenceLesson
+      const evidenceReplay = comparison.baseline?.evidenceReplay === true
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material,
         verifyMaterialDelivery: lessonBaseline || verifyPersonalDelivery,
-        ...((verifyPersonalDelivery || evidencePractice) && { exactMessages: true }) }, receipts)
+        ...((verifyPersonalDelivery || evidencePractice || evidenceReplay) && { exactMessages: true }),
+        linkedChoicesOnly: evidenceReplay }, receipts)
       if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
         result.reason = '未交付本次练习的灯塔补给卡。请查看原会话或开始新的练习。'
       }
       const canReuse = evidencePractice
         ? result.status === 'complete' && (comparisonChoices(result).length > 0 ||
           (comparison.scenario === 'confirmed' && result.deliverables.length > 0))
-        : (!lessonBaseline || result.materialDelivered === true) && reusableComparisonArm(arm, result)
-      const canRematch = canReuse && !evidencePractice && materialComparisonStores.includes(comparisons) &&
+        : (!lessonBaseline || result.materialDelivered === true) && (!evidenceReplay || !result.continuationReason) &&
+          reusableComparisonArm(arm, result)
+      const canRematch = canReuse && !evidencePractice && !evidenceReplay && materialComparisonStores.includes(comparisons) &&
         (!comparison.baseline || Boolean(previousComparison(comparison)))
       const canTransfer = canReuse && saved?.opened && (comparison.lesson === lighthouseLesson ||
         (evidencePractice && !result.continuationReason))
@@ -4012,7 +4033,7 @@ export async function apply(ctx) {
     if (!previous) return missing
     if (previous.personal) {
       const original = await personalRematchEvidence(previous.personal, signal)
-      if (!original || original.sessionId !== sessionId) return missing
+      if (!original || original.sessionId !== sessionId || original.evidenceReplay !== previous.personal.evidenceReplay) return missing
       const { target, observed, canReuse } = original
       if (target.presetId !== previous.personal.presetId || target.identity !== previous.personal.identity ||
         target.workspaceId !== comparison.workspaceId || target.cwd !== comparison.cwd ||
@@ -4027,7 +4048,7 @@ export async function apply(ctx) {
 
   function personalHandoffStyles(record, previous) {
     const { edit, baseline, loadout } = record
-    if (baseline?.heroId !== 'standard' || loadout?.heroId !== 'standard' || edit.sourceId !== undefined) return
+    if (baseline?.heroId !== 'standard' || loadout?.heroId !== 'standard' || edit.sourceId !== undefined || baseline.evidenceReplay) return
     const fromOwnTask = baseline.kind === 'personal'
     if (fromOwnTask && edit.addId === 'review' && edit.removeId === undefined) return ['direct', 'review']
     const parent = previous?.original
@@ -4057,7 +4078,8 @@ export async function apply(ctx) {
     if (record.baseline) pending.unshift(readRematchBaseline(record, previous, signal, verifyPersonalDelivery))
     const arms = await Promise.all(pending)
     const handoffOutcome = styles && observedHandoffOutcome(record.material, arms, styles)
-    return { arms, ...(previous?.view && { previous: previous.view }), ...(handoffOutcome && { handoffOutcome }) }
+    return { arms, ...(previous?.view && { previous: previous.view }), ...(handoffOutcome && { handoffOutcome }),
+      ...(record.baseline?.evidenceReplay && { evidenceReplay: true }) }
   }
 
   function comparisonChoices({ entries = [] }) {
@@ -4099,12 +4121,14 @@ export async function apply(ctx) {
         const title = category === 'lighthouse' ? '灯塔补给行动'
           : (record.brief ?? task.split('\n').slice(2, -1).join(' ')).trim().slice(0, 120) || headings[category].split(' ')[0]
         return { id, kind: category, createdAt, title, material, workspaceTitle, store, record, change: record.change, lesson: record.lesson,
-          ...(record.lesson === evidenceLesson && { scenario: record.scenario }) }
+          ...(record.lesson === evidenceLesson && { scenario: record.scenario }),
+          ...(record.baseline?.evidenceReplay && { evidenceReplay: true }) }
       }).filter(item => {
         if (older && comparisonHistoryOrder(item, older) <= 0) return false
         const workspaceName = item.workspaceTitle === 'default-workspace' ? 'default-workspace 默认工作区 Default workspace' : item.workspaceTitle
         const planLabels = item.record.plans && Object.values(item.record.plans).flatMap(({ planName, heroName }) => [planName, heroName])
         const searchable = [headings[item.kind], workspaceName, item.material, item.record.task, ...(planLabels ?? []),
+          item.evidenceReplay ? '证据换装对照 Evidence gear comparison' : undefined,
           item.lesson === lighthouseLesson ? '灯塔换装练习 Lighthouse rematch lesson' : undefined,
           item.scenario === 'gap' ? '灯塔证据取舍 Lighthouse evidence choices 关键证据缺失 Missing key evidence'
             : item.scenario === 'confirmed' ? '灯塔证据取舍 Lighthouse evidence choices 证据齐全 Evidence available' : undefined,
@@ -4160,7 +4184,8 @@ export async function apply(ctx) {
       const target = personalTaskTarget(launch, header)
       if ((strict || evidenceSource) && !target) return
       const evidence = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
-        verifyMaterialProof: strict || evidenceSource, verifyMaterialDelivery: true, exactMessages: true, includeWindows: !strict }, receipts)
+        verifyMaterialProof: strict || evidenceSource, verifyMaterialDelivery: true, exactMessages: true,
+        linkedChoicesOnly: evidenceSource, includeWindows: !strict }, receipts)
       return { launch, cwd, presetId, evidence, target }
     } finally {
       source[Symbol.dispose]()
@@ -4171,12 +4196,17 @@ export async function apply(ctx) {
     if (selection.kind !== 'personal' || !validRematchReference(selection)) return
     const sessionId = 'session-' + selection.comparisonId
     const original = await observeLessonTask(sessionId, signal, true)
-    if (!original || isEvidenceLessonSource(original.launch.source)) return
+    if (!original) return
     const { target, evidence, presetId } = original
     const record = records.get(presetId)
     const hero = matchHero(presetId, record)
-    const canReuse = evidence.status === 'complete' && (evidence.materialDelivered || comparisonChoices(evidence).length > 0)
-    return { sessionId, target, hero, observed: evidence, canReuse }
+    const evidenceReplay = isEvidenceLessonSource(original.launch.source)
+    const choices = comparisonChoices(evidence)
+    if (evidenceReplay && (original.launch.source.lesson !== evidenceLesson || hero.id !== 'standard' ||
+      record?.equipmentIds.length !== 2 || !record.equipmentIds.includes('evidence') || !record.equipmentIds.includes('present'))) return
+    const canReuse = evidence.status === 'complete' && (evidenceReplay ? !evidence.continuationReason && choices.length > 0
+      : evidence.materialDelivered || choices.length > 0)
+    return { sessionId, target, hero, observed: evidence, canReuse, ...(evidenceReplay && { evidenceReplay }) }
   }
 
   async function readLessonTaskResult({ sessionId, review }, signal) {
@@ -4190,7 +4220,7 @@ export async function apply(ctx) {
     const canReview = evidence.status === 'complete' && (delivered || choices.length > 0) &&
       (!evidenceSource || !evidence.continuationReason)
     const receiptIds = windows.map(({ endSeq }) => sessionId + ':' + endSeq)
-    const reference = canReview && !evidenceSource && target &&
+    const reference = canReview && target && (!evidenceSource || choices.length > 0) &&
       { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }
     const [settled, original] = await Promise.all([
       growth.settlementAwards(sessionId, receiptIds),
@@ -5321,8 +5351,9 @@ export async function apply(ctx) {
       }
       const rematch = rematchComparisons.member(sessionId)
       if (rematch) {
-        const { lesson, loadout } = rematchComparisons.read(rematch.id)
-        value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }) }
+        const { lesson, loadout, baseline } = rematchComparisons.read(rematch.id)
+        value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }),
+          ...(baseline.evidenceReplay && { evidenceReplay: true }) }
       }
       if (savedTask?.launch) {
         const { planName, material, task, source } = savedTask.launch

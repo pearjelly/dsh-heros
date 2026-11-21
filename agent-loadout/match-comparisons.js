@@ -146,6 +146,9 @@ export function validRematchComparison(record) {
     (baseline.kind !== 'personal' || baseline.sessionId === 'session-' + baseline.comparisonId) &&
     /^session-[a-f0-9]{32}$/.test(baseline.sessionId) && /^[a-f0-9]{64}$/.test(inputHash) && /^[a-f0-9]{64}$/.test(token) &&
     edit && change && (edit.addId !== undefined || edit.removeId !== undefined) &&
+    (baseline.evidenceReplay === undefined || (baseline.evidenceReplay === true && baseline.kind === 'personal' &&
+      baseline.heroId === 'standard' && loadout.heroId === 'standard' && edit.removeId === 'evidence' &&
+      edit.addId === undefined && edit.sourceId === undefined)) &&
     (edit.removeId === undefined ? change.removed === undefined : label(change.removed) && change.removed.id === edit.removeId) &&
     (edit.addId === undefined ? change.added === undefined : label(change.added) && change.added.id === edit.addId)
 }

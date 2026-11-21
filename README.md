@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.90.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.91.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -29,6 +29,12 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 2. In **Missing key evidence**, the card does not verify a report of two spare batteries. On the native DSH question card, you can gather more evidence, limit the recommendation to what the card supports, or pause submission. In **Evidence available**, the card records two cans of lamp oil, so the handoff can proceed without asking you to resolve a missing source.
 3. Choose **View evidence run** in the session, or find the run in **Run history**. Check actual tool calls, any answer you gave, and any file delivered in that session. A choice to pause can leave the run with zero attachments. Each run uses a separate sample workspace, and any delivery stays in the DSH conversation.
 4. After a recorded decision in **Missing key evidence** or a verified handoff in **Evidence available**, choose **Use this loadout on my task**. Pick a file in your own workspace, write the new brief and review the loadout before opening a fresh session. Send the task yourself. In **View task result**, inspect any choice you made and any file actually delivered. You can review the gear and save it as a plan.
+
+## Replay a personal task without Evidence Check
+
+1. Open **View task result** on a personal Standard Mode run with a verified Evidence Check choice. Choose **Try one gear change**, then **Review Evidence Check removal**. The preview removes only Evidence Check and keeps Deliverable Preview and its original tool source.
+2. Choose **Open rematch session**, then manually send the same task in the new DSH session. The replay uses the original workspace, material and brief. The original material and source must still pass verification.
+3. In **Evidence gear comparison**, compare the actual tool calls, recorded choices, and files from both sessions. A choice to pause can leave zero files. If the replay asks a question of its own, any recorded answer appears on that side. Open either source session to inspect the conversation and decide whether to equip Evidence Check next time.
 
 ## Play your first rematch
 

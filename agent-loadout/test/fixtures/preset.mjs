@@ -69,7 +69,7 @@ export async function apply(ctx) {
   }, { global: true })
   ctx.on('user-questions/request', (request, next) => {
     const question = request.questions[0]
-    if (question?.id === 'fixture-lighthouse-route') {
+    if (question?.id === 'fixture-lighthouse-route' || question?.id === 'fixture-handoff-format') {
       return { answers: [{ id: question.id, selected: [question.options[0].label] }] }
     }
     if (question?.id === 'fixture-delivery-review' || question?.id === 'fixture-lighthouse-evidence') {
@@ -185,28 +185,37 @@ export async function apply(ctx) {
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')
         const foundEvidence = results[0]?.content.some(block => block.text?.includes(supportedFact))
+        const hasEvidenceCheck = systemText.includes('If a material claim lacks evidence')
+        const replay = personalEvidence && evidenceGap && !hasEvidenceCheck
+        const asksFormat = replay && latestText.includes('交接格式') && tools?.some(tool => tool.name === 'ask_user_question')
         const title = personalEvidence ? 'Equipment handoff' : 'Lighthouse handoff'
-        const file = evidenceGap ? 'qualified-handoff.md' : 'verified-handoff.md'
+        const file = replay ? 'direct-handoff.md' : evidenceGap ? 'qualified-handoff.md' : 'verified-handoff.md'
         sequence = ['read']
-        if (foundEvidence && evidenceGap && systemText.includes('If a material claim lacks evidence')) {
+        if (foundEvidence && evidenceGap && hasEvidenceCheck) {
           sequence.push('ask_user_question')
           const choice = results[1] && JSON.parse(results[1].content[0].text).answers?.[0]?.selected?.[0]
           if (choice === labels[0]) sequence.push('glob')
           if (choice === labels[1]) sequence.push('write', 'present')
-        } else if (foundEvidence && evidenceConfirmed) {
+        } else if (foundEvidence && (evidenceConfirmed || replay)) {
+          if (asksFormat) sequence.push('ask_user_question')
           sequence.push('write', 'present')
         }
         name = sequence[results.length]
         if (name === 'read') args = { file_path: evidenceMaterial }
-        if (name === 'ask_user_question') args = { questions: [{
-          id: 'fixture-lighthouse-evidence',
-          question: english ? `The selected record does not list ${unverifiedClaim}. How should the handoff proceed?`
-            : (personalEvidence ? '所选台账没有列出一台备用充电器。接下来怎样安排交接？' : '所选补给卡没有列出两节备用电池。接下来怎样安排交接？'),
-          options: labels.map(label => ({ label })),
-        }] }
+        if (name === 'ask_user_question') {
+          args = { questions: [asksFormat ? {
+            id: 'fixture-handoff-format', question: '交接说明需要哪种格式？',
+            options: [{ label: '简明摘要' }, { label: '完整说明' }],
+          } : {
+            id: 'fixture-lighthouse-evidence',
+            question: english ? `The selected record does not list ${unverifiedClaim}. How should the handoff proceed?`
+              : (personalEvidence ? '所选台账没有列出一台备用充电器。接下来怎样安排交接？' : '所选补给卡没有列出两节备用电池。接下来怎样安排交接？'),
+            options: labels.map(label => ({ label })),
+          }] }
+        }
         if (name === 'glob') args = { pattern: personalEvidence ? '**/*charger*.md' : '**/*batter*.md' }
         if (name === 'write') args = { file_path: file, content: `# ${title}\n\nVerified: ${supportedFact}.\n` +
-          (evidenceGap ? `Unverified: ${unverifiedClaim}. Exclude the claim from the recommendation.\n` : '') }
+          (evidenceGap && !replay ? `Unverified: ${unverifiedClaim}. Exclude the claim from the recommendation.\n` : '') }
         if (name === 'present') args = { files: [{ path: file, description: title }] }
       } else if (comparisonMaterial || taskMaterial || latestText === 'Hand off the workspace file handoff.md in this conversation.') {
         const intended = comparisonMaterial ?? taskMaterial ?? 'handoff.md'

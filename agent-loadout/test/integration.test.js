@@ -1805,6 +1805,7 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     const send = ({ sessionId, task, requestId }) => host.request(turnEndpoint, { sessionId, text: task, requestId })
     const read = (sessionId, review) => invoke('lesson-task-result', { sessionId, review })
     const files = native => native.events.filter(event => event.type === 'deliverables/presented')
+    const usedTools = native => native.events.filter(event => event.type === 'tool/call')
     const launchId = character => character.repeat(32)
     const choose = async (opened, choice, whileWaiting) => {
       const { sessionId } = opened
@@ -1854,7 +1855,7 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     const picked = await invoke('lesson-task-materials', { ...source, workspaceId, query: '设备 台账' })
     assert.deepEqual(picked.entries, [{ path: material, name: file, kind: 'file' }])
 
-    const gap = '根据台账核对两台备用对讲机，再核对交班消息里提到的一台备用充电器。准备本次交接，供我决策。'
+    const gap = '根据台账核对两台备用对讲机，再核对交班消息里提到的一台备用充电器。准备本次交接，供我决策。如果需要，请另行询问交接格式。'
     const confirmed = '根据台账核对两台备用对讲机，为接班人生成一份交接说明。'
     const preview = (task, override = {}, status) => invoke('lesson-task-preview', { ...source, workspaceId, material, task, ...override }, status)
     const open = (task, token, id, status) => invoke('lesson-task-open', { ...source, workspaceId, material, task, token, launchId: launchId(id) }, status)
@@ -1877,6 +1878,7 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
       { id: 'e', task: confirmed, tools: ['read', 'write', 'present'], file: 'verified-handoff.md' },
     ]
     const proofs = new Map()
+    let qualifiedReplay
     for (const attempt of cases) {
       const checked = attempt.task === gap ? checkedGap : await preview(attempt.task)
       const opened = await open(attempt.task, checked.token, attempt.id)
@@ -1904,7 +1906,7 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
       assert.equal(accepted.data.content[0].text, checked.task)
       assert.equal(admission?.data.state, 'verified')
       assert.equal(admission?.data.requestId, accepted.data.source.rpcId ?? null)
-      assert.deepEqual(native.events.filter(event => event.type === 'tool/call').map(event => event.data.name), attempt.tools)
+      assert.deepEqual(usedTools(native).map(event => event.data.name), attempt.tools)
       const attachments = files(native)
       assert.deepEqual(attachments.flatMap(event => event.data.files.map(item => item.path)),
         attempt.file ? [join(await realpath(personal), attempt.file)] : [])
@@ -1923,14 +1925,103 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
       assert.deepEqual(proved.deliverables, attempt.file ? [{ name: attempt.file, turn: attachments[0].data.turn, seq: attachments[0].seq, index: 0 }] : [])
       assert.equal(proved.materialDelivered, false)
       assert.equal(proved.canReview, true)
-      assert.equal(proved.rematchSource, undefined)
       assert.equal(proved.rebaseline, undefined)
       assert.ok(!JSON.stringify(proved).includes(native.workspacePath))
       const reviewed = await read(sessionId, true)
       assert.deepEqual(new Set(reviewed.draft.equipmentIds), new Set(['evidence', 'present']))
-      await invoke('rematch-comparison-options', { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }, 422)
+      const reference = { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }
+      if (attempt.choice) {
+        assert.deepEqual(proved.rematchSource, reference)
+        const replayOptions = await invoke('rematch-comparison-options', reference)
+        assert.equal(replayOptions.evidenceReplay, true)
+        assert.equal(replayOptions.baseline.sessionId, sessionId)
+        assert.deepEqual(replayOptions.baseline.choices, [attempt.choice])
+        assert.deepEqual(replayOptions.baseline.deliverables.map(item => item.name), attempt.file ? [attempt.file] : [])
+        assert.equal(replayOptions.workspaceId, workspaceId)
+        assert.equal(replayOptions.material, material)
+        assert.equal(replayOptions.task, opened.task)
+        const fields = { ...reference, change: { removeId: 'evidence' } }
+        const replayPreview = await invoke('rematch-comparison-preview', fields)
+        assert.ok(replayPreview.token)
+        assert.deepEqual(replayPreview.change, { removed: { id: 'evidence', name: '证据核验' } })
+        assert.equal(replayPreview.task, opened.task)
+        assert.ok(!replayPreview.comparison.lost.some(item => item.id === 'present' || item.name === 'present'))
+        if (attempt.file) qualifiedReplay = { fields, replayPreview, native, opened }
+      } else {
+        assert.equal(proved.rematchSource, undefined)
+        await invoke('rematch-comparison-options', reference, 422)
+      }
       proofs.set(sessionId, proved)
     }
+
+    const { fields, replayPreview, native: qualified, opened: qualifiedSession } = qualifiedReplay
+    for (const change of [{ removeId: 'present' }, { addId: 'review' }, { removeId: 'evidence', addId: 'review' }]) {
+      await invoke('rematch-comparison-preview', { ...fields, change }, 422)
+    }
+    const replayFields = { ...fields, token: replayPreview.token, launchId: launchId('9') }
+    await invoke('rematch-comparison-open', { ...replayFields, change: { removeId: 'present' } }, 422)
+    const members = async () => (await host.request(workspace, { inspectWorkspaceId: workspaceId })).sessionIds
+    const beforeReplay = await members()
+    await appendFile(original, '\nEdited before opening the replay.\n')
+    await invoke('rematch-comparison-options', fields, 422)
+    await invoke('rematch-comparison-open', replayFields, 422)
+    assert.deepEqual(await members(), beforeReplay)
+    await writeFile(original, body)
+    const [replay, duplicate] = await Promise.all([
+      invoke('rematch-comparison-open', replayFields), invoke('rematch-comparison-open', replayFields),
+    ])
+    assert.deepEqual(duplicate, replay)
+    assert.notEqual(replay.sessionId, qualifiedSession.sessionId)
+    assert.equal(replay.task, qualifiedSession.task)
+    const replayBefore = await history(replay.sessionId)
+    assert.equal(replayBefore.workspaceId, workspaceId)
+    assert.equal(replayBefore.workspacePath, qualified.workspacePath)
+    assert.equal(replayBefore.inherited, 0)
+    assert.notEqual(replayBefore.presetId, qualified.presetId)
+    assert.ok(!replayBefore.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    assert.equal((await equipmentIn(host, replay.sessionId)).rematchComparison.evidenceReplay, true)
+    const qualifiedFile = join(personal, 'qualified-handoff.md')
+    const originalHandoff = await readFile(qualifiedFile, 'utf8')
+    await send(replay)
+    const replayNative = await history(replay.sessionId)
+    const originalRead = usedTools(qualified).find(event => event.data.name === 'read')
+    const replayRead = usedTools(replayNative).find(event => event.data.name === 'read')
+    assert.match(JSON.stringify(originalRead.data), /证据 材料\/设备 台账\.md/u)
+    assert.match(JSON.stringify(replayRead.data), /证据 材料\/设备 台账\.md/u)
+    const provider = native => {
+      const present = usedTools(native).find(event => event.data.name === 'present')
+      return native.events.find(event => event.type === 'plugin:dsh-agent-loadout/tool-source' && event.data.callSeq === present?.seq)?.data.sourceId
+    }
+    assert.ok(provider(qualified))
+    assert.equal(provider(replayNative), provider(qualified))
+    const nativeTools = await host.request('/api/loadout-fixture-tools?id=' + replayBefore.presetId)
+    const clarification = nativeTools.includes('ask_user_question') ? ['ask_user_question'] : []
+    assert.deepEqual(usedTools(replayNative).map(event => event.data.name), ['read', ...clarification, 'write', 'present'])
+    const replayFile = 'direct-handoff.md'
+    assert.deepEqual(files(replayNative).flatMap(event => event.data.files.map(item => item.path)), [join(await realpath(personal), replayFile)])
+    assert.match(await readFile(join(personal, replayFile), 'utf8'), /Verified: two spare radios/u)
+    assert.equal(await readFile(qualifiedFile, 'utf8'), originalHandoff)
+    assert.equal(await readFile(original, 'utf8'), body)
+    assert.deepEqual(files(await history(qualifiedSession.sessionId)), files(qualified))
+
+    const readReplay = () => invoke('rematch-comparison', { comparisonId: replay.id })
+    const replayProof = await readReplay()
+    assert.equal(replayProof.evidenceReplay, true)
+    assert.equal(replayProof.handoffOutcome, undefined)
+    assert.deepEqual(replayProof.change, { removed: { id: 'evidence', name: '证据核验' } })
+    const [baselineArm, replayArm] = replayProof.arms
+    assert.equal(baselineArm.sessionId, qualifiedSession.sessionId)
+    assert.deepEqual(baselineArm.entries.flatMap(entry => entry.choices ?? []), [labels[1]])
+    assert.equal(baselineArm.deliverables[0].name, 'qualified-handoff.md')
+    assert.equal(replayArm.status, 'complete')
+    assert.equal(replayArm.sessionId, replay.sessionId)
+    assert.deepEqual(replayArm.entries.flatMap(entry => entry.choices ?? []), clarification.length ? ['简明摘要'] : [])
+    assert.equal(replayArm.deliverables[0].name, replayFile)
+    assert.ok(!replayArm.canRematch)
+    await invoke('rematch-comparison-options', { kind: 'rematch', comparisonId: replay.id, arm: 'rematch' }, 422)
+    const replayHistory = (await invoke('comparison-history', { kind: 'rematch', query: material })).items.find(item => item.id === replay.id)
+    assert.equal(replayHistory?.evidenceReplay, true)
+
     const stale = await open(confirmed, (await preview(confirmed)).token, 'f')
     await appendFile(original, '\nEdited after opening the draft.\n')
     await send(stale)
@@ -1947,6 +2038,8 @@ test('Lighthouse Evidence Check carries real choices and derived files to person
     host = await startHost(env, patch)
     assert.deepEqual((await invoke('lesson-task-options', source)).source, options.source)
     for (const [sessionId, proved] of proofs) assert.deepEqual(await read(sessionId), proved)
+    assert.deepEqual(await readReplay(), replayProof)
+    assert.deepEqual(await invoke('rematch-comparison-open', replayFields), replay)
   } finally {
     await host?.stop()
     await rm(directory, { recursive: true, force: true })

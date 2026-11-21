@@ -382,7 +382,7 @@ function answeredComparisonTurns(events, after, asks, live, presetId, verifyMate
 }
 
 export async function comparisonEvidence(source, { cwd, presetId, task, material, verifyMaterialDelivery,
-  verifyMaterialProof = true, exactMessages = !verifyMaterialProof, includeWindows }, receipts) {
+  verifyMaterialProof = true, exactMessages = !verifyMaterialProof, linkedChoicesOnly = false, includeWindows }, receipts) {
   const unavailable = reason => ({ status: 'unavailable', reason })
   if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
     return unavailable('session-unavailable')
@@ -429,11 +429,20 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
   const followUps = end >= 0 && asks.size ? answeredComparisonTurns(events, end + 1, asks, live, presetId, verifyMaterialProof, exactMessages) : { turns: [] }
   const turns = [[start, end], ...followUps.turns]
   // A settled projection includes replies outside the accepted turns. Only use linked replies in this task.
-  const replies = exactMessages && new Set(turns.flatMap(([from, finish]) => finish < 0 ? []
+  const replies = (exactMessages || linkedChoicesOnly) && new Set(turns.flatMap(([from, finish]) => finish < 0 ? []
     : events.slice(from + 1, finish).flatMap(event => event.type === 'user/message' && event.surfaceOp === 'append' &&
       event.data.source.kind === 'user-question-reply' ? [event.data.source.callId] : [])))
   const settled = new Map((projection?.settled ?? []).filter(entry => asks.has(entry.callId) && (!replies || replies.has(entry.callId)))
     .map(entry => [entry.callId, entry.answers]))
+  // The host records an in-turn answer in the native tool result. Only a late answer creates a separate user reply.
+  if (linkedChoicesOnly) {
+    for (const event of body) {
+      if (event.type === 'tool/result' && event.surfaceOp === 'append' && event.data.turn === turn && !event.data.message.isError) {
+        const { toolCallId } = event.data.message
+        if (asks.has(toolCallId)) replies.add(toolCallId)
+      }
+    }
+  }
   const status = pendingQuestions.length ? 'waiting-choice' : end < 0 || followUps.running ? 'running' : 'complete'
 
   const files = new Map()
@@ -454,10 +463,12 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     const evidence = await reportTurn(source, from, finish < 0 ? events.length : finish + 1, receipts)
     for (const { type, name, state, sourceNames, choices, nested, seq } of evidence?.entries ?? []) {
       if (type !== 'tool') continue
-      const answer = name === 'ask_user_question' && settled.get(events[seq]?.data.callId)
+      const callId = events[seq]?.data.callId
+      const answer = name === 'ask_user_question' && settled.get(callId)
       const selected = answer && answer.flatMap(item => item.selected ?? []).filter(label => typeof label === 'string' && label.length <= 200)
       const linkedReply = exactMessages && selected?.length && state === 'unfinished'
-      entries.push({ type, name, state: linkedReply ? 'completed' : state, sourceNames, choices: selected?.length ? selected : choices, nested })
+      const recordedChoices = !linkedChoicesOnly || replies?.has(callId) ? choices : undefined
+      entries.push({ type, name, state: linkedReply ? 'completed' : state, sourceNames, choices: selected?.length ? selected : recordedChoices, nested })
     }
   }
   const materialDelivered = verifyMaterialDelivery && [...files.keys()].some(file => resolve(cwd, file) === resolve(cwd, material))
