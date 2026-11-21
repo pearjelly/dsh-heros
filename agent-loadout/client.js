@@ -2480,8 +2480,151 @@ window.__ModuleLoader__.load({
         h(RemovedEquipment, { labels: removed }))
     }
 
-    function BuildPlans({ plans, initialMode, draft, current, canSave, request, onClose, onChanged, onApply, onCompare }) {
+    const planShareLimit = 16 * 1024
+    const planShareStates = { ready: '已核对', missing: '本机缺失', different: '与分享要求不同', unavailable: '不可用' }
+
+    function PlanShareRows({ title, items }) {
+      if (!items?.length) return null
+      return h('section', { className: 'moba-share-section' }, h('h3', null, title),
+        h('ul', { className: 'moba-share-rows' }, items.map((item, index) => {
+          const metadata = [item.sourceName, item.version].filter(Boolean).join(' · ')
+          return h('li', { key: index, 'data-state': item.state },
+            h('div', null, h('strong', null, item.name), metadata && h('span', null, metadata),
+              item.reason && h('p', null, item.reason)),
+            item.state && h('small', null, t(planShareStates[item.state] ?? '不可用')))
+        })))
+    }
+
+    function PlanShareRequirements({ value }) {
+      const { host, hero, gear, dependencies } = value
+      return h(Fragment, null,
+        host && h('dl', { className: 'moba-share-host', 'data-state': host.state },
+          h('dt', null, t('分享码的 DSH 版本')), h('dd', null, host.version),
+          host.current && h(Fragment, null, h('dt', null, t('当前 DSH 版本')), h('dd', null, host.current)),
+          host.state && h(Fragment, null, h('dt', null, t('版本核对')), h('dd', null, t(planShareStates[host.state] ?? '不可用')))),
+        hero && h(PlanShareRows, { title: t('英雄'), items: [hero] }),
+        h(PlanShareRows, { title: t('要装备'), items: gear?.filter(item => item.operation !== 'remove') }),
+        h(PlanShareRows, { title: t('要卸下的自带装备'), items: gear?.filter(item => item.operation === 'remove') }),
+        h(PlanShareRows, { title: t('所需依赖'), items: dependencies }))
+    }
+
+    function ExportPlanShare({ plan, request, onBack }) {
+      const language = useLanguage()
+      const [result, setResult] = useState(null)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const heading = useRef(null)
+      const field = useRef(null)
+      useEffect(() => heading.current?.focus(), [])
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'plan-share-export'
+        setError('')
+        setResult(null)
+        request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setResult(value) })
+          .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
+        return () => abort.abort()
+      }, [request, plan.id, plan.revision, language])
+
+      async function copy() {
+        try {
+          await navigator.clipboard.writeText(result.code)
+          setNotice(t('分享码已复制。'))
+        } catch {
+          field.current?.focus()
+          field.current?.select()
+          setNotice(t('分享码已选中，可以手动复制。'))
+        }
+      }
+
+      return h(Fragment, null,
+        h('div', { className: 'moba-plan-fields moba-share-fields' },
+          h('h3', { ref: heading, tabIndex: -1 }, plan.name),
+          error ? h('p', { className: 'moba-alert', role: 'alert' }, error)
+            : !result ? h('p', { className: 'moba-empty', role: 'status' }, t('正在核对分享要求…'))
+              : h(Fragment, null,
+                h(PlanShareRequirements, { value: result }),
+                h(PlanShareRows, { title: t('暂时无法分享'), items: result.blockers }),
+                result.reason && h('p', { className: 'moba-alert', role: 'status' }, result.reason),
+                result.code && h('label', null, t('出装分享码'),
+                  h('textarea', { className: 'moba-share-code', ref: field, readOnly: true, value: result.code, rows: 3,
+                    spellCheck: false, onFocus: event => event.currentTarget.select() }),
+                  h('span', null, t('分享码包含方案名称和装备要求。'))),
+                notice && h('p', { className: 'moba-empty', role: 'status' }, notice))),
+        h('footer', { className: 'moba-gallery-footer' },
+          h('button', { className: 'moba-roster-open', type: 'button', onClick: onBack }, t('返回方案库')),
+          result?.code && h('button', { className: 'moba-start', type: 'button', onClick: copy }, t('复制分享码'))))
+    }
+
+    function ImportPlanShare({ request, hasOpening, onBack, onImport }) {
+      const language = useLanguage()
+      const [code, setCode] = useState('')
+      const [preview, setPreview] = useState(null)
+      const [error, setError] = useState('')
+      const [checking, setChecking] = useState(false)
+      const field = useRef(null)
+      const previewHeading = useRef(null)
+      const pending = useRef(null)
+      useEffect(() => {
+        field.current?.focus()
+        return () => pending.current?.abort()
+      }, [])
+      useEffect(() => previewHeading.current?.focus(), [preview])
+
+      async function check(event) {
+        event.preventDefault()
+        if (pending.current || !code.trim()) return
+        const abort = new AbortController()
+        pending.current = abort
+        setChecking(true)
+        setPreview(null)
+        setError('')
+        const action = 'plan-share-preview'
+        try {
+          const value = await request(action, { action, code: code.trim() }, abort.signal, language)
+          if (!abort.signal.aborted) setPreview(value)
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setChecking(false)
+        }
+      }
+
+      const canAdopt = preview && !preview.blocked && preview.draft
+      const groups = preview?.comparison ? capabilityChanges(preview.comparison).filter(group => group.cards.length) : empty
+      return h('form', { className: 'moba-plan-form', onSubmit: check },
+        h('div', { className: 'moba-plan-fields moba-share-fields' },
+          h('label', null, t('出装分享码'),
+            h('textarea', { className: 'moba-share-code', ref: field, required: true, value: code, rows: 3, maxLength: planShareLimit,
+              readOnly: checking, spellCheck: false, autoComplete: 'off', autoCapitalize: 'off',
+              onChange: event => { setCode(event.target.value); setPreview(null); setError('') } })),
+          error && h('p', { className: 'moba-alert', role: 'alert' }, error),
+          checking && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对分享要求…')),
+          preview && h('div', { className: 'moba-share-review' },
+            h('h3', { ref: previewHeading, tabIndex: -1 }, preview.name),
+            preview.note && h('p', { className: 'moba-plan-note' }, preview.note),
+            h(PlanShareRequirements, { value: preview }),
+            groups.length > 0 && h('section', { className: 'moba-share-section moba-playbook-comparison' },
+              h('h3', null, t('相比英雄基础出装的变化')),
+              groups.map(group => h(CapabilityList, { ...group, key: group.tone, disclosure: true,
+                heading: group.heading + ' · ' + group.cards.slice(0, 2).map(item => item.name).join(' / ') + ' ' }))),
+            canAdopt ? h('p', { className: 'moba-starter-note' }, t('确认后替换大厅中的出装草稿。'),
+              hasOpening && ' ' + t('当前筹备的开局委托也会清空。'))
+              : h('p', { className: 'moba-alert', role: 'status' },
+                preview.reason ?? t('请处理上方的装备或版本要求，再重新核对。')))),
+        h('footer', { className: 'moba-gallery-footer' },
+          h('button', { className: 'moba-roster-open', type: 'button', onClick: onBack }, t('返回方案库')),
+          h('button', { className: canAdopt ? 'moba-roster-open' : 'moba-start', type: 'submit',
+            disabled: checking || !code.trim() }, preview ? t('重新核对分享码') : t('核对分享码')),
+          canAdopt && h('button', { className: 'moba-start', type: 'button', onClick: () => onImport(preview) },
+            t('采用分享出装'), h(Glyph, { kind: 'arrow', size: 17 }))))
+    }
+
+    function BuildPlans({ plans, initialMode, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport }) {
       const [editor, setEditor] = useState(initialMode === 'create' ? { mode: 'create' } : null)
+      const [sharing, setSharing] = useState(null)
       const [name, setName] = useState('')
       const [note, setNote] = useState('')
       const [query, setQuery] = useState('')
@@ -2491,6 +2634,8 @@ window.__ModuleLoader__.load({
       const dialog = useRef(null)
       const saving = useRef(false)
       const focus = useRef(null)
+      const shareButton = useRef(null)
+      const importButton = useRef(null)
       const title = useId()
       const group = useId()
       const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
@@ -2519,6 +2664,12 @@ window.__ModuleLoader__.load({
         onClose()
       }
 
+      function closeSharing() {
+        const button = sharing.mode === 'import' ? importButton : shareButton
+        setSharing(null)
+        requestAnimationFrame(() => button.current?.focus())
+      }
+
       async function submit(event) {
         event.preventDefault()
         if (saving.current) return
@@ -2545,15 +2696,27 @@ window.__ModuleLoader__.load({
 
       const mode = editor?.mode
       const subject = mode === 'create' ? current.hero?.name : editor?.target?.name
-      return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans', 'data-editing': Boolean(editor),
-        'aria-labelledby': title, onCancel: event => { event.preventDefault(); close() } },
+      return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
+        'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing), 'aria-labelledby': title,
+        onCancel: event => { event.preventDefault(); if (sharing) closeSharing(); else close() },
+        onKeyDown: event => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          if (sharing) closeSharing()
+          else close()
+        } },
         h('header', { className: 'moba-gallery-heading' },
-          h('h2', { id: title }, mode === 'create' ? t('保存出装方案') : mode === 'edit' ? t('编辑方案')
+          h('h2', { id: title }, sharing?.mode === 'export' ? t('分享出装方案') : sharing?.mode === 'import' ? t('导入分享码')
+            : mode === 'create' ? t('保存出装方案') : mode === 'edit' ? t('编辑方案')
             : mode === 'replace' ? t('更新方案出装')
             : mode === 'remove' ? t('移除方案') : t('出装方案')),
           h('button', { className: 'moba-icon-action', type: 'button', 'aria-label': t('关闭出装方案'), disabled: busy, onClick: close },
             h(Glyph, { kind: 'close' }))),
-        editor ? h('form', { className: 'moba-plan-form', onSubmit: submit },
+        sharing?.mode === 'export' ? h(ExportPlanShare, { plan: sharing.plan, request, onBack: closeSharing })
+          : sharing?.mode === 'import' ? h(ImportPlanShare, { request, hasOpening, onBack: closeSharing,
+            onImport: value => { close(); onImport(value) } })
+          : editor ? h('form', { className: 'moba-plan-form', onSubmit: submit },
           h('div', { className: 'moba-plan-fields' },
             mode === 'remove' ? h('p', { className: 'moba-plan-note' }, t('移除「') + subject + t('」的方案入口。历史对局仍可打开。')) :
               h(Fragment, null,
@@ -2596,11 +2759,15 @@ window.__ModuleLoader__.load({
                   (plan.items.length || plan.removed.length || !plan.broken) &&
                     h(PlanEquipment, { items: plan.items, removed: plan.removed }),
                   h('div', { className: 'moba-plan-manage' },
+                    h('button', { className: 'moba-text', type: 'button', ref: shareButton,
+                      onClick: () => setSharing({ mode: 'export', plan }) }, t('分享方案')),
                     h('button', { className: 'moba-text', type: 'button', onClick: () => edit('edit', plan) }, t('编辑方案')),
                     plan.heroId === current.hero?.id && h('button', { className: 'moba-text', type: 'button', disabled: !canSave,
                       onClick: () => edit('replace', plan) }, t('用当前出装更新')),
                     h('button', { className: 'moba-text', type: 'button', onClick: () => edit('remove', plan) }, t('移除方案')))))),
             h('footer', { className: 'moba-gallery-footer' },
+              h('button', { className: 'moba-roster-open', type: 'button', ref: importButton,
+                onClick: () => setSharing({ mode: 'import' }) }, t('导入分享码')),
               plan ? h(Fragment, null,
                 h('button', { className: 'moba-roster-open', type: 'button', disabled: Boolean(plan.broken) || !canSave,
                   onClick: () => { close(); onCompare(plan) } }, t('与当前对照')),
@@ -3526,6 +3693,12 @@ window.__ModuleLoader__.load({
         closePlaybooks()
       }
 
+      function adoptSharedPlan({ name, draft }) {
+        const labels = Object.fromEntries(draft.equipmentIds.map(id => [id, catalog.get(id)?.name ?? id]))
+        applyHistoricalDraft(draft, labels, draft.equipmentIds[0] ?? 'evidence',
+          t('已采用「%s」的分享出装。').replace('%s', () => name), { preserveMatchMode: true })
+      }
+
       function applyFlagLoadout(flag, { draft, slots, practice }, mode) {
         const slot = slots.find(item => !item.available) ?? slots.find(item => item.placement === 'selected') ?? slots[0]
         applyHistoricalDraft(draft, Object.fromEntries(slots.map((entry, index) => [entry.id, flag.pair[index].name])),
@@ -3933,6 +4106,7 @@ window.__ModuleLoader__.load({
             } }),
           journalOpen && h(QuestJournal, { request, onClose: () => setJournalOpen(false), onOpenMatch: openSource }),
           planMode && h(BuildPlans, { initialMode: planMode, request, draft: loadoutDraft(), canSave: canCompare,
+            hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
             current: { hero: stagePreset, items: selections, removed: removedLabels },
             plans: plans.map(plan => {
               const build = savedBuilds.find(item => item.id === plan.presetId)
@@ -3943,7 +4117,8 @@ window.__ModuleLoader__.load({
               })), removed: Object.values(build?.removedEquipmentLabels ?? emptyMap),
               removedIds: Object.keys(build?.removedEquipmentLabels ?? emptyMap) }
             }),
-            onClose: () => setPlanMode(''), onChanged: planChanged, onApply: applyPlan, onCompare: showPlanComparison }),
+            onClose: () => setPlanMode(''), onChanged: planChanged, onApply: applyPlan, onCompare: showPlanComparison,
+            onImport: adoptSharedPlan }),
           data && h('div', { className: 'moba-grid' },
             h(HeroStage, { preset: stagePreset, presets, selections, removed: removedIds, roles,
               onInspect: item => {
@@ -6609,6 +6784,7 @@ window.__ModuleLoader__.load({
       }
       .moba-plans { width: min(816px, calc(100% - 24px)); }
       .moba-plans[data-editing="true"] { width: min(474px, calc(100% - 24px)); }
+      .moba-plans[data-sharing="true"] { width: min(602px, calc(100% - 24px)); }
       .moba-plan-library { display: grid; grid-template-columns: minmax(208px, .72fr) minmax(0, 1fr); min-height: 0; overflow: auto; scrollbar-color: #69573e #111521; }
       .moba-plan-roster { min-height: 0; min-width: 0; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
       .moba-plan-roster input[type="search"] { min-height: 38px; }
@@ -6640,6 +6816,23 @@ window.__ModuleLoader__.load({
       .moba-plan-fields label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
       .moba-plan-fields input, .moba-plan-fields textarea { width: 100%; min-width: 0; min-height: 40px; padding: 8px; border: 1px solid #515666; background: var(--deep); color: var(--ink); font: inherit; font-size: 14px; }
       .moba-plan-fields textarea { resize: vertical; }
+      .moba-plan-fields .moba-share-code { font: 12px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
+      .moba-share-fields > h3, .moba-share-review > h3, .moba-share-section h3 { margin: 0; overflow-wrap: anywhere; }
+      .moba-share-fields > h3, .moba-share-review > h3 { color: var(--gold); font-size: 17px; }
+      .moba-share-section h3 { padding-block: 4px; font-size: 13px; color: var(--gold); }
+      .moba-share-review { display: grid; align-items: start; gap: 8px; min-width: 0; }
+      .moba-share-host { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+        gap: 4px 8px; margin: 0; padding: 7px 8px; border: 1px solid var(--line); background: #161d28;
+        color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+      .moba-share-host dd { margin: 0; color: var(--ink); }
+      .moba-share-rows { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+      .moba-share-rows li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start;
+        gap: 6px; padding: 6px 8px; border: 1px solid var(--line); background: #161d28; overflow-wrap: anywhere; }
+      .moba-share-rows strong { display: block; font-size: 13px; }
+      .moba-share-rows span, .moba-share-rows p { display: block; margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+      .moba-share-rows small { max-width: 105px; color: #dfc38d; font-size: 11px; text-align: end; }
+      .moba-share-rows [data-state="ready"] small { color: #b7daba; }
+      .moba-share-rows [data-state="missing"] small, .moba-share-rows [data-state="unavailable"] small { color: #ffbcc4; }
       .moba-flag-collection { width: min(820px, calc(100% - 24px)); }
       .moba-flag-library { min-height: 0; overflow: auto; scrollbar-color: #69573e #111521; }
       .moba-flag-library[data-preview="true"] { display: grid; grid-template-columns: minmax(196px, .62fr) minmax(0, 1fr); }

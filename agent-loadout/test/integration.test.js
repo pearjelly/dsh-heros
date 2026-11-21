@@ -1207,6 +1207,199 @@ test('field playbooks preview read-only and add a real handoff decision to the s
   }
 })
 
+test('shared plans resolve in a fresh profile without saving or copying private equipment', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-share-'))
+  const root = await realpath(directory)
+  const senderDir = join(root, 'sender')
+  const receiverDir = join(root, 'receiver')
+  const senderEnv = { ...process.env, DSH_HOME: join(senderDir, 'home') }
+  const receiverEnv = { ...process.env, DSH_HOME: join(receiverDir, 'home') }
+  const patch = join(directory, 'fixture.yml')
+  let sender
+  let receiver
+  try {
+    await Promise.all([mkdir(senderDir), mkdir(receiverDir)])
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    const publishFixture = async name => {
+      const source = join(directory, name)
+      await mkdir(source)
+      await writeFile(join(source, 'package.json'), JSON.stringify({ name, version: '1.0.0', type: 'module',
+        exports: { '.': './index.mjs', './package.json': './package.json' }, dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+      await writeFile(join(source, 'cordis.patch.yml'), JSON.stringify([{ insert: [{ id: 'fixture-share-provider', name }] }]))
+      await writeFile(join(source, 'index.mjs'), `
+        export const inject = ['tools', 'agentLoadoutToolOrigins']
+        export function apply(ctx) {
+          ctx.tools.register({
+            name: 'fixture_equal_schema',
+            description: 'Return the installed fixture provider marker.',
+            parameters: {},
+            output: { schema: { type: 'string' }, render: (_, value) => [{ type: 'text', text: value }] },
+            async execute() { return ${JSON.stringify(name)} },
+          })
+        }
+      `)
+      const { stdout } = await exec('npm', ['pack', '--silent', '--ignore-scripts', '--pack-destination', directory], { cwd: source })
+      return join(directory, stdout.trim())
+    }
+    const packageAction = (action, spec, cwd, env) => exec(binary,
+      ['plugin', '--profile', 'web', action, '-w', '--store-dir=' + join(cwd, 'store'), spec], { cwd, env })
+    const senderPackage = 'dsh-fixture-share-north'
+    const receiverPackage = 'dsh-fixture-share-south'
+    const [senderTarball, receiverTarball] = await Promise.all([publishFixture(senderPackage), publishFixture(receiverPackage)])
+    await Promise.all([
+      installProfile(senderDir, senderEnv).then(() => packageAction('add', senderTarball, senderDir, senderEnv)),
+      installProfile(receiverDir, receiverEnv).then(() => packageAction('add', receiverTarball, receiverDir, receiverEnv)),
+    ])
+    const prior = { id: randomUUID(), revision: randomUUID(), name: 'Prior Standard plan', note: '', heroId: 'standard',
+      heroName: '标准模式', presetId: 'standard', updatedAt: 1 }
+    const plansDir = join(senderEnv.DSH_HOME, 'profiles/web/agent-loadouts/plans')
+    await mkdir(plansDir, { recursive: true })
+    await writeFile(join(plansDir, prior.id + '.json'), JSON.stringify(prior))
+    sender = await startHost(senderEnv, patch)
+    receiver = await startHost(receiverEnv, patch)
+    const invoke = async (host, action, payload, status) => (await host.request(endpoint, { action, ...payload }, status)).value
+    const catalog = async host => (await host.request(endpoint)).value
+    const state = async host => {
+      const { saved, plans } = await catalog(host)
+      return { saved, plans }
+    }
+    const encode = (plan, revision = plan.revision, status) =>
+      invoke(sender, 'plan-share-export', { id: plan.id, revision }, status)
+    const decode = (code, status) => invoke(receiver, 'plan-share-preview', { code }, status)
+
+    const { draft } = await invoke(sender, 'field-playbook-preview', { id: 'review' })
+    const review = await invoke(sender, 'plan-save', { name: 'Reviewed delivery', draft })
+    assert.ok((await catalog(sender)).plans.some(plan => plan.id === prior.id))
+    const earlierCode = await encode(prior)
+    assert.ok(earlierCode.code)
+    assert.deepEqual((await decode(earlierCode.code)).draft.equipmentIds, [])
+
+    const bundleHero = await invoke(sender, 'plan-save', { name: 'Bundle hero plan',
+      draft: { presetId: 'recruiting-advisor', equipmentIds: [] } })
+    const bundleShare = await encode(bundleHero)
+    assert.ok(bundleShare.code, JSON.stringify(bundleShare))
+    const bundled = await decode(bundleShare.code)
+    assert.equal(bundled.hero.sourceName, 'dsh-agent-loadout')
+    assert.equal(bundled.draft?.presetId, 'recruiting-advisor')
+
+    const standard = (await catalog(sender)).presets.find(item => item.id === 'standard')
+    const [presentSlot] = Object.entries(standard.builtIn).find(([, equipment]) => equipment.tools.includes('present'))
+    const alternate = await invoke(sender, 'plan-save', { name: 'Minimal with native preview',
+      draft: { presetId: 'minimal', equipmentIds: [presentSlot] } })
+    const alternateShare = await encode(alternate)
+    assert.ok(alternateShare.code, JSON.stringify(alternateShare))
+    const next = await decode(alternateShare.code)
+    assert.equal(next.draft?.presetId, 'minimal')
+    assert.ok(next.draft.equipmentIds.every(id => id.startsWith('plugin:')))
+    assert.ok(next.comparison.gained.some(item => item.kind === 'tool' && item.name === 'present'))
+
+    const receiverBefore = await state(receiver)
+    const senderBefore = await state(sender)
+    await encode(review, randomUUID(), 422)
+    const exported = await encode(review)
+    assert.match(exported.code, /^DSHH1\.[A-Za-z0-9_-]+$/)
+    assert.ok(exported.host)
+    await decode('not a share code', 422)
+    await decode(exported.code.slice(0, -5), 422)
+    const portable = JSON.parse(Buffer.from(exported.code.slice('DSHH1.'.length), 'base64url').toString('utf8'))
+    const shareText = value => 'DSHH1.' + Buffer.from(JSON.stringify(value)).toString('base64url')
+    await decode('DSHH9.' + exported.code.slice('DSHH1.'.length), 422)
+    await decode(shareText({ ...portable, config: { command: './private-equipment.mjs' } }), 422)
+    await decode(shareText({ ...portable, dependencies: [{ package: 'file:/tmp/unreviewed', version: '1.0.0' }] }), 422)
+    const repeatedKey = '{"name":"Unexpected",' + JSON.stringify(portable).slice(1)
+    await decode('DSHH1.' + Buffer.from(repeatedKey).toString('base64url'), 422)
+    const extraCompanion = { kind: 'preset', hero: portable.hero, entry: 'unrecognized-companion' }
+    const altered = await decode(shareText({ ...portable, companions: [...portable.companions, extraCompanion] }))
+    assert.equal(altered.blocked, true)
+    assert.equal(altered.draft, undefined)
+    assert.ok(altered.dependencies.some(item => item.name === extraCompanion.entry && item.state === 'different'))
+    const oldRecipe = JSON.parse(Buffer.from(earlierCode.code.slice('DSHH1.'.length), 'base64url').toString('utf8'))
+    const foreignHero = { ...oldRecipe.hero, owner: { package: 'different-standard-owner', version: '1.0.0' } }
+    const unresolved = await decode(shareText({ ...oldRecipe, hero: foreignHero }))
+    assert.equal(unresolved.draft, undefined)
+    assert.ok(unresolved.blocked || unresolved.reason)
+    const preview = await decode(exported.code)
+    assert.equal(preview.name, review.name)
+    assert.ok(preview.draft)
+    assert.equal(preview.draft.presetId, 'standard')
+    assert.deepEqual([...preview.draft.equipmentIds].sort(), ['present', 'review'])
+    const receiverReview = await invoke(receiver, 'field-playbook-preview', { id: 'review' })
+    assert.deepEqual(preview.draft.removedEquipmentIds, receiverReview.draft.removedEquipmentIds)
+    assert.deepEqual(new Set(preview.gear.map(item => item.operation)), new Set(['equip', 'remove']))
+    assert.deepEqual(preview.comparison.gained.find(item => item.id === 'review').decisions.map(([label]) => label),
+      ['确认交付', '退回修改'])
+    assert.deepEqual(await state(receiver), receiverBefore)
+    assert.deepEqual(await state(sender), senderBefore)
+
+    const adopted = await invoke(receiver, 'plan-save', { name: preview.name, draft: preview.draft })
+    assert.notEqual(adopted.id, review.id)
+    assert.equal(adopted.heroId, 'standard')
+    const { plans: receiverPlans, saved: receiverBuilds } = await state(receiver)
+    assert.ok(receiverPlans.some(plan => plan.id === adopted.id))
+    assert.ok(receiverBuilds.some(build => build.id === adopted.presetId))
+    const tools = await receiver.request('/api/loadout-fixture-tools?id=' + adopted.presetId)
+    assert.equal(tools.filter(name => name === 'present').length, 1)
+    assert.ok(tools.includes('ask_user_question'))
+
+    await writeFile(join(senderDir, 'private-equipment.mjs'), 'export function apply() {}\n')
+    const privateInput = { title: 'Local equipment', directory: senderDir, text: JSON.stringify({
+      name: './private-equipment.mjs', config: { token: 'fixture-private-config-value' },
+    }) }
+    const checked = await invoke(sender, 'equipment-review', privateInput)
+    await invoke(sender, 'equipment-save', { ...privateInput, reviewedId: checked.id })
+    const privatePlan = await invoke(sender, 'plan-save', { name: 'Local-only plan',
+      draft: { presetId: 'standard', equipmentIds: [checked.id] } })
+    const refused = await encode(privatePlan)
+    assert.equal(refused.code, undefined)
+    assert.ok(refused.blockers?.length)
+    assert.ok(!JSON.stringify(refused).includes('fixture-private-config-value'))
+    assert.ok(!JSON.stringify(refused).includes(senderDir))
+
+    async function installedTool(host) {
+      const { equipment, presets } = await catalog(host)
+      const tool = equipment.find(item => item.name === 'fixture_equal_schema')
+      assert.ok(tool)
+      const standard = presets.find(item => item.id === 'standard')
+      const sourceId = standard.tools[tool.id].includedBy
+      assert.match(sourceId, /^profile:[a-f0-9]{24}$/)
+      return { id: tool.id, sourceId }
+    }
+    const source = await installedTool(sender)
+    const unrelated = await installedTool(receiver)
+    assert.equal(source.id, unrelated.id)
+    assert.notEqual(source.sourceId, unrelated.sourceId)
+    const foreignPlan = await invoke(sender, 'plan-save', { name: 'Verified publisher',
+      draft: { presetId: 'standard', equipmentIds: [source.id], equipmentSources: { [source.id]: source.sourceId } } })
+    const foreignShare = await encode(foreignPlan)
+    assert.ok(foreignShare.code, JSON.stringify(foreignShare.blockers))
+    const external = JSON.parse(Buffer.from(foreignShare.code.slice('DSHH1.'.length), 'base64url').toString('utf8'))
+    assert.deepEqual(external.gear[0].source.owner, { package: senderPackage, version: '1.0.0' })
+    const beforeExternal = await state(receiver)
+    const missing = await decode(foreignShare.code)
+    assert.equal(missing.draft, undefined)
+    assert.equal(missing.blocked, true)
+    assert.ok(missing.dependencies.some(item => item.name === senderPackage && item.state === 'missing'))
+    assert.ok(missing.gear.some(item => item.name === 'fixture_equal_schema' && item.state === 'different'))
+    assert.deepEqual(await state(receiver), beforeExternal)
+
+    await receiver.stop()
+    await packageAction('remove', receiverPackage, receiverDir, receiverEnv)
+    await packageAction('add', senderTarball, receiverDir, receiverEnv)
+    receiver = await startHost(receiverEnv, patch)
+    const local = await installedTool(receiver)
+    assert.notEqual(local.sourceId, source.sourceId)
+    const resolved = await decode(foreignShare.code)
+    assert.equal(resolved.draft?.equipmentSources[local.id], local.sourceId)
+    assert.ok(resolved.dependencies.some(item => item.name === senderPackage && item.state === 'ready'))
+    const imported = await invoke(receiver, 'plan-save', { name: resolved.name, draft: resolved.draft })
+    const { sessionId } = await receiver.request('/api/loadout-fixture-session', { presetId: imported.presetId })
+    await invoke(receiver, 'verify-live', { sessionId, presetId: imported.presetId })
+  } finally {
+    await Promise.all([sender?.stop(), receiver?.stop()])
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('equips independent modules imported from an archive and a Git repository', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-remote-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home') }

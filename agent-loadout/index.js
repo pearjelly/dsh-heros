@@ -10,6 +10,8 @@ import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, 
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
 import { openBuildPlans } from './build-plans.js'
+import { decodeBuildShare, encodeBuildShare } from './build-sharing.js'
+import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
 import { customActionStore } from './custom-actions.js'
 import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, reviewCustomEquipment } from './custom-equipment.js'
@@ -1046,6 +1048,159 @@ export async function apply(ctx) {
         ?? presetLabels.get(heroId)?.[0] ?? heroId
       return { presetId, heroId, heroName }
     })
+  }
+
+  async function shareEnvironment() {
+    const [ecosystem, boot] = await Promise.all([
+      discover(), runtimeModule(ctx, '@deepseek-ai/dsh-app-boot'),
+    ])
+    return { ecosystem, sources: buildShareSources(ctx, ecosystem, boot), runtime: boot.getDshRuntimeVersion() }
+  }
+
+  function shareRefLabel(source) {
+    const owner = source.kind === 'preset' ? source.hero.owner : source.owner
+    return { sourceName: owner.package, version: owner.version }
+  }
+
+  function shareRequirements(gear, candidate, sources) {
+    const packages = new Map()
+    const companions = []
+    const add = ref => {
+      if (!ref || (packages.has(ref.package) && packages.get(ref.package).version !== ref.version)) {
+        throw new Error('无法核对这套出装所需的插件包版本。')
+      }
+      packages.set(ref.package, ref)
+    }
+    for (const { source, kind, id } of gear) {
+      if (source) add(source.kind === 'preset' ? source.hero.owner : source.owner)
+      if (kind === 'featured') {
+        const item = equipmentById.get(id)
+        add(sources.packageFor(item.module ?? item.requires))
+      }
+    }
+    for (const unit of candidate.units?.values() ?? []) {
+      const source = sources.slot(unit.id)
+      if (!source) throw new Error('随装依赖包含无法分享的本地配置。')
+      if (!gear.some(item => item.operation === 'equip' && isDeepStrictEqual(item.source, source))) companions.push(source)
+      add(source.hero.owner)
+      for (const ref of sources.moduleOwners(unit)) add(ref)
+    }
+    return { dependencies: [...packages.values()].sort((a, b) => a.package.localeCompare(b.package)),
+      companions: companions.sort((a, b) => a.hero.id.localeCompare(b.hero.id) || a.entry.localeCompare(b.entry)) }
+  }
+
+  function shareRequirementRows(recipe, sources, ecosystem) {
+    return [
+      ...recipe.dependencies.map(ref => ({ name: ref.package, version: ref.version, ...sources.packageStatus(ref) })),
+      ...recipe.companions.map(source => {
+        const { id, ...status } = sources.resolveSlot(source)
+        return { name: ecosystem.equipment.get(id)?.name ?? source.entry, ...shareRefLabel(source), ...status }
+      }),
+    ]
+  }
+
+  async function exportBuildShare({ id, revision }) {
+    const saved = buildPlans.read(id, revision)
+    const { ecosystem, sources, runtime } = await shareEnvironment()
+    const recipe = { name: saved.name, host: runtime, hero: sources.hero(saved.heroId), gear: [] }
+    const host = { version: runtime, current: runtime, state: 'ready' }
+    const record = records.get(saved.presetId)
+    const blockers = []
+    const gear = []
+    if (!recipe.hero) blockers.push({ name: saved.heroName, reason: '这个预设的来源无法复现，请换用可核对来源的预设。' })
+    if (!record && saved.presetId !== saved.heroId) {
+      blockers.push({ name: saved.name, reason: '方案的本地出装已不可用，请重新保存方案。' })
+    }
+    const equipmentIds = (record?.equipmentIds ?? []).map(id => currentEquipmentId(id, ecosystem))
+    const removedEquipmentIds = (record?.removedEquipmentIds ?? []).map(id => currentEquipmentId(id, ecosystem))
+    const equipmentSources = {}
+    const savedSources = record ? savedToolSources(record, ecosystem) : {}
+    for (const [index, equipmentId] of equipmentIds.entries()) {
+      const oldId = record.equipmentIds[index]
+      const item = equipmentById.get(equipmentId) ?? ecosystem.equipment.get(equipmentId)
+      const name = item?.name ?? record.equipmentLabels?.[oldId] ?? saved.name
+      const operation = 'equip'
+      const sourceId = savedSources[oldId] ?? savedSources[equipmentId]
+      const source = item?.kind === 'tool' ? sources.tool(item, sourceId) : sources.slot(equipmentId)
+      if (equipmentById.has(equipmentId)) {
+        const owner = sources.packageFor(item.module ?? item.requires)
+        recipe.gear.push({ kind: 'featured', operation, id: equipmentId })
+        gear.push({ name, operation, sourceName: owner?.package, version: owner?.version })
+      } else if (source) {
+        if (item.kind === 'tool') {
+          recipe.gear.push({ kind: 'tool', operation, source, tool: item.name, schema: equipmentId })
+          equipmentSources[equipmentId] = sourceId
+        } else recipe.gear.push({ kind: 'plugin', operation, source })
+        gear.push({ name, operation, ...shareRefLabel(source) })
+      } else {
+        blockers.push({ name, reason: '这件装备依赖本地配置或无法核对唯一来源。' })
+      }
+    }
+    for (const [index, equipmentId] of removedEquipmentIds.entries()) {
+      const source = sources.slot(equipmentId, saved.heroId)
+      const name = ecosystem.equipment.get(equipmentId)?.name ?? record.removedEquipmentLabels?.[record.removedEquipmentIds[index]] ?? saved.heroName
+      if (!source) blockers.push({ name, reason: '无法在来源预设中核对这件卸下的装备。' })
+      else {
+        const operation = 'remove'
+        recipe.gear.push({ kind: 'plugin', operation, source })
+        gear.push({ name, operation, ...shareRefLabel(source) })
+      }
+    }
+    const result = { host, gear, blockers, hero: { id: saved.heroId, name: saved.heroName,
+      sourceName: recipe.hero?.owner.package, version: recipe.hero?.owner.version } }
+    if (blockers.length) return result
+    try {
+      const candidate = await plan({ presetId: saved.heroId, equipmentIds, equipmentSources, removedEquipmentIds }, ecosystem)
+      if (candidate.id !== saved.presetId) throw new Error('方案的来源已变化，请核对后重新保存再分享。')
+      const complete = { ...recipe, ...shareRequirements(recipe.gear, candidate, sources) }
+      return { ...result, dependencies: shareRequirementRows(complete, sources, ecosystem)
+        .map(item => ({ ...item, state: 'ready', reason: undefined })), code: encodeBuildShare(complete) }
+    } catch (error) {
+      return { ...result, reason: error instanceof Error ? error.message : '无法核对这套出装的来源。' }
+    }
+  }
+
+  async function previewBuildShare({ code }) {
+    const recipe = decodeBuildShare(code)
+    const { ecosystem, sources, runtime } = await shareEnvironment()
+    const { preset, ...heroStatus } = sources.heroStatus(recipe.hero)
+    const hero = { id: recipe.hero.id, name: preset?.name ?? presetLabels.get(recipe.hero.id)?.[0] ?? recipe.hero.id,
+      sourceName: recipe.hero.owner.package, version: recipe.hero.owner.version, ...heroStatus }
+    const host = { version: recipe.host, current: runtime, state: runtime === recipe.host ? 'ready' : 'different' }
+    const dependencies = shareRequirementRows(recipe, sources, ecosystem)
+    const draft = { presetId: recipe.hero.id, equipmentIds: [], equipmentSources: {}, removedEquipmentIds: [] }
+    const gear = recipe.gear.map(entry => {
+      const { operation, source } = entry
+      if (entry.kind === 'featured') {
+        const item = equipmentById.get(entry.id)
+        const owner = sources.packageFor(item.module ?? item.requires)
+        const declared = recipe.dependencies.find(ref => ref.package === owner?.package || ref.package === (item.module ?? item.requires))
+        if (owner) draft.equipmentIds.push(entry.id)
+        return { name: item.name, operation, sourceName: declared?.package ?? owner?.package ?? 'DSH-Heros',
+          version: declared?.version ?? owner?.version, state: owner ? 'ready' : 'missing' }
+      }
+      const { id, sourceId, ...status } = entry.kind === 'tool' ? sources.resolveTool(entry) : sources.resolveSlot(source)
+      if (id && operation === 'remove') draft.removedEquipmentIds.push(id)
+      if (id && operation === 'equip') draft.equipmentIds.push(id)
+      if (sourceId) draft.equipmentSources[id] = sourceId
+      const name = ecosystem.equipment.get(id)?.name ?? (entry.kind === 'tool' ? entry.tool : source.entry)
+      return { name, operation, ...shareRefLabel(source), ...status }
+    })
+    const result = { name: recipe.name, hero, host, gear, dependencies }
+    if ([hero, ...gear].some(item => item.state !== 'ready')) return { ...result, blocked: true }
+    try {
+      const candidate = await plan(draft, ecosystem)
+      const expected = new Map(recipe.dependencies.map(item => [item.package, item.version]))
+      const actual = shareRequirements(recipe.gear, candidate, sources)
+      if (actual.dependencies.length !== expected.size || actual.dependencies.some(item => expected.get(item.package) !== item.version) ||
+        !isDeepStrictEqual(actual.companions, recipe.companions)) {
+        throw new Error('接收方实际需要的随装依赖与分享码不同。')
+      }
+      return { ...result, dependencies: dependencies.map(item => ({ ...item, state: 'ready', reason: undefined })),
+        draft, comparison: await compare(draft, ecosystem, candidate) }
+    } catch (error) {
+      return { ...result, blocked: true, reason: error instanceof Error ? error.message : '无法核对这套出装的来源。' }
+    }
   }
 
   async function compare(selection, discovered, planned) {
@@ -3809,6 +3964,10 @@ export async function apply(ctx) {
         else if (selection?.action === 'plan-save') {
           value = await saveBuildPlan(selection)
           updates.notify()
+        } else if (selection?.action === 'plan-share-export') {
+          value = await exportBuildShare(selection)
+        } else if (selection?.action === 'plan-share-preview') {
+          value = await previewBuildShare(selection)
         } else if (selection?.action === 'plan-remove') {
           if (closed) throw new Error('配装服务正在关闭，请重试。')
           value = await buildPlans.remove(selection)
