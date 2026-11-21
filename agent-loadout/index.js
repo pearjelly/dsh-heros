@@ -16,6 +16,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
+import { lighthouseDirectory, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -40,6 +41,7 @@ const presetPlugin = '@deepseek-ai/dsh-agent-preset'
 const prefix = 'loadout-'
 const route = '/api/agent-loadout'
 const englishRequest = request => request.headers.get('X-DSH-Heros-Language') === 'en'
+const validOpeningId = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id)
 const teamworkRecord = 'plugin:dsh-agent-loadout/teamwork'
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
@@ -739,7 +741,10 @@ export async function apply(ctx) {
   }
 
   async function list() {
-    const [ecosystem, uploaded] = await Promise.all([discover(), appearance.index()])
+    const [ecosystem, uploaded, sampleWorkspace] = await Promise.all([
+      discover(), appearance.index(),
+      ctx.get('workspaceRegistry')?.resolveByPath?.(lighthouseDirectory(directory)).catch(() => undefined),
+    ])
     const profile = await profileGrowthGear(undefined, ecosystem.bundleRows ?? [])
     const panelActivities = profilePanelActivities(profile)
     const compactionActivities = equipmentCompactionActivities(profile)
@@ -779,6 +784,7 @@ export async function apply(ctx) {
     return {
       roles,
       standingClaims,
+      lighthouseWorkspaceId: sampleWorkspace?.id,
       equipment: [
         ...equipment.map(item => withRank({ ...publicEquipment(item), kind: 'featured', roles: classes.byId.get(item.id),
           art: art('gear', item.id) }, growth.gearRank(item.id))),
@@ -2594,7 +2600,7 @@ export async function apply(ctx) {
       brief: teamTask || trialAction?.kind || comboAction?.prepare?.kind ? undefined : taskBrief }
   }
 
-  async function acceptGrowthQuest({ sessionId, ...selection }, openingPreset) {
+  async function acceptGrowthQuest({ sessionId, ...selection }, openingPreset, allowBasicReplay) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     const active = requireMatch(sessionId)
     if (openingPreset && active.presetId !== openingPreset) throw new Error('新对局的阵容已变化。')
@@ -2616,7 +2622,7 @@ export async function apply(ctx) {
     const teamTasks = !openingPreset && selection.teamTaskId !== undefined ? teamTaskChoices(sessionId, teamBoard(current)) : undefined
     const quest = growthQuest(selection, { ...choices, teamTasks })
     return growth.accept(sessionId, { ...quest, hero: matchHero(current.presetId, current.record), after: current.agent.session.seq,
-      opening: Boolean(openingPreset) })
+      opening: Boolean(openingPreset), allowBasicReplay })
   }
 
   function plannedGear(ecosystem, presetId, { record, units, removed }, profile) {
@@ -2642,8 +2648,8 @@ export async function apply(ctx) {
     })
   }
 
-  async function plannedGrowth(draft, { describe = false } = {}) {
-    const ecosystem = await discover()
+  async function plannedGrowth(draft, { describe = false, ecosystem } = {}) {
+    ecosystem ??= await discover()
     const candidate = await plan(draft, ecosystem)
     const hero = matchHero(candidate.id, candidate.record)
     const profile = await profileGrowthGear().catch(() => [])
@@ -2676,12 +2682,12 @@ export async function apply(ctx) {
           level: growth.gearRank(id).level })) }
   }
 
-  async function startWithQuest({ draft, quest, workspaceId, launchId }, signal) {
+  async function startWithQuest({ draft, quest, workspaceId, launchId }, signal, { allowBasicReplay } = {}) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     const workspace = typeof workspaceId === 'string' && ctx.get('workspaceRegistry')?.get(workspaceId)
     const controller = ctx.get('sessionController')
     if (!workspace || !controller?.create) throw new Error('所选工作区不可用，请重新选择。')
-    if (typeof launchId !== 'string' || !/^[a-f0-9]{32}$/.test(launchId)) {
+    if (!validOpeningId(launchId)) {
       throw new Error('开局请求无效，请重试。')
     }
     const planned = await plannedGrowth(draft)
@@ -2697,7 +2703,7 @@ export async function apply(ctx) {
     const sessionId = 'session-' + createHash('sha256').update(JSON.stringify(key)).digest('hex').slice(0, 32)
     if (openingMatches.has(sessionId)) return openingMatches.get(sessionId)
     if (workspace.sessionIds.includes(sessionId) && growth.openedWithQuest(sessionId)) return { sessionId }
-    growth.validateQuest({ ...selection, hero })
+    growth.validateQuest({ ...selection, hero, allowBasicReplay })
 
     const launch = async () => {
       const { presetId, verifyLive: check } = await prepare(draft, candidate)
@@ -2713,7 +2719,7 @@ export async function apply(ctx) {
           if (!result.agent) throw new Error(result.error?.message ?? '无法打开新对局。')
         }
         if (check) verifyLive({ presetId, sessionId })
-        if (!growth.openedWithQuest(sessionId)) await acceptGrowthQuest({ ...quest, sessionId }, presetId)
+        if (!growth.openedWithQuest(sessionId)) await acceptGrowthQuest({ ...quest, sessionId }, presetId, allowBasicReplay)
         return { sessionId }
       } catch (error) {
         return { sessionId, questError: error instanceof Error ? error.message : '新对局未能接下委托。' }
@@ -2722,6 +2728,33 @@ export async function apply(ctx) {
     const work = launch().finally(() => openingMatches.delete(sessionId))
     openingMatches.set(sessionId, work)
     return work
+  }
+
+  async function startLighthouse({ route, launchId }, english, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    if (!validOpeningId(launchId) || !['recon', 'delivery'].includes(route)) throw new Error('开局请求无效，请重试。')
+    const registry = ctx.get('workspaceRegistry')
+    if (!registry?.create || !ctx.get('sessionController')?.create) throw new Error('灯塔练习工作区不可用。')
+    const ecosystem = await discover()
+    const presetId = 'standard'
+    const builtIns = presetEquipment(ecosystem, presetId)
+    const removedEquipmentIds = Object.keys(builtIns).filter(id => builtIns[id].tools.includes('present'))
+    const delivery = route === 'delivery'
+    const draft = { presetId, equipmentIds: delivery ? ['present'] : [], removedEquipmentIds }
+    const planned = await plannedGrowth(draft, { ecosystem })
+    const glob = planned.choices.find(item => item.name === 'glob' && questToolSource(item) && !item.timing)
+    if (!glob) throw new Error('标准模式的 glob 工具不可用，请检查 DSH 的预设配置。')
+    if (planned.choices.some(item => item.name === 'present' && item.kind === 'tool') !== delivery) {
+      throw new Error('灯塔行动无法切换交付物预览，请检查 DSH 的预设配置。')
+    }
+    const task = lighthouseTask(route, english)
+    const quest = { ...task, title: english ? englishText(task.title) : task.title, questSources: { [glob.id]: glob.sourceId },
+      ...(delivery ? { mode: 'combo', gearIds: [glob.id, 'present'] } : { mode: 'trial', gearId: glob.id }) }
+    growth.validateQuest({ ...growthQuest(quest, planned), hero: planned.hero, allowBasicReplay: delivery })
+    signal?.throwIfAborted()
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    const workspace = await lighthouseWorkspace(directory, registry)
+    return startWithQuest({ draft, quest, workspaceId: workspace.id, launchId }, signal, { allowBasicReplay: delivery })
   }
 
   async function matchPlans({ sessionId }) {
@@ -3701,6 +3734,7 @@ export async function apply(ctx) {
         }
         else if (selection?.action === 'growth-combo-preview') value = await previewQuestCombo(selection)
         else if (selection?.action === 'growth-open') value = await startWithQuest(selection, request.signal)
+        else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
         else if (selection?.action === 'match-settlements' || selection?.action === 'match-settlements-page') value = await matchSettlements(selection)
         else if (selection?.action === 'match-follow-up' || selection?.action === 'match-follow-up-preview') value = await matchFollowUp(selection)
         else if (selection?.action === 'settlement-dismiss') {

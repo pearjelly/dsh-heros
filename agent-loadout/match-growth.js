@@ -1006,7 +1006,7 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
     return { ...selection, comboActionKey: recorded.key, prepareActionKey: recorded.prepareKey, ...(recorded.staged && { staged: true }) }
   }
 
-  function validateQuest({ title, mode, gear, pair, hero, comboAction, trialAction, practiceFlagId, upgradeFlagId }, state = data) {
+  function validateQuest({ title, mode, gear, pair, hero, comboAction, trialAction, practiceFlagId, upgradeFlagId, allowBasicReplay }, state = data) {
     if (invalid) throw new Error('成长记录暂时无法读取。')
     if (typeof title !== 'string' || !title.trim() || title.length > 80) throw new Error('请输入 1 到 80 字的任务目标。')
     if (!['delivery', 'trial', 'combo', 'relay'].includes(mode)) throw new Error('请选择有效的委托类型。')
@@ -1020,6 +1020,7 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
     const combinationId = mode === 'combo' ? flagKey(hero, pair) : undefined
     const flagId = combinationId && sourceFlagKey(combinationId, pair)
     const flag = flagId && state.flags[flagId]
+    const basicReplay = allowBasicReplay && mode === 'combo' && !comboAction && flag && !flag.teamwork
     if (upgradeFlagId !== undefined && (upgradeFlagId !== flag?.id || !comboAction || practiceFlagId !== undefined)) {
       throw new Error('升级需要原战旗的英雄、装备来源和新的连携操作。')
     }
@@ -1032,10 +1033,10 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
     }
     if (mode === 'combo') {
       const slot = comboAction?.staged ? 'stagedAction' : comboAction ? 'comboAction' : undefined
-      const reason = comboRestriction(hero, pair, practiceFlagId ? undefined : flag, slot, state)
+      const reason = comboRestriction(hero, pair, practiceFlagId || basicReplay ? undefined : flag, slot, state)
       if (reason) throw new Error(reason)
     }
-    return { flagId, combinationId }
+    return { flagId, combinationId, practiceId: practiceFlagId ?? (basicReplay ? flagId : undefined) }
   }
 
   function openedWithQuest(sessionId) {
@@ -1085,14 +1086,16 @@ export async function openMatchGrowth(directory, saveEntry, notify, warn, { conf
     })
   }
 
-  function accept(sessionId, { title, mode, gear, pair, hero, after, opening, trialAction, heroAction, comboAction, teamTask, brief, practiceFlagId, upgradeFlagId }) {
+  function accept(sessionId, { title, mode, gear, pair, hero, after, opening, trialAction, heroAction, comboAction, teamTask, brief,
+    practiceFlagId, upgradeFlagId, allowBasicReplay }) {
     return update(draft => {
       const previous = Object.hasOwn(draft.sessions, sessionId) ? draft.sessions[sessionId] : undefined
       if (previous?.quest) throw new Error('请先结算或放弃当前委托。')
       if (teamTask && teamTaskClaimed(sessionId, teamTask.id, draft)) throw new Error('这项队伍任务已领取交付奖励。')
-      const { flagId, combinationId } = validateQuest({ title, mode, gear, pair, hero, comboAction, trialAction, practiceFlagId, upgradeFlagId }, draft)
+      const { flagId, combinationId, practiceId } = validateQuest({ title, mode, gear, pair, hero, comboAction, trialAction,
+        practiceFlagId, upgradeFlagId, allowBasicReplay }, draft)
       const quest = { id: randomUUID(), title: title.trim(), mode, gear, pair, flagId, combinationId, hero, after, acceptedAt: Date.now(), trialAction, heroAction,
-        comboAction, ...(teamTask && { teamTask }), ...(brief && { brief }), ...(practiceFlagId && { practiceFlagId }),
+        comboAction, ...(teamTask && { teamTask }), ...(brief && { brief }), ...(practiceId && { practiceFlagId: practiceId }),
         ...(mode === 'relay' ? { relay: { runner: hero } } : {}) }
       draft.sessions[sessionId] = { ...previous, quest, ...(opening && { openingQuestId: quest.id }) }
       return publicQuest(quest)

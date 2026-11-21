@@ -12,10 +12,10 @@
 
 ## 安装
 
-支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.2。
+支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-npm_config_ignore_workspace_root_check=true dsh plugin --profile web add https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-bundle.tgz
+npm_config_ignore_workspace_root_check=true dsh plugin --profile web add https://github.com/pearjelly/dsh-heros/releases/download/v0.68.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -23,11 +23,10 @@ dsh web
 
 从 DSH 侧栏打开 **深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
 
-## 试一套出装
+## 打一局灯塔补给行动
 
-1. 保留 **标准模式**。在装备库搜索 `glob`，点 **给英雄试装**。
-2. 选 **交付物预览** 作第二件装备。看过试装前后的能力变化后，点 **试装并筹备连携**，选 **同回合基础连携**。
-3. 在开局委托中填写任务目标和 **首回合任务（选填）**。锁定阵容后，点 **打开首回合任务** 并发送。演示中 `glob` 找到文件，`present` 把文件交付到对话。
-4. 打开交付的文件确认结果，验收后领取战旗和经验。点 **回城换装**，调整装备后用 **锁定阵容并续战** 接着做。
+1. 在深度荣耀大厅打开 **灯塔补给行动**。选 **侦察路线**，让标准模式用 `glob` 带回文件路径。选 **交付路线**，就能用 `glob → present` 把补给卡摆到对话里。
+2. 锁定路线后，插件会在独立的示例工作区开一局。点 **打开首回合任务**，确认内容并发送。
+3. 走交付路线时，打开对话里的 `02-lighthouse.md` 核对内容。两件装备在同一回合成功使用后，首次达成可以验收并领取连携战旗。
 
-DSH 已注册的预设、工具和插件会进入英雄图鉴或装备库。同一工具有多个来源时，可以指定具体来源。[完整使用说明](agent-loadout/README.md)
+想给自己的任务出装时，可以在装备库试装，比较前后能力变化，再到自己的工作区开局。需要调整装备时，用 **回城换装** 和 **锁定阵容并续战** 接着做。DSH 已注册的预设、工具和插件会进入英雄图鉴或装备库，同一工具有多个来源时可以指定来源。[完整使用说明](agent-loadout/README.md) · [迭代路线](docs/roadmap.md)

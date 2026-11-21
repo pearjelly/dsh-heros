@@ -1089,13 +1089,14 @@ window.__ModuleLoader__.load({
         h(EquipmentPairings, { key: item.id, item, presets, request, onShowHero, onOpenSource, onPreview: onPreviewPairing }))
     }
 
-    function InstallDialog({ title, children, busy, onCancel, className = '' }) {
+    function InstallDialog({ title, children, busy, onCancel, className = '', initialFocus, onKeyDown }) {
       const ref = useRef(null)
       const titleId = useId()
       useEffect(() => {
         if (!ref.current.open) ref.current.showModal()
-      }, [])
-      return h('dialog', { ref, className: 'moba-market-dialog ' + className, 'aria-labelledby': titleId,
+        if (initialFocus) ref.current.querySelector(initialFocus)?.focus()
+      }, [initialFocus])
+      return h('dialog', { ref, className: 'moba-market-dialog ' + className, 'aria-labelledby': titleId, onKeyDown,
         onCancel: event => { event.preventDefault(); if (!busy) onCancel() } },
         h('h2', { id: titleId }, title), children)
     }
@@ -1103,6 +1104,76 @@ window.__ModuleLoader__.load({
     function InstallFacts({ facts }) {
       return h('dl', null, facts.filter(([, value]) => value).map(([label, value]) =>
         h(Fragment, { key: label }, h('dt', null, label), h('dd', null, value))))
+    }
+
+    const starterRoutes = [
+      { id: 'recon', icon: 'search', name: '侦察路线', tools: 'glob', outcome: '带回补给卡的路径，由你决定要不要继续。' },
+      { id: 'delivery', icon: 'report', name: '交付路线', tools: 'glob → present', outcome: '把补给卡交到对话里，你可以点开核对内容。' },
+    ]
+
+    function LighthouseStarter({ hero, request, launchIds, onCancel, onOpen, onEquip }) {
+      const [route, setRoute] = useState('delivery')
+      const [busy, setBusy] = useState(false)
+      const [problem, setProblem] = useState(null)
+      const starting = useRef(false)
+      const group = useId()
+
+      async function start(event) {
+        event.preventDefault()
+        if (starting.current) return
+        starting.current = true
+        setBusy(true)
+        setProblem(null)
+        try {
+          const action = 'growth-starter-open'
+          const launchId = launchIds.current[route] ??=
+            Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+          const result = await request(action, { action, route, launchId })
+          if (result.questError) {
+            setProblem({ message: t('新对局已创建，委托未能接下。') + result.questError, sessionId: result.sessionId })
+            return
+          }
+          delete launchIds.current[route]
+          onOpen(result.sessionId)
+        } catch (reason) {
+          setProblem({ message: reason.message })
+        } finally {
+          starting.current = false
+          setBusy(false)
+        }
+      }
+
+      return h(InstallDialog, { title: t('灯塔补给行动'), busy, onCancel, className: 'moba-starter-dialog',
+        initialFocus: 'input:checked', onKeyDown: event => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          if (!busy) onCancel()
+        } },
+        h('div', { className: 'moba-starter-brief' },
+          h(HeroArt, { id: 'standard', art: hero?.art, className: 'moba-starter-hero' }),
+          h('div', null, h('strong', null, t('标准模式')),
+            h('p', null, t('北岸灯塔的补给卡混在几份文件里。选一套装备，决定带回什么。')))),
+        h('form', { onSubmit: start },
+          h('fieldset', { className: 'moba-starter-routes', disabled: busy },
+            h('legend', null, t('选择路线')),
+            starterRoutes.map(choice => h('label', { className: 'moba-starter-route', key: choice.id, 'data-picked': choice.id === route },
+              h('input', { type: 'radio', name: group, value: choice.id, checked: choice.id === route, onChange: () => {
+                setRoute(choice.id)
+                setProblem(null)
+                onEquip()
+              } }),
+              h('span', null, h('strong', null, h(Glyph, { kind: choice.icon, size: 16 }), t(choice.name)),
+                h('code', null, choice.tools), h('small', null, t(choice.outcome)))))),
+          h('p', { className: 'moba-starter-note' }, t('使用独立的示例工作区。进入会话后，打开首回合任务并手动发送。')),
+          problem && h('p', { className: 'moba-alert', role: 'alert' }, problem.message),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: onCancel }, t('返回大厅')),
+            problem?.sessionId && h('button', { type: 'button', className: 'moba-roster-open',
+              onClick: () => onOpen(problem.sessionId) }, t('进入已建对局')),
+            h('button', { type: 'submit', className: 'moba-start', disabled: busy },
+              busy ? t('正在准备对局…') : problem ? t('重试') : t('锁定路线并开局'),
+              h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
     function ActionEditor({ target, request, onClose, onSaved }) {
@@ -3089,6 +3160,9 @@ window.__ModuleLoader__.load({
       const [requestedGear, setRequestedGear] = useState(null)
       const [error, setError] = useState('')
       const [pending, setPending] = useState(false)
+      const [starterOpen, setStarterOpen] = useState(false)
+      const starterLaunchIds = useRef({})
+      const starterButton = useRef(null)
       const [notice, setNotice] = useState('')
       const [appearance, setAppearance] = useState(null)
       const [actionTarget, setActionTarget] = useState(null)
@@ -3255,7 +3329,8 @@ window.__ModuleLoader__.load({
         return status?.state !== 'available' || status.replacement?.remove.length
       })
       const draftConflicts = saved ? empty : selections.filter(item => conflictsFor(item.id, draftStatus(item.id)).length)
-      const workspace = workspaceList.items.find(item => item.workspaceId === workspaceChoice) ?? workspaceList.items[0]
+      const workspace = workspaceList.items.find(item => item.workspaceId === workspaceChoice)
+        ?? workspaceList.items.find(item => item.workspaceId !== data?.lighthouseWorkspaceId) ?? workspaceList.items[0]
       const historicalHeroMissing = !saved && historicalHero && presetChoice === historicalHero && preset?.id !== historicalHero
       const canCompare = saved ? !saved.broken : Boolean(preset) && !historicalHeroMissing && !unavailable.length && !draftConflicts.length
       const galleryBase = !canCompare && presets.some(item => item.id === stagePreset?.id && !item.broken)
@@ -3688,6 +3763,18 @@ window.__ModuleLoader__.load({
               document.fullscreenEnabled && h('button', { type: 'button', className: 'moba-icon-action',
                 onClick: toggleFullscreen, 'aria-label': fullscreen ? t('退出全屏') : t('全屏备战'),
                 'aria-pressed': fullscreen, title: fullscreen ? t('退出全屏') : t('全屏备战') }, h(Glyph, { kind: 'fullscreen' })))),
+          data && h('button', { type: 'button', className: 'moba-starter-entry', disabled: pending, ref: starterButton,
+            'aria-haspopup': 'dialog', onClick: () => setStarterOpen(true) },
+            h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'flag', size: 23 })),
+            h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t('灯塔补给行动')),
+              h('span', null, t('找到补给卡就撤，还是带着交付物回来？'))),
+            h('span', { className: 'moba-starter-entry-action' }, t('选择路线'), h(Glyph, { kind: 'arrow', size: 18 }))),
+          starterOpen && h(LighthouseStarter, { hero: presets.find(item => item.id === 'standard' && !item.broken),
+            request, launchIds: starterLaunchIds, onCancel: () => {
+              setStarterOpen(false)
+              requestAnimationFrame(() => starterButton.current?.focus())
+            }, onEquip: () => cue('equip'),
+            onOpen: sessionId => { cue('lock'); setStarterOpen(false); openSource(sessionId) } }),
           error && h('div', { className: 'moba-alert', role: 'alert' }, error,
             !data && h('button', { type: 'button', onClick: () => {
               setError('')
@@ -6226,6 +6313,18 @@ window.__ModuleLoader__.load({
       .moba-lobby select { width: 100%; min-width: 0; padding: 5px 7px; min-height: 31px; border: 1px solid var(--line); background: #151c28; border-radius: 3px; }
       .moba-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); align-items: start; gap: 15px; }
       .moba-grid > * { min-width: 0; }
+      .moba-starter-entry { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
+        gap: clamp(7px, 2cqi, 15px); width: 100%; margin-block-end: 15px; padding: 8px 11px;
+        border: 1px solid #8a754d; background: linear-gradient(115deg, #1b2d34, #17202b 62%, #272315);
+        text-align: start; }
+      .moba-starter-entry:hover:not(:disabled) { border-color: var(--gold); background: linear-gradient(115deg, #26414a, #1e2a37 62%, #332b19); }
+      .moba-starter-entry:disabled { opacity: .6; }
+      .moba-starter-symbol { display: grid; place-items: center; width: 39px; height: 39px;
+        border: 1px solid #607d78; background: #12262b; color: #a5d9d1; }
+      .moba-starter-entry-copy { display: grid; gap: 2px; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
+      .moba-starter-entry-copy strong { color: var(--ink); font-size: 15px; }
+      .moba-starter-entry-action { display: flex; align-items: center; gap: 5px; color: var(--gold); font-size: 12px; }
+      .moba-starter-entry-action svg { flex: none; }
       .moba-draft { border: 1px solid var(--line); background: #111521; }
       .moba-stage { position: relative; min-height: 300px; height: clamp(288px, 35cqi, 480px); isolation: isolate; overflow: hidden; background: #131926; }
       .moba-splash { position: absolute; inset: 0 0 auto; width: 100%; height: auto; aspect-ratio: 1; background-repeat: no-repeat; animation: moba-reveal .37s ease-out both; }
@@ -6595,6 +6694,29 @@ window.__ModuleLoader__.load({
       .moba-art-preview[data-hero="true"] .moba-art-preview-image { width: min(185px, 100%); }
       .moba-direct-form input[type="file"]::file-selector-button { margin-right: 8px; padding: 6px 9px; border: 1px solid #745f40; background: #1b2331; color: var(--ink); cursor: pointer; }
       .moba-market-dialog .moba-market-actions { margin-top: 12px; }
+      .moba-starter-dialog { width: min(535px, calc(100vw - 28px)); }
+      .moba-starter-dialog h2 { margin: 0 0 12px; font-size: 22px; }
+      .moba-starter-brief { display: grid; grid-template-columns: 45px minmax(0, 1fr); align-items: center; gap: 9px;
+        padding: 8px; background: #16252b; border: 1px solid #4b655f; }
+      .moba-starter-hero { display: block; width: 45px; aspect-ratio: 1; background-repeat: no-repeat; border: 1px solid #738477; }
+      .moba-starter-brief strong { color: #b8ded4; font-size: 13px; }
+      .moba-starter-brief p { margin: 3px 0 0; color: var(--ink); }
+      .moba-starter-routes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
+        gap: 7px; min-inline-size: 0; margin: 12px 0; padding: 0; border: 0; }
+      .moba-starter-routes legend { margin-block-end: 6px; padding: 0; color: var(--gold); font-size: 13px; font-weight: 700; }
+      .moba-starter-route { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 7px;
+        padding: 8px; border: 1px solid var(--line); background: #121a27; cursor: pointer; }
+      .moba-starter-route[data-picked="true"] { border-color: var(--gold); background: #2c251c; }
+      .moba-starter-route:focus-within { outline: 2px solid var(--blue); outline-offset: 2px; }
+      .moba-starter-route input { margin: 2px 0 0; accent-color: var(--gold); }
+      .moba-starter-route:has(input:disabled) { cursor: default; opacity: .65; }
+      .moba-starter-route > span { display: grid; gap: 3px; overflow-wrap: anywhere; }
+      .moba-starter-route strong { display: flex; align-items: center; gap: 5px; font-size: 14px; }
+      .moba-starter-route strong svg { flex: none; color: var(--gold); }
+      .moba-starter-route code { color: #a5d9d1; font-size: 12px; }
+      .moba-starter-route small, .moba-starter-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .moba-starter-actions { flex-wrap: wrap; }
+      .moba-starter-actions .moba-roster-open { min-height: 44px; }
       .moba-pairing-dialog { width: min(620px, calc(100vw - 28px)); }
       .moba-pairing-target { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
       .moba-pairing-target .moba-item-art { width: 38px; flex: none; border: 1px solid var(--line); }

@@ -138,6 +138,11 @@ export async function apply(ctx) {
         sequence = equipped ? ['glob', 'fixture_standing_note'] : ['glob']
         name = sequence[results.length]
         args = name === 'glob' ? { pattern: 'README.md' } : {}
+      } else if (latestText?.includes('[0-9][0-9]-*.md')) {
+        sequence = latestText.includes('02-lighthouse.md') ? ['glob', 'present'] : ['glob']
+        name = sequence[results.length]
+        args = name === 'glob' ? { pattern: '[0-9][0-9]-*.md' }
+          : { files: [{ path: '02-lighthouse.md', description: 'Lighthouse supply card' }] }
       } else if (latestText === '读取预设工作目录') {
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')

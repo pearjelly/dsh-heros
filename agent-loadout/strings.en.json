@@ -1722,5 +1722,22 @@
   "交付委托已变化，请重新打开。": "The delivery quest changed. Open it again.",
   "保存并使用": "Save & use",
   "具备新增能力": "Gained capabilities",
-  " 本回合": " this turn"
+  " 本回合": " this turn",
+  "灯塔补给行动": "Lighthouse Supply Run",
+  "找到补给卡就撤，还是带着交付物回来？": "Find the supply card and call it in, or bring it back as a deliverable?",
+  "北岸灯塔的补给卡混在几份文件里。选一套装备，决定带回什么。": "The North Shore Lighthouse supply card is somewhere in a stack of files. Pick your gear and decide what to bring back.",
+  "选择路线": "Choose route",
+  "侦察路线": "Recon",
+  "交付路线": "Delivery",
+  "带回补给卡的路径，由你决定要不要继续。": "Report the path to the supply card and let you decide whether to continue.",
+  "把补给卡交到对话里，你可以点开核对内容。": "Bring the supply card into the conversation so you can open and inspect it.",
+  "使用独立的示例工作区。进入会话后，打开首回合任务并手动发送。": "This mission uses a separate sample workspace. In the session, open the first-turn task and send it when you are ready.",
+  "返回大厅": "Back to lobby",
+  "锁定路线并开局": "Lock in & start",
+  "正在准备对局…": "Preparing session…",
+  "灯塔补给行动 · 侦察": "Lighthouse Supply Run · Recon",
+  "灯塔补给行动 · 交付": "Lighthouse Supply Run · Delivery",
+  "灯塔练习工作区不可用。": "The Lighthouse sample workspace is unavailable.",
+  "标准模式的 glob 工具不可用，请检查 DSH 的预设配置。": "Standard Mode cannot use glob. Check the DSH preset configuration.",
+  "灯塔行动无法切换交付物预览，请检查 DSH 的预设配置。": "The Lighthouse mission could not switch Deliverable Preview. Check the DSH preset configuration."
 }

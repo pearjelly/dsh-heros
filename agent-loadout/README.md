@@ -150,7 +150,7 @@ DSH 在本机运行子智能体时，首个委派和上级交给它的后续任�
 
 ## 安装与打开
 
-Web 使用 DSH CLI，桌面版使用应用随附的 CLI。支持 `0.2.1-rc.1` 至 `0.2.1-rc.5` 的五个候选版本，以及 `0.2.2-rc.1` 和 `0.2.2-rc.2`。每个第三方插件仍需满足它自己的 DSH 版本要求。
+Web 使用 DSH CLI，桌面版使用应用随附的 CLI。支持 `0.2.1-rc.1` 至 `0.2.1-rc.5`，以及 `0.2.2-rc.1` 至 `0.2.2-rc.5`。每个第三方插件仍需满足它自己的 DSH 版本要求。
 
 ```sh
 dsh plugin --profile web add -w /path/to/agent-loadout
@@ -165,6 +165,8 @@ dsh web
 ```
 
 如果原生插件安装报告 `ERR_PNPM_ADDING_TO_ROOT`，请在对应 Profile 的 `pnpm-workspace.yaml` 加入 `ignoreWorkspaceRootCheck: true`。使用 pnpm 9 的 Web Profile 在同目录的 `.npmrc` 中加入 `ignore-workspace-root-check=true`。[pnpm 工作区设置](https://pnpm.io/workspaces#ignoreworkspacerootcheck)
+
+在大厅打开 **灯塔补给行动** 可以直接体验标准模式。侦察路线用 `glob` 找出补给卡的位置，交付路线还会装上 **交付物预览**，把卡片送进对话。锁定后在独立的示例工作区开启会话，点 **打开首回合任务**，由你确认并发送。
 
 ## 装备来源
 

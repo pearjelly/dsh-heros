@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { appendFile, cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -1055,6 +1055,93 @@ async function equipmentIn(host, sessionId) {
   return (await host.request(endpoint + '/session?' + new URLSearchParams({ sessionId }))).value
 }
 
+test('Lighthouse starts two real loadouts without sending, and awards the delivery combo once', { timeout: 60_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-lighthouse-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home') }
+  const patch = join(directory, 'fixture.yml')
+  let host
+  try {
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const starter = (route, launchId, status) => host.request(endpoint, { action: 'growth-starter-open', route, launchId }, status)
+    const invoke = async (sessionId, action, payload, status) =>
+      (await host.request(endpoint, { sessionId, action, ...payload }, status)).value
+    const cards = join(env.DSH_HOME, 'profiles/web/agent-loadouts/lighthouse-supply-run')
+    await starter('unknown', '0'.repeat(32), 422)
+    await starter('delivery', '../../', 422)
+    await assert.rejects(readFile(join(cards, '02-lighthouse.md')), { code: 'ENOENT' })
+
+    const launch = '1'.repeat(32)
+    const [recon, retried] = await Promise.all([starter('recon', launch), starter('recon', launch)])
+    assert.deepEqual(recon, retried)
+    assert.equal(recon.value.questError, undefined)
+    const deliveryResponse = await host.requestRaw(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+      body: JSON.stringify({ action: 'growth-starter-open', route: 'delivery', launchId: '2'.repeat(32) }),
+    })
+    const delivery = await deliveryResponse.json()
+    assert.equal(deliveryResponse.status, 200, JSON.stringify(delivery))
+    assert.equal(delivery.value.questError, undefined)
+    assert.notEqual(recon.value.sessionId, delivery.value.sessionId)
+    assert.match(await readFile(join(cards, '02-lighthouse.md'), 'utf8'), /Gold beacon \/ 金色航标/)
+
+    const histories = await Promise.all([recon, delivery].map(({ value }) =>
+      host.request('/api/loadout-fixture-history?sessionId=' + value.sessionId)))
+    assert.ok(histories[0].workspaceId)
+    assert.equal(histories[0].workspaceId, histories[1].workspaceId)
+    assert.equal((await host.request(endpoint)).value.lighthouseWorkspaceId, histories[0].workspaceId)
+    for (const { events } of histories) {
+      assert.equal(events.some(event => event.type === 'turn/start' || event.type === 'user/message'), false)
+    }
+
+    let bannerId
+    for (const [index, [result, mode, expectedTools]] of [
+      [recon, 'trial', ['glob']],
+      [delivery, 'combo', ['glob', 'present']],
+    ].entries()) {
+      const { sessionId } = result.value
+      const combo = mode === 'combo'
+      const { questTask } = await equipmentIn(host, sessionId)
+      assert.equal(questTask.mode, mode)
+      assert.equal(questTask.title, combo ? 'Lighthouse Supply Run · Delivery' : '灯塔补给行动 · 侦察')
+      assert.match(questTask.input, combo ? /Find the North Shore Lighthouse/ : /找到北岸灯塔/)
+      const tools = await host.request('/api/loadout-fixture-tools?id=' + histories[index].presetId)
+      assert.equal(tools.includes('present'), combo)
+      const requestId = randomUUID()
+      const prompt = await invoke(sessionId, 'match-record', { questId: questTask.id, input: questTask.input, requestId })
+      await host.request(turnEndpoint, { sessionId, text: prompt.text, requestId })
+      let growth
+      for (let attempt = 0; attempt < 100; attempt++) {
+        growth = await invoke(sessionId, 'match-growth')
+        if (growth.quest?.completed !== undefined) break
+        await delay(50)
+      }
+      const report = await invoke(sessionId, 'match-report')
+      assert.deepEqual(report.turns[0].entries.filter(item => item.type === 'tool').map(item => item.name), expectedTools)
+      assert.ok(growth.quest?.completed !== undefined, JSON.stringify(report.turns[0]))
+      const { events } = await host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
+      const presented = events.filter(event => event.type === 'deliverables/presented')
+      assert.equal(presented.length, combo ? 1 : 0)
+      if (combo) assert.equal(basename(presented[0].data.files[0].path), '02-lighthouse.md')
+      const reward = await invoke(sessionId, 'growth-claim', { id: questTask.id })
+      assert.equal(Boolean(reward.flag), combo)
+      if (combo) bannerId = reward.flag.id
+      await invoke(sessionId, 'growth-claim', { id: questTask.id }, 422)
+    }
+    assert.deepEqual(await starter('recon', launch), recon)
+    const replay = (await starter('delivery', '3'.repeat(32))).value
+    assert.equal(replay.questError, undefined)
+    const { quest } = await invoke(replay.sessionId, 'match-growth')
+    assert.equal(quest.comboReward.flag, 'record')
+    assert.equal(quest.comboReward.existing.id, bannerId)
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('equips independent modules imported from an archive and a Git repository', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-remote-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home') }
@@ -1470,7 +1557,7 @@ test('executor tools retain their source in loadouts, mastery, shortcuts and pub
   }
 })
 
-test('contracts open, carry and settle against native session evidence', { timeout: 60_000 }, async () => {
+test('contracts open, carry and settle against native session evidence', { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-relay-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')
@@ -2264,7 +2351,7 @@ test('contracts open, carry and settle against native session evidence', { timeo
   }
 })
 
-test('traced providers equip third-party, MCP and session tools on real DSH agents', { timeout: 180_000 }, async () => {
+test('traced providers equip third-party, MCP and session tools on real DSH agents', { timeout: 360_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-regression-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')

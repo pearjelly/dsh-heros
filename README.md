@@ -12,10 +12,10 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 
 ## Install
 
-Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.2. Run the command with the CLI for the DSH installation you use.
+Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-npm_config_ignore_workspace_root_check=true dsh plugin --profile web add https://github.com/pearjelly/dsh-heros/releases/download/v0.67.1/dsh-heros-bundle.tgz
+npm_config_ignore_workspace_root_check=true dsh plugin --profile web add https://github.com/pearjelly/dsh-heros/releases/download/v0.68.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -23,14 +23,13 @@ For the desktop app, use its bundled CLI with `--profile desktop`, then quit and
 
 Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
 
-## Try a loadout
+## Play the Lighthouse Supply Run
 
-1. Keep **Standard** selected. Search the armory for `glob` and choose **Try on a hero**.
-2. Add **Deliverable Preview** as the second item. Review the capability changes and prepare a basic same-round combo.
-3. In the opening quest, name the challenge and add the first-turn task. Lock in, open the task, and send it. In the example, `glob` finds the file and `present` delivers it to the conversation.
-4. Open the delivered file and claim the combo reward. Inspect your banner or choose **Return to lobby**, change gear, and use **Lock in & continue** to resume the conversation.
+1. Open **Lighthouse Supply Run** in the DSH-Heros lobby. Pick **Recon** to find and report the file path with `glob`, or **Delivery** to use `glob → present` and bring the card into the conversation.
+2. Lock in to start a Standard Mode session in a separate sample workspace. Choose **Open first-turn task**, review the task, and send it.
+3. On the Delivery route, open `02-lighthouse.md` in the conversation to check the card. When both tools succeed in the same turn for the first time, review the result and claim the combo banner.
 
-Installed presets and tools appear as DSH discovers them. Tools with multiple sources retain the chosen provider. The armory can import compatible bundles and configure standalone modules. Levels affect appearance and challenge options.
+For your own tasks, try gear in the armory, compare the capabilities, and start a session in your workspace. To change gear during a task, choose **Return to lobby** and then **Lock in & continue**. Installed presets and tools appear as DSH discovers them. Tools with multiple sources retain the chosen provider. [Plugin guide](agent-loadout/README.md) · [Product roadmap (Chinese)](docs/roadmap.md)
 
 ## Develop
 
