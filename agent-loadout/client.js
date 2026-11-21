@@ -1909,6 +1909,8 @@ window.__ModuleLoader__.load({
       const pending = useRef(null)
       const launch = useRef(null)
       const modeField = useRef(null)
+      const suggestionButton = useRef(null)
+      const returnToSuggestion = useRef(false)
       const reviewHeading = useRef(null)
       const options = loaded?.value
       const preview = checked?.value
@@ -1918,6 +1920,8 @@ window.__ModuleLoader__.load({
       const equippedById = new Map(equipped.map(item => [item.id, item]))
       const additions = available.filter(item => !equippedById.has(item.id))
       const suggested = additions.find(item => item.id === options?.suggestedGearId)
+      const personalSuggestion = kind === 'personal' && options?.personalSuggestedChange?.addId === 'review' &&
+        additions.some(item => item.id === 'review')
       const swaps = equipped.length > 0 && (additions.length > 0 || available.some(item =>
         equippedById.has(item.id) && item.sources?.some(source => source.id !== equippedById.get(item.id).sourceId)))
       const operation = mode || (additions.length > 0 ? 'add' : equipped.length > 0 ? 'remove' : 'add')
@@ -1935,8 +1939,9 @@ window.__ModuleLoader__.load({
       const visibleAddChoices = added && !matchingAddChoices.includes(added) ? [added, ...matchingAddChoices] : matchingAddChoices
       const sources = (added?.sources ?? empty).filter(source => added.id !== removed?.id || source.id !== removed.sourceId)
       const selectedSource = sources.find(source => source.id === sourceId) ?? (sources.length === 1 ? sources[0] : undefined)
-      const canReview = Boolean(options && !reading && !loaded?.error && !working && !needsRefresh &&
-        (operation === 'add' || removed) && (operation === 'remove' || added && (!sources.length || selectedSource)))
+      const readyToReview = options && !reading && !loaded?.error && !working && !needsRefresh
+      const canReview = Boolean(readyToReview && (operation === 'add' || removed) &&
+        (operation === 'remove' || added && (!sources.length || selectedSource)))
       const source = options?.baseline?.sessionId ?? sourceSessionId
       const baseline = preview?.baseline ?? options?.baseline
       const originalArm = comparisonKinds[kind]?.arms.find(item => item.id === arm)
@@ -1959,11 +1964,17 @@ window.__ModuleLoader__.load({
       }, [request, kind, comparisonId, arm, attempt, language])
       useEffect(() => {
         if (preview) reviewHeading.current?.focus()
-        else if (options) modeField.current?.focus()
+        else if (options) {
+          const suggestion = returnToSuggestion.current && suggestionButton.current
+          const target = suggestion && !suggestion.disabled ? suggestion : modeField.current
+          target?.focus()
+          returnToSuggestion.current = false
+        }
       }, [preview, options])
 
       function edit() {
         if (pending.current) return
+        returnToSuggestion.current = checked?.viaSuggestion === true
         setChecked(null)
         if (!needsRefresh) setError('')
       }
@@ -1976,23 +1987,36 @@ window.__ModuleLoader__.load({
         retry(value => value + 1)
       }
 
-      async function review() {
-        if (pending.current || !canReview) return
+      async function previewChange(change, viaSuggestion = false) {
+        if (pending.current) return
         const abort = pending.current = new AbortController()
-        const change = { ...(removed && { removeId: removed.id }), ...(added && { addId: added.id }),
-          ...(selectedSource && { sourceId: selectedSource.id }) }
         const action = 'rematch-comparison-preview'
         setWorking('review')
         setError('')
         try {
           const value = await request(action, { action, kind, comparisonId, arm, change }, abort.signal, language)
-          if (!abort.signal.aborted) setChecked({ value, change, language })
+          if (!abort.signal.aborted) setChecked({ value, change, language, viaSuggestion })
         } catch (reason) {
           if (!abort.signal.aborted) setError(reason.message)
         } finally {
           pending.current = null
           if (!abort.signal.aborted) setWorking('')
         }
+      }
+
+      function review() {
+        if (!canReview) return
+        return previewChange({ ...(removed && { removeId: removed.id }), ...(added && { addId: added.id }),
+          ...(selectedSource && { sourceId: selectedSource.id }) })
+      }
+
+      function tryDeliveryReview() {
+        if (!personalSuggestion || !readyToReview || pending.current) return
+        setMode('add')
+        setRemoveId('')
+        setAddId('review')
+        setSourceId('')
+        return previewChange({ addId: 'review' }, true)
       }
 
       async function open() {
@@ -2033,6 +2057,12 @@ window.__ModuleLoader__.load({
             ? t('默认工作区') : options.workspaceTitle], [t('材料文件相对路径'), options.material], [t('基准局的换装'), baselineChange]] }),
           h('div', { className: 'moba-lighthouse-task' },
             h('label', null, t('两边共用的任务'), h('textarea', { readOnly: true, rows: 4, value: preview?.task ?? options.task }))),
+          !preview && !reading && !loaded?.error && personalSuggestion &&
+            h('aside', { className: 'moba-lighthouse-arm', 'aria-label': t('试试交付前复核') },
+              h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t('原局已交付') + ' · ' + options.material), ' ',
+                t('可以先看草稿，再决定确认交付或退回修改。')),
+              h('div', null, h('button', { type: 'button', ref: suggestionButton, className: 'moba-roster-open',
+                disabled: !readyToReview, onClick: tryDeliveryReview }, t('试试交付前复核'), h(Glyph, { kind: 'arrow', size: 15 })))),
           preview ? h(Fragment, null,
             h('h3', { ref: reviewHeading, tabIndex: -1 }, t('核对换装')),
             h(RematchChangeFacts, { change: changeFacts }),

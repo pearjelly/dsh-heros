@@ -3705,7 +3705,7 @@ export async function apply(ctx) {
   async function checkedPersonalRematchBaseline(selection, signal) {
     const original = await personalRematchEvidence(selection, signal)
     if (!original || !original.canReuse) throw new Error('请选择一局已核验的实战作为原局。')
-    const { target, hero, sessionId } = original
+    const { target, hero, observed, sessionId } = original
     const { workspaceId, cwd, material, digest, task, presetId, identity } = target
     const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
     if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
@@ -3726,7 +3726,8 @@ export async function apply(ctx) {
     const view = { workspaceId, workspaceTitle, material, task, baseline: { sessionId, heroName: hero.name } }
     const brief = task.split('\n').slice(2, -1).join('\n').trim()
     signal?.throwIfAborted()
-    return { ecosystem, preset, draft, candidate, baseline, view, fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
+    return { ecosystem, preset, draft, candidate, baseline, view, observed,
+      fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
   }
 
   async function checkedRematchBaseline(selection, signal) {
@@ -3775,6 +3776,33 @@ export async function apply(ctx) {
     return { builtIn, removed, equipped }
   }
 
+  async function personalReviewSuggestion(selection, checked, signal) {
+    const { observed, ecosystem, draft, candidate: before } = checked
+    if (!observed?.materialDelivered || draft.presetId !== 'standard' || draft.equipmentIds.length !== 1 ||
+      draft.equipmentIds[0] !== 'present' || observed.entries.some(item => item.name === 'ask_user_question') ||
+      !observed.entries.some(item => item.name === 'present' && item.state === 'completed')) return
+    const change = { addId: 'review' }
+    try {
+      const { candidate } = await checkRematch(requestedRematch({ ...selection, change }), signal, checked)
+      const presentModule = equipmentById.get('present').module
+      const presentRows = build => flatten(build.record.definition.plugins)
+        .filter(row => row.disabled !== true && legacy.moduleName(row.name) === presentModule)
+      const beforeRows = presentRows(before)
+      if (beforeRows.length !== 1 || !isDeepStrictEqual(beforeRows, presentRows(candidate))) return
+      const tools = (build, name) => [...summarizeCapabilities(ecosystem, draft.presetId, build).values()]
+        .filter(item => item.kind === 'tool' && item.name === name)
+      const beforeTools = tools(before, 'present')
+      const after = tools(candidate, 'present')
+      const questions = tools(candidate, 'ask_user_question')
+      const [present] = beforeTools
+      if (beforeTools.length === 1 && !present.timing && after.length === 1 && after[0].id === present.id &&
+        after[0].timing === present.timing && after[0].sourceId === present.sourceId &&
+        questions.length === 1 && !questions[0].timing) return change
+    } catch {
+      signal?.throwIfAborted()
+    }
+  }
+
   async function rematchOptions(selection, signal) {
     const checked = await checkedRematchBaseline(selection, signal)
     const { ecosystem, preset, view } = checked
@@ -3794,10 +3822,12 @@ export async function apply(ctx) {
         .flatMap(term => [term, englishText(term)]))]
       return [{ id: item.id, name: item.name, kind: item.kind ?? 'featured', summary: item.summary, sources, searchTerms }]
     }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id))
+    const reviewAvailable = available.some(item => item.id === 'review')
+    const personalSuggestedChange = reviewAvailable && await personalReviewSuggestion(selection, checked, signal)
     signal?.throwIfAborted()
     return { ...view, equipped, available,
-      ...(checked.lesson === lighthouseLesson && checked.baseline.kind === 'workspace' && available.some(item => item.id === 'review') &&
-        { suggestedGearId: 'review' }) }
+      ...(checked.lesson === lighthouseLesson && checked.baseline.kind === 'workspace' && reviewAvailable && { suggestedGearId: 'review' }),
+      ...(personalSuggestedChange && { personalSuggestedChange }) }
   }
 
   function requestedRematch(selection) {
@@ -3814,8 +3844,8 @@ export async function apply(ctx) {
     return { ...input, inputHash: createHash('sha256').update(JSON.stringify(input)).digest('hex') }
   }
 
-  async function checkRematch(input, signal) {
-    const checked = await checkedRematchBaseline(input, signal)
+  async function checkRematch(input, signal, baselineCheck) {
+    const checked = baselineCheck ?? await checkedRematchBaseline(input, signal)
     const { ecosystem, baseline, fields, view, candidate: before } = checked
     const { removeId, addId, sourceId } = input.change
     const { removed, equipped } = rematchGear(checked)

@@ -1815,6 +1815,7 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     assert.equal(rematchOptions.material, material)
     assert.equal(rematchOptions.task, checkedAgain.task)
     assert.ok(rematchOptions.equipped.some(item => item.id === 'review'))
+    assert.equal(rematchOptions.personalSuggestedChange, undefined)
     await invoke('rematch-comparison-options', { ...baseline, arm: 'baseline' }, 422)
     await invoke('lesson-task-options', baseline, 422)
     const ownReplay = { ...baseline, change: { removeId: 'review' } }
@@ -1846,6 +1847,52 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     assert.equal(replayProof.previous, undefined)
     const baseReview = await invoke('comparison-loadout-preview', { kind: 'rematch', comparisonId: replay.id, arm: 'baseline' })
     assert.deepEqual(new Set(baseReview.draft.equipmentIds), new Set(['present', 'review']))
+
+    const directFields = { ...root, workspaceId: user.workspaceId, material, task }
+    const directLoadout = await invoke('lesson-task-preview', directFields)
+    const directPersonal = await invoke('lesson-task-open', { ...directFields, token: directLoadout.token, launchId: '4'.repeat(32) })
+    await send(directPersonal)
+    const directPlayed = await history(directPersonal.sessionId)
+    const nextMove = (await result(directPersonal.sessionId)).rematchSource
+    const eligible = await invoke('rematch-comparison-options', nextMove)
+    assert.deepEqual(eligible.personalSuggestedChange, { addId: 'review' })
+    assert.ok(!eligible.suggestedGearId)
+    assert.equal(eligible.baseline.sessionId, directPersonal.sessionId)
+    const membersBeforeHint = await members(user.workspaceId)
+    const suggestedChange = { ...nextMove, change: eligible.personalSuggestedChange }
+    const suggestedPreview = await invoke('rematch-comparison-preview', suggestedChange)
+    assert.equal(suggestedPreview.task, directPersonal.task)
+    assert.deepEqual(suggestedPreview.change, { added: { id: 'review', name: '交付前复核' } })
+    const gainedReview = suggestedPreview.comparison.gained.find(item => item.id === 'review')
+    assert.ok(gainedReview?.decisions.some(([label]) => label === '退回修改'))
+    const presentSource = native => {
+      const call = native.events.find(event => event.type === 'tool/call' && event.data.name === 'present')
+      return native.events.find(event => event.type === 'plugin:dsh-agent-loadout/tool-source' && event.data.callSeq === call?.seq)?.data.sourceId
+    }
+    const originalPresentSource = presentSource(directPlayed)
+    assert.ok(originalPresentSource)
+    assert.deepEqual(await members(user.workspaceId), membersBeforeHint)
+    await appendFile(join(personal, material), '\nUpdated after the Review suggestion.\n')
+    await invoke('rematch-comparison-options', nextMove, 422)
+    await invoke('rematch-comparison-open', { ...suggestedChange, token: suggestedPreview.token, launchId: '3'.repeat(32) }, 422)
+    assert.deepEqual(await members(user.workspaceId), membersBeforeHint)
+    await writeFile(join(personal, material), body)
+    const ownReviews = [['3', 'Confirm handoff'], ['2', 'Revise draft']]
+    for (const [id, label] of ownReviews) {
+      const trial = await invoke('rematch-comparison-open', { ...suggestedChange, token: suggestedPreview.token, launchId: id.repeat(32) })
+      assert.equal(trial.task, directPersonal.task)
+      assert.notEqual(trial.sessionId, directPersonal.sessionId)
+      assert.ok(!(await history(trial.sessionId)).events.some(item => item.type === 'user/message'))
+      const observed = await choose(trial, label)
+      assert.equal(presentSource(observed), label === 'Confirm handoff' ? originalPresentSource : undefined)
+      const view = await invoke('rematch-comparison', { comparisonId: trial.id })
+      assert.equal(armOf(view, 'baseline').sessionId, directPersonal.sessionId)
+      assert.equal(armOf(view, 'baseline').deliverables[0].name, file)
+      const arm = armOf(view, 'rematch')
+      assert.deepEqual(arm.entries[0].choices, [label])
+      assert.deepEqual(arm.deliverables.map(item => item.name), label === 'Confirm handoff' ? [file] : [])
+    }
+    assert.deepEqual(await history(directPersonal.sessionId), directPlayed)
 
     const readyToSave = await result(opened.sessionId, true)
     assert.deepEqual(new Set(readyToSave.draft.equipmentIds), new Set(['present', 'review']))
