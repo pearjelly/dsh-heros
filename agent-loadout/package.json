@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-loadout",
-  "version": "0.76.0",
+  "version": "0.77.0",
   "description": "DSH-Heros · 深度荣耀 — a visual loadout for DeepSeek Harness Agent Presets, tools, and plugins",
   "type": "module",
   "engines": {
@@ -62,6 +62,7 @@
     "match-growth.js",
     "match-report.js",
     "match-comparisons.js",
+    "workspace-materials.js",
     "match-shortcuts.js",
     "custom-actions.js",
     "build-plans.js",

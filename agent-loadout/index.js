@@ -25,6 +25,7 @@ import { matchEvents } from './match-events.js'
 import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } from './match-growth.js'
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
+import { workspaceMaterialPicker } from './workspace-materials.js'
 import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
@@ -449,6 +450,7 @@ export async function apply(ctx) {
     () => warnings.push('lighthouse-comparisons'))
   const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', workspaceComparisonArms, saveEntry,
     () => warnings.push('workspace-comparisons'), validWorkspaceComparison)
+  const workspaceMaterials = workspaceMaterialPicker(() => ctx.get('workspaceRegistry'))
   // Native session history is shared by profiles under the same DSH home.
   const receipts = matchReceipts(join(ctx.profileContext.home, 'agent-loadout', 'match-actions'))
   const pins = matchShortcutStore(join(directory, 'shortcuts'), saveEntry, key => {
@@ -4754,6 +4756,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'plan-save') {
           value = await saveBuildPlan(selection)
           updates.notify()
+        } else if (selection?.action === 'workspace-materials') {
+          value = await workspaceMaterials(selection, request.signal)
         } else if (selection?.action === 'plan-task-preview') {
           value = await previewPlanTask(selection, english, request.signal)
         } else if (selection?.action === 'plan-task-open') {

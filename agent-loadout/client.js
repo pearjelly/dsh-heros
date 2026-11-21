@@ -82,6 +82,7 @@ window.__ModuleLoader__.load({
         image: 'M3 4h18v16H3z M3 16l5-5 4 4 4-5 5 6 M15 8h.01',
         action: 'M12 3l1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3z M19 17v4 M17 19h4',
         report: 'M5 3h14v18H5z M8 8h8 M8 12h8 M8 16h5',
+        folder: 'M3 7h7l2 2h9v11H3z M3 7V4h7l2 2h7',
         search: 'M14.5 14.5l5 5 M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0z',
         lock: 'M6 10h12v10H6z M9 10V7a3 3 0 0 1 6 0v3',
         fullscreen: 'M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5',
@@ -1097,7 +1098,7 @@ window.__ModuleLoader__.load({
         if (initialFocus) ref.current.querySelector(initialFocus)?.focus()
       }, [initialFocus])
       return h('dialog', { ref, className: 'moba-market-dialog ' + className, 'aria-labelledby': titleId, onKeyDown,
-        onCancel: event => { event.preventDefault(); if (!busy) onCancel() } },
+        onCancel: event => { event.preventDefault(); event.stopPropagation(); if (!busy) onCancel() } },
         h('h2', { id: titleId }, title), children)
     }
 
@@ -1266,18 +1267,128 @@ window.__ModuleLoader__.load({
               h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function WorkspaceFileFields({ workspaces, workspaceId, setWorkspaceId, material, setMaterial, busy, workspaceField, materialField }) {
+    function MaterialBreadcrumb({ directory, onBrowse }) {
+      const parts = directory ? directory.split('/') : empty
+      const crumbs = [{ path: '', name: t('工作区根目录') }, ...parts.map((name, index) => ({ name, path: parts.slice(0, index + 1).join('/') }))]
+      return h('nav', { className: 'moba-material-crumbs', 'aria-label': t('当前文件夹') }, h('ol', null,
+        crumbs.map(({ path, name }) => h('li', { key: path }, path === directory
+          ? h('span', { 'aria-current': 'location' }, name)
+          : h('button', { type: 'button', className: 'moba-text', onClick: () => onBrowse(path) }, name)))))
+    }
+
+    function WorkspaceMaterialPicker({ workspace, workspaceLabel, request, onCancel, onSelect }) {
+      const language = useLanguage()
+      const [directory, setDirectory] = useState('')
+      const [query, setQuery] = useState('')
+      const [loaded, setLoaded] = useState(null)
+      const [page, setPage] = useState(null)
+      const [attempt, retry] = useState(0)
+      const searchInput = useRef(null)
+      const search = query.trim()
+      const key = JSON.stringify([workspace.workspaceId, directory, search, language])
+      const cursor = page?.key === key ? page.cursor : undefined
+      const current = loaded?.key === key ? loaded : undefined
+      const working = !current || current.cursor !== cursor || current.attempt !== attempt
+      const listing = current?.entries ?? empty
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'workspace-materials'
+        const timer = setTimeout(async () => {
+          try {
+            const value = await request(action, { action, workspaceId: workspace.workspaceId,
+              directory, query: search || undefined, cursor }, abort.signal, language)
+            if (abort.signal.aborted) return
+            setLoaded(previous => {
+              const preceding = cursor && previous?.key === key ? previous.entries : empty
+              const byPath = new Map([...preceding, ...value.entries].map(entry => [entry.path, entry]))
+              return { key, cursor, attempt, directory: value.directory, entries: [...byPath.values()], next: value.next }
+            })
+          } catch (reason) {
+            if (!abort.signal.aborted) setLoaded(previous => ({ key, cursor, attempt, error: reason.message,
+              entries: previous?.key === key ? previous.entries : empty }))
+          }
+        }, search && !cursor ? 180 : 0)
+        return () => { abort.abort(); clearTimeout(timer) }
+      }, [request, workspace.workspaceId, directory, search, cursor, attempt, language, key])
+
+      function browse(path, clearQuery = false) {
+        setDirectory(path)
+        setPage(null)
+        if (clearQuery) setQuery('')
+        searchInput.current?.focus()
+      }
+
+      return h(InstallDialog, { title: t('选择材料文件'), className: 'moba-lighthouse-comparison moba-material-dialog',
+        onCancel, initialFocus: '.moba-material-search input', onKeyDown: event => {
+          if (event.key === 'Enter' && event.target === searchInput.current) event.preventDefault()
+          closeDialogOnEscape(event, onCancel)
+        } },
+        h('p', { className: 'moba-lighthouse-note' }, workspaceLabel),
+        h(MaterialBreadcrumb, { directory: current?.directory ?? directory, onBrowse: browse }),
+        h('label', { className: 'moba-search moba-material-search' }, h(Glyph, { kind: 'search', size: 17 }),
+          h('input', { ref: searchInput, type: 'search', value: query, maxLength: 160,
+            'aria-label': t('按文件名或相对路径搜索'), placeholder: t('按文件名或相对路径搜索'),
+            onChange: event => { setQuery(event.target.value); setPage(null) } })),
+        listing.length > 0 && h('ul', { className: 'moba-material-entries' }, listing.map(entry => {
+          const folder = entry.kind === 'directory'
+          return h('li', { key: entry.path }, h('button', { type: 'button',
+            'aria-label': t(folder ? '打开文件夹 ' : '选择文件 ') + entry.path,
+            onClick: () => folder ? browse(entry.path, true) : onSelect(entry.path) },
+          h(Glyph, { kind: folder ? 'folder' : 'report', size: 20 }),
+          h('span', null, h('strong', null, entry.name), entry.path !== entry.name && h('small', null, entry.path)),
+          folder ? h(Glyph, { kind: 'arrow', size: 15 }) : h('span', { className: 'moba-material-choose' }, t('选用'))))
+        })),
+        working ? h('p', { className: 'moba-empty', role: 'status' }, t('正在读取工作区文件…'))
+          : current.error ? h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
+            h('button', { type: 'button', className: 'moba-text', onClick: () => {
+              if (cursor) setPage(null)
+              retry(value => value + 1)
+            } }, t(cursor ? '从第一页重新读取' : '重试')))
+            : !listing.length && h('p', { className: 'moba-empty', role: 'status' }, t(current.next
+              ? '这页没有匹配文件，可以继续查找。' : search ? '当前文件夹内没有找到匹配文件。' : '此文件夹没有可选材料。')),
+        h('footer', { className: 'moba-market-actions moba-starter-actions' },
+          current?.next && (working || current.next !== cursor) && h('button', { type: 'button', className: 'moba-roster-open',
+            disabled: working, onClick: () => setPage({ key, cursor: current.next }) }, t(search ? '继续查找文件' : '加载更多文件')),
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: onCancel }, t('关闭'))))
+    }
+
+    function WorkspaceFileFields({ workspaces, workspaceId, setWorkspaceId, material, setMaterial, busy, workspaceField, materialField, request }) {
       const helpId = useId()
+      const [pickerFor, setPickerFor] = useState('')
+      const defaultMaterialField = useRef(null)
+      const pathInput = materialField ?? defaultMaterialField
+      const browseButton = useRef(null)
+      const workspace = workspaces.find(item => item.workspaceId === workspaceId)
+
+      useEffect(() => { if (pickerFor && pickerFor !== workspace?.workspaceId) setPickerFor('') }, [pickerFor, workspace?.workspaceId])
+
+      function closePicker(target) {
+        setPickerFor('')
+        requestAnimationFrame(() => target.current?.focus())
+      }
+
+      function selectMaterial(path) {
+        pathInput.current?.setCustomValidity('')
+        setMaterial(path)
+        closePicker(pathInput)
+      }
+
       return h(Fragment, null,
         h('label', null, t('工作区'), h('select', { ref: workspaceField, value: workspaceId, disabled: busy || !workspaces.length,
           required: true, onChange: event => setWorkspaceId(event.target.value) },
         h('option', { value: '' }, t(workspaces.length ? '选择材料所在的工作区' : '请先添加工作区')),
         workspaces.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceFileLabel(item, workspaces))))),
-        h('label', null, t('材料文件相对路径'),
-          h('input', { ref: materialField, required: true, disabled: busy, 'aria-describedby': helpId, value: material, maxLength: 1024,
-            placeholder: 'docs/brief.md', autoComplete: 'off', spellCheck: false,
-            onChange: event => { event.target.setCustomValidity(''); setMaterial(event.target.value) } })),
-        h('p', { id: helpId, className: 'moba-lighthouse-note' }, t('填入一个相对于工作区根目录的文件路径，例如 docs/brief.md。')))
+        h('div', { className: 'moba-material-input' },
+          h('label', null, t('材料文件相对路径'),
+            h('input', { ref: pathInput, required: true, disabled: busy, 'aria-describedby': helpId, value: material, maxLength: 1024,
+              placeholder: 'docs/brief.md', autoComplete: 'off', spellCheck: false,
+              onChange: event => { event.target.setCustomValidity(''); setMaterial(event.target.value) } })),
+          h('button', { ref: browseButton, type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+            disabled: busy || !workspace, onClick: () => setPickerFor(workspace.workspaceId) }, t('浏览文件'))),
+        h('p', { id: helpId, className: 'moba-lighthouse-note' }, t('填入一个相对于工作区根目录的文件路径，例如 docs/brief.md。')),
+        workspace && pickerFor === workspaceId && h(WorkspaceMaterialPicker, { workspace, workspaceLabel: workspaceFileLabel(workspace, workspaces),
+          request, onCancel: () => closePicker(browseButton), onSelect: selectMaterial }))
     }
 
     function workspaceMaterialIsRelative(path) {
@@ -1430,7 +1541,7 @@ window.__ModuleLoader__.load({
         !error && value === undefined && h('p', { className: 'moba-empty', role: 'status' }, t('正在读取对照…')),
         value === null && h('p', { className: 'moba-empty', role: 'status' }, t('找不到此会话的对照。')),
         value && h(Fragment, null,
-          setup && h(WorkspaceComparisonForm, { form: workspaceForm, workspaces, workspaceId, setWorkspaceId,
+          setup && h(WorkspaceComparisonForm, { form: workspaceForm, workspaces, workspaceId, setWorkspaceId, request,
             material, setMaterial, brief, defaultBrief, setBrief, busy: Boolean(launch) }),
           personal && value.id && h(InstallFacts, { facts: [
             ['工作区', linkedWorkspace ? workspaceTitle(linkedWorkspace) : value.workspaceTitle], ['材料文件相对路径', value.material],
@@ -3409,7 +3520,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'moba-plan-fields' },
           h('p', { className: 'moba-plan-note' }, version.name),
           h(WorkspaceFileFields, { workspaces, workspaceId: workspace?.workspaceId ?? '', setWorkspaceId: setWorkspace,
-            material, setMaterial, workspaceField, materialField, busy: Boolean(working) }),
+            material, setMaterial, workspaceField, materialField, request, busy: Boolean(working) }),
           h('label', null, t('新任务说明'),
             h('textarea', { ref: briefField, required: true, disabled: Boolean(working), value: brief, rows: 4, maxLength: 1200,
               onChange: event => { event.target.setCustomValidity(''); setBrief(event.target.value) } })), messages),
@@ -8096,6 +8207,27 @@ window.__ModuleLoader__.load({
       .moba-workspace-comparison-form select, .moba-workspace-comparison-form input { box-sizing: border-box; width: 100%; min-width: 0;
         color: var(--ink); background: #111b24; border: 1px solid #4b655f; padding: 6px; font: inherit; }
       .moba-workspace-comparison-form p { margin: 0 0 3px; }
+      .moba-material-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 6px; }
+      .moba-material-input button { min-height: 36px; }
+      .moba-material-dialog { width: min(570px, calc(100vw - 28px)); }
+      .moba-material-crumbs ol { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px;
+        margin: 8px 0; padding: 0; list-style: none; }
+      .moba-material-crumbs li { min-width: 0; max-width: 100%; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+      .moba-material-crumbs li + li::before { content: '/'; margin-inline-end: 6px; color: #8da3b1; }
+      .moba-material-crumbs [aria-current] { color: #b8ded4; font-weight: 650; }
+      .moba-material-dialog .moba-material-search { display: flex; gap: 6px; }
+      .moba-material-dialog .moba-material-search input { min-height: 37px; border: 0; padding: 3px; background: transparent; }
+      .moba-material-entries { display: grid; align-content: start; gap: 5px; max-height: min(48dvh, 390px); overflow: auto;
+        margin: 9px 0; padding: 2px; list-style: none; scrollbar-color: #69573e #111521; }
+      .moba-material-entries button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px;
+        width: 100%; min-height: 40px; padding: 5px 8px; border: 1px solid #4b525b; background: #141b27; color: var(--ink);
+        text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+      .moba-material-entries button:hover { border-color: var(--gold); background: #2b2826; }
+      .moba-material-entries strong, .moba-material-entries small { display: block; }
+      .moba-material-entries strong { font-size: 13px; }
+      .moba-material-entries small { color: var(--muted); font-size: 11px; }
+      .moba-material-entries svg, .moba-material-choose { color: #b8ded4; }
+      .moba-material-choose { font-size: 12px; }
       .moba-lighthouse-arms { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(245px, 100%), 1fr));
         align-items: start; gap: 7px; }
       .moba-lighthouse-arm { display: grid; gap: 8px; min-width: 0; padding: 8px; border: 1px solid var(--line);

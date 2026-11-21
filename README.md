@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.76.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.77.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -25,7 +25,7 @@ Open **DSH-Heros** in the sidebar. It follows **Settings → General → Languag
 
 ## Use saved gear for a new task
 
-1. In **Loadout plans**, select a plan and choose **Start a task with this loadout**. Choose an existing workspace, enter one material path relative to its root, and describe the new task.
+1. In **Loadout plans**, select a plan and choose **Start a task with this loadout**. Choose an existing workspace and use **Browse files** to select material. You can search by file name or relative path, including names with spaces or Chinese characters. Picking another file keeps the task description you entered.
 2. Choose **Review file and loadout** to check the preset and the equipment sources available now. Choose **Confirm and open session** to open a fresh DSH session. Review the prepared task in the conversation and send it yourself.
 3. With a review-first loadout, check the draft and answer the DSH question card when it asks whether to confirm delivery or request changes. Open the actual attachment from that session after it is delivered.
 
@@ -37,7 +37,7 @@ Choose **Review and reuse loadout** for the route you want to keep. For a review
 
 ## Compare delivery playbooks on your own material
 
-1. Open **Compare in workspace** in the lobby. Choose an existing workspace and enter a file path relative to its root, such as `docs/brief.md`. Start **Deliver directly** and **Review before delivery** in separate Standard Mode sessions in that workspace.
+1. Open **Compare in workspace** in the lobby. Choose an existing workspace and use **Browse files** to select the material for both routes. Start **Deliver directly** and **Review before delivery** in separate Standard Mode sessions in that workspace.
 2. Review and manually send the same prepared task in each session. The review route can show a draft and ask for confirmation or revisions. Answer the question card in its source session.
 3. Return to the comparison to check any pending question, your recorded answer, actual tool calls, and delivered file names. Open either source session to inspect the result. Use **Review proven loadout** to reuse the gear from a completed round.
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { appendFile, cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import test from 'node:test'
@@ -1839,6 +1839,158 @@ test('saved Review loadout opens a manually submitted task on new workspace mate
     assert.equal(standardHistory.presetId, 'standard')
     assert.equal(standardHistory.workspaceId, selected.workspaceId)
     assert.ok(!standardHistory.events.some(item => item.type === 'turn/start' || item.type === 'user/message'))
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('workspace material browsing returns safe paths for plans and comparisons', { timeout: 75_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-workspace-materials-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const workspacePath = join(directory, 'workspace')
+  const otherPath = join(directory, 'outside')
+  const shelf = '交付 材料'
+  const nested = shelf + '/复核 子目录'
+  const archive = 'archive'
+  const file = '候选 Evidence 2026.md'
+  const original = nested + '/' + file
+  const moved = nested + '/已移动 Evidence.md'
+  const content = '# Private fixture body.\n'
+  const pages = Array.from({ length: 141 }, (_, index) => `page-${String(index).padStart(3, '0')}.md`)
+  let host
+  try {
+    for (const path of [join(workspacePath, nested), join(workspacePath, archive), join(otherPath, archive)]) {
+      await mkdir(path, { recursive: true })
+    }
+    await writeFile(join(workspacePath, original), content)
+    await writeFile(join(workspacePath, 'root-note.md'), '# Root workspace document\n')
+    await writeFile(join(workspacePath, '.notes.md'), '# Hidden regular document\n')
+    await writeFile(join(otherPath, 'outside.md'), '# Outside the selected workspace\n')
+    await writeFile(join(otherPath, archive, pages[0]), '# Separate workspace archive\n')
+    await Promise.all(pages.map(name => writeFile(join(workspacePath, archive, name), 'Page ' + name)))
+    await symlink(join(workspacePath, nested), join(workspacePath, 'inside-directory'))
+    await symlink(otherPath, join(workspacePath, 'outside-directory'))
+    await symlink(join(workspacePath, original), join(workspacePath, 'inside-file.md'))
+    await symlink(join(otherPath, 'outside.md'), join(workspacePath, 'outside-file.md'))
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, payload, status) => (await host.request(endpoint, { action, ...payload }, status)).value
+    const workspace = '/api/loadout-fixture-session'
+    const { workspaceId, sessionId } = await host.request(workspace, { presetId: 'standard', workspacePath })
+    const other = await host.request(workspace, { presetId: 'standard', workspacePath: otherPath })
+    const list = (options, status) => invoke('workspace-materials', { workspaceId, ...options }, status)
+
+    const root = await list({})
+    assert.equal(root.directory, '')
+    assert.deepEqual(new Set(root.entries.map(({ path, kind }) => `${kind}:${path}`)),
+      new Set([`directory:${shelf}`, `directory:${archive}`, 'file:root-note.md', 'file:.notes.md']))
+    assert.deepEqual(root.entries.map(item => item.kind), ['directory', 'directory', 'file', 'file'])
+    assert.ok(!JSON.stringify(root).includes(workspacePath))
+    const selectedDirectory = root.entries.find(item => item.name === shelf)
+    const browseShelf = await list({ directory: selectedDirectory.path })
+    assert.equal(browseShelf.directory, shelf)
+    assert.deepEqual(browseShelf.entries, [{ name: '复核 子目录', path: nested, kind: 'directory' }])
+    const browseNested = await list({ directory: browseShelf.entries[0].path })
+    assert.equal(browseNested.directory, nested)
+    assert.deepEqual(browseNested.entries, [{ name: file, path: original, kind: 'file' }])
+
+    const found = await list({ query: 'ＥＶＩＤＥＮＣＥ ２０２６' })
+    assert.deepEqual(found.entries, browseNested.entries)
+    assert.deepEqual((await list({ directory: archive, query: 'EVIDENCE 2026' })).entries, [])
+    assert.deepEqual((await list({ query: 'Private fixture body' })).entries, [])
+    assert.deepEqual((await list({ query: 'outside.md' })).entries, [])
+    assert.deepEqual((await list({ query: 'outside-file.md' })).entries, [])
+    for (const invalid of ['../outside', workspacePath, 'inside-directory', 'outside-directory', 'inside-file.md', original]) {
+      await list({ directory: invalid }, 422)
+    }
+    await list({ workspaceId: randomUUID() }, 422)
+    await list({ cursor: '../' }, 422)
+    await list({ query: 'a'.repeat(161) }, 422)
+
+    const first = await list({ directory: archive })
+    assert.equal(first.entries.length, 48)
+    assert.equal(typeof first.next, 'string')
+    assert.deepEqual((await list({ directory: archive })).entries, first.entries)
+    await list({ directory: nested, cursor: first.next }, 422)
+    await list({ directory: archive, query: 'page', cursor: first.next }, 422)
+    await list({ workspaceId: other.workspaceId, directory: archive, cursor: first.next }, 422)
+    async function readPages(firstPage, query) {
+      const seen = []
+      let page = firstPage
+      for (let index = 0; index < 12; index++) {
+        assert.equal(page.directory, archive)
+        seen.push(...page.entries.map(entry => {
+          assert.equal(entry.kind, 'file')
+          assert.equal(entry.path, archive + '/' + entry.name)
+          return entry.name
+        }))
+        if (!page.next) break
+        page = await list({ directory: archive, query, cursor: page.next })
+      }
+      assert.equal(page.next, undefined)
+      return seen
+    }
+    assert.deepEqual(await readPages(first), pages)
+    const searchFirst = await list({ directory: archive, query: 'PAGE' })
+    assert.ok(searchFirst.next)
+    assert.deepEqual((await readPages(searchFirst, 'PAGE')).sort(), pages)
+    assert.deepEqual((await host.request(workspace, { inspectWorkspaceId: workspaceId })).sessionIds, [sessionId])
+
+    const sparseDir = join(otherPath, 'sparse')
+    await mkdir(sparseDir)
+    for (let start = 0; start < 480; start += 32) {
+      const batch = Array.from({ length: 32 }, (_, index) => join(sparseDir, `ordinary-${start + index}.md`))
+      await Promise.all(batch.map(path => writeFile(path, 'Ordinary file')))
+    }
+    await writeFile(join(sparseDir, 'z-late-match.md'), '# Match beyond the first scan')
+    const sparseRequest = { workspaceId: other.workspaceId, directory: 'sparse', query: 'late-match' }
+    const partial = await list(sparseRequest)
+    assert.deepEqual(partial.entries, [])
+    assert.equal(partial.searching, true)
+    assert.ok(partial.next)
+    const afterBudget = await list({ ...sparseRequest, cursor: partial.next })
+    assert.deepEqual(afterBudget.entries, [{ name: 'z-late-match.md', path: 'sparse/z-late-match.md', kind: 'file' }])
+    assert.equal(afterBudget.next, undefined)
+
+    const playbook = await invoke('field-playbook-preview', { id: 'review' })
+    const plan = await invoke('plan-save', { name: 'Review selected materials', draft: playbook.draft })
+    const task = 'Check both handoff dates before presenting the chosen file.'
+    const planInput = { id: plan.id, revision: plan.revision, workspaceId, material: found.entries[0].path, task }
+    const preview = await invoke('plan-task-preview', planInput)
+    assert.ok(preview.token)
+    assert.equal(preview.material, original)
+    await rename(join(workspacePath, original), join(workspacePath, moved))
+    await invoke('plan-task-open', { ...planInput, token: preview.token, launchId: 'a'.repeat(32) }, 422)
+    assert.deepEqual((await list({ query: 'EVIDENCE 2026' })).entries, [])
+    const edited = await list({ query: '已移动' })
+    assert.deepEqual(edited.entries, [{ name: '已移动 Evidence.md', path: moved, kind: 'file' }])
+    const nextInput = { ...planInput, material: edited.entries[0].path }
+    const nextPreview = await invoke('plan-task-preview', nextInput)
+    assert.ok(nextPreview.token)
+    assert.notEqual(nextPreview.token, preview.token)
+    assert.ok(nextPreview.task.includes(task))
+    assert.deepEqual(nextPreview.task.split('\n').slice(2), preview.task.split('\n').slice(2))
+    const opened = await invoke('plan-task-open', { ...nextInput, token: nextPreview.token, launchId: 'a'.repeat(32) })
+    assert.notEqual(opened.sessionId, sessionId)
+    assert.equal(opened.workspaceId, workspaceId)
+    assert.deepEqual((await equipmentIn(host, opened.sessionId)).planTask, { planName: plan.name, material: moved, task: nextPreview.task })
+
+    const comparison = await invoke('workspace-comparison-open', { workspaceId, material: edited.entries[0].path, task,
+      arm: 'direct', launchId: 'b'.repeat(32) })
+    const board = await invoke('workspace-comparison', { comparisonId: comparison.id })
+    assert.equal(board.material, moved)
+    assert.equal(board.materialState, 'verified')
+    assert.ok(comparison.task.includes(task))
+    for (const attempt of [opened, comparison]) {
+      const native = await host.request('/api/loadout-fixture-history?sessionId=' + attempt.sessionId)
+      assert.equal(native.workspaceId, workspaceId)
+      assert.ok(!native.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    }
+    assert.deepEqual((await host.request(workspace, { inspectWorkspaceId: other.workspaceId })).sessionIds, [other.sessionId])
+    assert.equal(await readFile(join(workspacePath, moved), 'utf8'), content)
   } finally {
     await host?.stop()
     await rm(directory, { recursive: true, force: true })
