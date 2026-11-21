@@ -18,7 +18,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -3564,6 +3564,43 @@ export async function apply(ctx) {
     return { comparisons, record, arm }
   }
 
+  async function verifiedLessonTaskSource(selection, signal) {
+    const { comparisons, record, arm } = rematchReference(selection)
+    const { kind } = selection
+    if (record.lesson !== lighthouseLesson || (kind !== 'workspace' && kind !== 'rematch')) {
+      throw new Error('请从已经核验的灯塔练习开始。')
+    }
+    const [observed, saved] = await Promise.all([
+      readComparisonArm(comparisons, record, arm, signal), comparisons.readArm(record.id, arm),
+    ])
+    if (!saved?.opened || !observed.canReuse) throw new Error('请从已经核验的灯塔练习开始。')
+    const pinned = record.loadout
+    const heroId = pinned?.heroId ?? records.get(saved.presetId)?.baseId ?? saved.presetId
+    const ecosystem = await discover()
+    const { draft, candidate, identity } = await verifiedPlanComparisonArm({ presetId: saved.presetId, heroId }, ecosystem)
+    if (!identity || (pinned && (identity !== pinned.identity || pinned.presetId !== saved.presetId))) {
+      throw new Error('本机配置已变化，无法核对这局的原出装。')
+    }
+    const heroName = pinned?.heroName ?? matchHero(heroId, records.get(saved.presetId)).name
+    const proof = { kind, comparisonId: record.id, arm, sessionId: observed.sessionId, presetId: saved.presetId, identity }
+    const view = { kind, comparisonId: record.id, arm, sessionId: observed.sessionId, heroName,
+      ...(record.change && { change: record.change }) }
+    signal?.throwIfAborted()
+    return { draft, candidate, ecosystem, proof, view }
+  }
+
+  async function lessonTaskOptions(selection, signal) {
+    const { view } = await verifiedLessonTaskSource(selection, signal)
+    const profileDirectory = await realpath(directory)
+    const workspaces = ctx.get('workspaceRegistry')?.list() ?? []
+    const allowed = await Promise.all(workspaces.map(async workspace => {
+      const path = await realpath(workspace.path).catch(() => undefined)
+      return path && path === workspace.path && !lighthousePracticeContains(profileDirectory, path) ? workspace.id : undefined
+    }))
+    signal?.throwIfAborted()
+    return { source: view, workspaceIds: allowed.filter(Boolean) }
+  }
+
   async function checkedRematchBaseline(selection, signal) {
     const { comparisons, record, arm } = rematchReference(selection)
     const [observed, saved] = await Promise.all([readComparisonArm(comparisons, record, arm, signal), comparisons.readArm(record.id, arm)])
@@ -5117,6 +5154,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'rematch-comparison') value = await readComparison(rematchComparisons, selection, english, request.signal)
         else if (selection?.action === 'comparison-history') value = await comparisonHistory(selection, request.signal)
         else if (selection?.action === 'comparison-loadout-preview') value = await comparisonLoadout(selection, request.signal)
+        else if (selection?.action === 'lesson-task-options') value = await lessonTaskOptions(selection, request.signal)
         else if (selection?.action === 'field-playbook-preview') value = await previewFieldPlaybook(selection)
         else if (selection?.action === 'match-settlements' || selection?.action === 'match-settlements-page') value = await matchSettlements(selection)
         else if (selection?.action === 'match-follow-up' || selection?.action === 'match-follow-up-preview') value = await matchFollowUp(selection)
