@@ -134,9 +134,13 @@ export async function apply(ctx) {
       const lastUser = users.at(-1)
       const latestText = lastUser?.content[0]?.text
       const comparisonMaterial = latestText?.match(/^(?:【工作区同题对照】|\[Workspace comparison\])\n(?:选定材料 |Selected material: )"(02-lighthouse\.md|materials\/workspace-fixture\.md)"\n/u)?.[1]
-      const evidenceGap = comparisonMaterial === '02-lighthouse.md' && /two spare batteries|两节备用电池/u.test(latestText)
-      const evidenceConfirmed = comparisonMaterial === '02-lighthouse.md' && /2 cans of lamp oil|两罐灯油|灯油 × 2/u.test(latestText)
       const taskMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(materials\/reuse-fixture\.md|案件 材料\/交接 记录\.md|会签 文件\.md)"\n/u)?.[1]
+      const personalEvidence = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(证据 材料\/设备 台账\.md)"\n/u)?.[1]
+      const evidenceMaterial = personalEvidence ?? (comparisonMaterial === '02-lighthouse.md' ? comparisonMaterial : undefined)
+      const supportedFact = personalEvidence ? 'two spare radios' : '2 cans of lamp oil'
+      const unverifiedClaim = personalEvidence ? 'a spare charger' : 'two spare batteries'
+      const evidenceGap = evidenceMaterial && (personalEvidence ? /a spare charger|一台备用充电器/u : /two spare batteries|两节备用电池/u).test(latestText)
+      const evidenceConfirmed = evidenceMaterial && (personalEvidence ? /two spare radios|两台备用对讲机/u : /2 cans of lamp oil|两罐灯油|灯油 × 2/u).test(latestText)
       const results = messages.slice(messages.lastIndexOf(lastUser) + 1).filter(message => message.role === 'tool')
       let name
       let args
@@ -175,34 +179,35 @@ export async function apply(ctx) {
         args = name === 'glob' ? { pattern: '[0-9][0-9]-*.md' }
           : { files: [{ path: '02-lighthouse.md', description: 'Lighthouse supply card' }] }
       } else if (evidenceGap || evidenceConfirmed) {
-        const english = latestText.startsWith('[Workspace comparison]')
+        const english = latestText.startsWith('[')
         const labels = english ? ['Continue gathering evidence', 'Lower the recommendation to a qualified draft', 'Pause submission']
           : ['继续补证', '降级推荐', '暂缓提交']
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')
-        const foundLampOil = results[0]?.content.some(block => block.text?.includes('2 cans of lamp oil'))
+        const foundEvidence = results[0]?.content.some(block => block.text?.includes(supportedFact))
+        const title = personalEvidence ? 'Equipment handoff' : 'Lighthouse handoff'
         const file = evidenceGap ? 'qualified-handoff.md' : 'verified-handoff.md'
         sequence = ['read']
-        if (foundLampOil && evidenceGap && systemText.includes('If a material claim lacks evidence')) {
+        if (foundEvidence && evidenceGap && systemText.includes('If a material claim lacks evidence')) {
           sequence.push('ask_user_question')
           const choice = results[1] && JSON.parse(results[1].content[0].text).answers?.[0]?.selected?.[0]
           if (choice === labels[0]) sequence.push('glob')
           if (choice === labels[1]) sequence.push('write', 'present')
-        } else if (foundLampOil && evidenceConfirmed) {
+        } else if (foundEvidence && evidenceConfirmed) {
           sequence.push('write', 'present')
         }
         name = sequence[results.length]
-        if (name === 'read') args = { file_path: comparisonMaterial }
+        if (name === 'read') args = { file_path: evidenceMaterial }
         if (name === 'ask_user_question') args = { questions: [{
           id: 'fixture-lighthouse-evidence',
-          question: english ? 'The selected card does not list the two spare batteries. How should the handoff proceed?'
-            : '所选补给卡没有列出两节备用电池。接下来怎样安排交接？',
+          question: english ? `The selected record does not list ${unverifiedClaim}. How should the handoff proceed?`
+            : (personalEvidence ? '所选台账没有列出一台备用充电器。接下来怎样安排交接？' : '所选补给卡没有列出两节备用电池。接下来怎样安排交接？'),
           options: labels.map(label => ({ label })),
         }] }
-        if (name === 'glob') args = { pattern: '**/*batter*.md' }
-        if (name === 'write') args = { file_path: file, content: '# Lighthouse handoff\n\nVerified: 2 cans of lamp oil.\n' +
-          (evidenceGap ? 'Unverified: two spare batteries. Exclude them from the recommendation.\n' : '') }
-        if (name === 'present') args = { files: [{ path: file, description: 'Lighthouse handoff' }] }
+        if (name === 'glob') args = { pattern: personalEvidence ? '**/*charger*.md' : '**/*batter*.md' }
+        if (name === 'write') args = { file_path: file, content: `# ${title}\n\nVerified: ${supportedFact}.\n` +
+          (evidenceGap ? `Unverified: ${unverifiedClaim}. Exclude the claim from the recommendation.\n` : '') }
+        if (name === 'present') args = { files: [{ path: file, description: title }] }
       } else if (comparisonMaterial || taskMaterial || latestText === 'Hand off the workspace file handoff.md in this conversation.') {
         const intended = comparisonMaterial ?? taskMaterial ?? 'handoff.md'
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)

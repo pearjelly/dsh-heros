@@ -51,6 +51,7 @@ const planTaskRecord = 'plugin:dsh-agent-loadout/plan-task'
 const planTaskSessionPrefix = 'session-a076'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
+const isEvidenceLessonSource = ({ kind, arm }) => kind === 'workspace' && arm === 'evidence'
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
 const equipmentById = new Map(equipment.map(item => [item.id, item]))
@@ -60,6 +61,11 @@ function flatten(rows) {
   return rows.flatMap(row => row.group === true && Array.isArray(row.config)
     ? [row, ...flatten(row.config)]
     : [row])
+}
+
+function validLessonTaskReference(source) {
+  if (isEvidenceLessonSource(source)) return comparisonIdValid(source.comparisonId)
+  return (source.kind === 'workspace' || source.kind === 'rematch') && validRematchReference(source)
 }
 
 function statusFor(item, preset, plugins, moduleName) {
@@ -3606,15 +3612,17 @@ export async function apply(ctx) {
   }
 
   async function verifiedLessonTaskSource(selection, signal) {
-    const { comparisons, record, arm } = rematchReference(selection)
-    const { kind } = selection
-    if (record.lesson !== lighthouseLesson || (kind !== 'workspace' && kind !== 'rematch')) {
-      throw new Error('请从已经核验的灯塔练习开始。')
-    }
+    const { kind, comparisonId, arm } = selection
+    const evidence = isEvidenceLessonSource(selection)
+    const lesson = evidence ? evidenceLesson : lighthouseLesson
+    const comparisons = validLessonTaskReference(selection) ? comparisonStores[kind] : undefined
+    const record = comparisons?.read(comparisonId)
+    const unavailable = '请从已经核验的灯塔练习开始。'
+    if (record?.lesson !== lesson || !comparisons.armsFor(record).includes(arm)) throw new Error(unavailable)
     const [observed, saved] = await Promise.all([
       readComparisonArm(comparisons, record, arm, signal), comparisons.readArm(record.id, arm),
     ])
-    if (!saved?.opened || !observed.canReuse) throw new Error('请从已经核验的灯塔练习开始。')
+    if (!saved?.opened || !observed.canReuse || (evidence && observed.continuationReason)) throw new Error(unavailable)
     const pinned = record.loadout
     const heroId = pinned?.heroId ?? records.get(saved.presetId)?.baseId ?? saved.presetId
     const ecosystem = await discover()
@@ -3625,9 +3633,9 @@ export async function apply(ctx) {
     }
     const heroName = pinned?.heroName ?? matchHero(heroId, records.get(saved.presetId)).name
     const proof = { kind, comparisonId: record.id, arm, sessionId: observed.sessionId,
-      presetId: saved.presetId, identity: pinned?.identity ?? identity }
+      presetId: saved.presetId, identity: pinned?.identity ?? identity, ...(evidence && { lesson }) }
     const view = { kind, comparisonId: record.id, arm, sessionId: observed.sessionId, heroName,
-      ...(record.change && { change: record.change }) }
+      ...(record.change && { change: record.change }), ...(evidence && { lesson }) }
     signal?.throwIfAborted()
     return { draft, candidate, ecosystem, proof, view }
   }
@@ -3652,7 +3660,7 @@ export async function apply(ctx) {
   function requestedLessonTask(selection, english) {
     const { kind, comparisonId, arm, workspaceId } = selection
     const source = { kind, comparisonId, arm }
-    if (!validRematchReference(source)) throw new Error('请从已经核验的灯塔练习开始。')
+    if (!validLessonTaskReference(source)) throw new Error('请从已经核验的灯塔练习开始。')
     if (typeof workspaceId !== 'string' || !workspaceId || workspaceId.length > 512) throw new Error('请选择一个现有的工作区。')
     const fields = { source, workspaceId, ...planTaskPrompt(selection, english) }
     const hash = createHash('sha256').update(JSON.stringify(fields)).digest('hex')
@@ -3683,7 +3691,8 @@ export async function apply(ctx) {
     const { draft, candidate, ecosystem, proof, view: source } = await verifiedLessonTaskSource(input.source, signal)
     const { workspace, digest } = await readPersonalTaskMaterial(workspaceId, material, signal)
     const cwd = workspace.path
-    const planName = english ? englishText('灯塔换装练习') : '灯塔换装练习'
+    const lessonName = source.lesson === evidenceLesson ? '灯塔证据取舍' : '灯塔换装练习'
+    const planName = english ? englishText(lessonName) : lessonName
     const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task, source }
     const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, proof])).digest('hex')
     signal?.throwIfAborted()
@@ -3967,8 +3976,10 @@ export async function apply(ctx) {
         : (!lessonBaseline || result.materialDelivered === true) && reusableComparisonArm(arm, result)
       const canRematch = canReuse && !evidencePractice && materialComparisonStores.includes(comparisons) &&
         (!comparison.baseline || Boolean(previousComparison(comparison)))
-      const lessonTaskSource = canReuse && saved?.opened && comparison.lesson === lighthouseLesson
-        ? { kind: lessonBaseline ? 'workspace' : 'rematch', comparisonId: comparison.id, arm } : undefined
+      const canTransfer = canReuse && saved?.opened && (comparison.lesson === lighthouseLesson ||
+        (evidencePractice && !result.continuationReason))
+      const lessonTaskSource = canTransfer
+        ? { kind: lessonBaseline || evidencePractice ? 'workspace' : 'rematch', comparisonId: comparison.id, arm } : undefined
       return { id: arm, ...labels, sessionId, ...result, canReuse, ...(canRematch && { canRematch }),
         ...(lessonTaskSource && { lessonTaskSource }) }
     } catch {
@@ -4143,12 +4154,13 @@ export async function apply(ctx) {
     if (!source) return
     try {
       const { header, launch } = planTaskDetails(source)
-      if (!launch?.source || !validRematchReference(launch.source)) return
+      if (!launch?.source || !validLessonTaskReference(launch.source)) return
+      const evidenceSource = isEvidenceLessonSource(launch.source)
       const { cwd, agentPreset: presetId } = header
       const target = personalTaskTarget(launch, header)
-      if (strict && !target) return
+      if ((strict || evidenceSource) && !target) return
       const evidence = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
-        verifyMaterialProof: strict, verifyMaterialDelivery: true, exactMessages: true, includeWindows: !strict }, receipts)
+        verifyMaterialProof: strict || evidenceSource, verifyMaterialDelivery: true, exactMessages: true, includeWindows: !strict }, receipts)
       return { launch, cwd, presetId, evidence, target }
     } finally {
       source[Symbol.dispose]()
@@ -4159,7 +4171,7 @@ export async function apply(ctx) {
     if (selection.kind !== 'personal' || !validRematchReference(selection)) return
     const sessionId = 'session-' + selection.comparisonId
     const original = await observeLessonTask(sessionId, signal, true)
-    if (!original) return
+    if (!original || isEvidenceLessonSource(original.launch.source)) return
     const { target, evidence, presetId } = original
     const record = records.get(presetId)
     const hero = matchHero(presetId, record)
@@ -4173,9 +4185,13 @@ export async function apply(ctx) {
     const { launch, cwd, presetId, evidence: observed, target } = resultView
     const { windows = [], ...evidence } = observed
     const choices = comparisonChoices(evidence)
-    const canReview = evidence.status === 'complete' && (evidence.materialDelivered || choices.length > 0)
+    const evidenceSource = isEvidenceLessonSource(launch.source)
+    const delivered = evidenceSource ? evidence.deliverables?.length > 0 : evidence.materialDelivered
+    const canReview = evidence.status === 'complete' && (delivered || choices.length > 0) &&
+      (!evidenceSource || !evidence.continuationReason)
     const receiptIds = windows.map(({ endSeq }) => sessionId + ':' + endSeq)
-    const reference = canReview && target && { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }
+    const reference = canReview && !evidenceSource && target &&
+      { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }
     const [settled, original] = await Promise.all([
       growth.settlementAwards(sessionId, receiptIds),
       reference && personalRematchEvidence(reference, signal),
@@ -4183,7 +4199,7 @@ export async function apply(ctx) {
     const awards = settled.filter(item => item.kind)
       .map(({ id, name, kind, xp, sourceName }) => ({ id, name, kind, xp, ...(sourceName && { sourceName }) }))
     const rematchSource = original?.canReuse ? reference : undefined
-    const workspace = canReview && ctx.get('workspaceRegistry')?.list()
+    const workspace = canReview && !evidenceSource && ctx.get('workspaceRegistry')?.list()
       .find(item => item.path === cwd && item.sessionIds.includes(sessionId))
     const brief = launch.task.split('\n').slice(2, -1).join('\n').trim()
     const rebaseline = workspace && brief ? { workspaceId: workspace.id, material: launch.material, brief } : undefined

@@ -1781,6 +1781,178 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
   }
 })
 
+test('Lighthouse Evidence Check carries real choices and derived files to personal material', { timeout: 90_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-personal-evidence-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const folder = '证据 材料'
+  const file = '设备 台账.md'
+  const material = folder + '/' + file
+  const personal = join(directory, 'personal-workspace')
+  const original = join(personal, material)
+  const body = '# Studio equipment ledger\n\nVerified: two spare radios.\n'
+  const questions = '/api/loadout-fixture-handoff-question'
+  const labels = ['继续补证', '降级推荐', '暂缓提交']
+  let host
+  try {
+    await mkdir(join(personal, folder), { recursive: true })
+    await writeFile(original, body)
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const invoke = async (action, fields, status) => (await host.request(endpoint, { action, ...fields }, status)).value
+    const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
+    const send = ({ sessionId, task, requestId }) => host.request(turnEndpoint, { sessionId, text: task, requestId })
+    const read = (sessionId, review) => invoke('lesson-task-result', { sessionId, review })
+    const files = native => native.events.filter(event => event.type === 'deliverables/presented')
+    const launchId = character => character.repeat(32)
+    const choose = async (opened, choice, whileWaiting) => {
+      const { sessionId } = opened
+      const turn = send(opened)
+      turn.catch(() => {})
+      let question
+      try {
+        for (let attempt = 0; attempt < 100 && !question; attempt++) {
+          question = (await host.request(questions, { sessionId })).question
+          if (!question) await delay(40)
+        }
+        assert.deepEqual(question?.options.map(option => option.label), labels)
+        assert.deepEqual(files(await history(sessionId)), [])
+        await whileWaiting?.()
+      } finally {
+        if (question) await host.request(questions, { sessionId, choice })
+        await turn
+      }
+    }
+
+    const workspace = '/api/loadout-fixture-session'
+    const local = await host.request(workspace, { presetId: 'standard', workspacePath: personal })
+    const { workspaceId } = local
+    const initialPlans = (await host.request(endpoint)).value.plans
+    const practice = await invoke('lighthouse-evidence-open', { scenario: 'gap', launchId: launchId('a') })
+    const source = { kind: 'workspace', comparisonId: practice.id, arm: 'evidence' }
+    const comparisonArm = async () => (await invoke('workspace-comparison', { comparisonId: practice.id })).arms[0]
+    assert.equal((await comparisonArm()).lessonTaskSource, undefined)
+    await invoke('lesson-task-options', source, 422)
+    await choose(practice, labels[0], async () => {
+      const pending = await comparisonArm()
+      assert.equal(pending.status, 'waiting-choice')
+      assert.equal(pending.lessonTaskSource, undefined)
+      await invoke('lesson-task-options', source, 422)
+    })
+    const practiceProof = await comparisonArm()
+    assert.deepEqual(practiceProof.lessonTaskSource, source)
+    assert.deepEqual(practiceProof.deliverables, [])
+    await invoke('lesson-task-options', { ...source, kind: 'rematch' }, 422)
+    const options = await invoke('lesson-task-options', source)
+    assert.equal(options.source.lesson, 'lighthouse-evidence')
+    assert.equal(options.source.sessionId, practice.sessionId)
+    const sample = await history(practice.sessionId)
+    assert.ok(options.workspaceIds.includes(workspaceId))
+    assert.ok(!options.workspaceIds.includes(sample.workspaceId))
+    await invoke('lesson-task-materials', { ...source, workspaceId: sample.workspaceId }, 422)
+    const picked = await invoke('lesson-task-materials', { ...source, workspaceId, query: '设备 台账' })
+    assert.deepEqual(picked.entries, [{ path: material, name: file, kind: 'file' }])
+
+    const gap = '根据台账核对两台备用对讲机，再核对交班消息里提到的一台备用充电器。准备本次交接，供我决策。'
+    const confirmed = '根据台账核对两台备用对讲机，为接班人生成一份交接说明。'
+    const preview = (task, override = {}, status) => invoke('lesson-task-preview', { ...source, workspaceId, material, task, ...override }, status)
+    const open = (task, token, id, status) => invoke('lesson-task-open', { ...source, workspaceId, material, task, token, launchId: launchId(id) }, status)
+    await preview(gap, { workspaceId: sample.workspaceId, material: '02-lighthouse.md' }, 422)
+    const checkedGap = await preview(gap)
+    assert.deepEqual(checkedGap.source, options.source)
+    assert.deepEqual(new Set(checkedGap.gear.map(gear => gear.id)), new Set(['evidence', 'present']))
+    assert.match(checkedGap.task, /^【出装任务】\n/u)
+    assert.ok(checkedGap.task.includes(gap))
+    assert.ok(!checkedGap.task.includes(practice.task) && !checkedGap.task.includes('02-lighthouse.md'))
+    await appendFile(original, '\nEdited after preview.\n')
+    await open(gap, checkedGap.token, 'b', 422)
+    assert.deepEqual((await host.request(workspace, { inspectWorkspaceId: workspaceId })).sessionIds, [local.sessionId])
+    await writeFile(original, body)
+
+    const cases = [
+      { id: 'b', task: gap, choice: labels[0], tools: ['read', 'ask_user_question', 'glob'] },
+      { id: 'c', task: gap, choice: labels[1], tools: ['read', 'ask_user_question', 'write', 'present'], file: 'qualified-handoff.md' },
+      { id: 'd', task: gap, choice: labels[2], tools: ['read', 'ask_user_question'] },
+      { id: 'e', task: confirmed, tools: ['read', 'write', 'present'], file: 'verified-handoff.md' },
+    ]
+    const proofs = new Map()
+    for (const attempt of cases) {
+      const checked = attempt.task === gap ? checkedGap : await preview(attempt.task)
+      const opened = await open(attempt.task, checked.token, attempt.id)
+      const { sessionId } = opened
+      assert.equal(opened.task, checked.task)
+      const before = await history(sessionId)
+      assert.equal(before.workspaceId, workspaceId)
+      assert.equal(before.presetId, sample.presetId)
+      assert.equal(before.inherited, 0)
+      assert.ok(!before.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+      assert.equal((await read(sessionId)).status, 'waiting')
+      if (attempt.choice) {
+        await choose(opened, attempt.choice, async () => {
+          const pending = await read(sessionId, true)
+          assert.equal(pending.status, 'waiting-choice')
+          assert.deepEqual(pending.pendingQuestions[0].options, labels)
+          assert.equal(pending.draft, undefined)
+        })
+      } else await send(opened)
+
+      const native = await history(sessionId)
+      const accepted = native.events.find(event => event.type === 'user/message' && event.data.source.kind === 'user')
+      const admission = native.events.find(event => event.type === 'plugin:dsh-agent-loadout/comparison-material' &&
+        event.ignorable && event.seq < accepted.seq)
+      assert.equal(accepted.data.content[0].text, checked.task)
+      assert.equal(admission?.data.state, 'verified')
+      assert.equal(admission?.data.requestId, accepted.data.source.rpcId ?? null)
+      assert.deepEqual(native.events.filter(event => event.type === 'tool/call').map(event => event.data.name), attempt.tools)
+      const attachments = files(native)
+      assert.deepEqual(attachments.flatMap(event => event.data.files.map(item => item.path)),
+        attempt.file ? [join(await realpath(personal), attempt.file)] : [])
+      if (attempt.file) {
+        const handoff = await readFile(join(personal, attempt.file), 'utf8')
+        assert.match(handoff, /Verified: two spare radios/u)
+        if (attempt.choice) assert.match(handoff, /Unverified: a spare charger/u)
+        else assert.doesNotMatch(handoff, /Unverified/u)
+      }
+      assert.equal(await readFile(original, 'utf8'), body)
+      const proved = await read(sessionId)
+      assert.equal(proved.status, 'complete')
+      assert.equal(proved.materialState, 'verified')
+      assert.deepEqual(proved.source, options.source)
+      assert.deepEqual(proved.entries.flatMap(entry => entry.choices ?? []), attempt.choice ? [attempt.choice] : [])
+      assert.deepEqual(proved.deliverables, attempt.file ? [{ name: attempt.file, turn: attachments[0].data.turn, seq: attachments[0].seq, index: 0 }] : [])
+      assert.equal(proved.materialDelivered, false)
+      assert.equal(proved.canReview, true)
+      assert.equal(proved.rematchSource, undefined)
+      assert.equal(proved.rebaseline, undefined)
+      assert.ok(!JSON.stringify(proved).includes(native.workspacePath))
+      const reviewed = await read(sessionId, true)
+      assert.deepEqual(new Set(reviewed.draft.equipmentIds), new Set(['evidence', 'present']))
+      await invoke('rematch-comparison-options', { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }, 422)
+      proofs.set(sessionId, proved)
+    }
+    const stale = await open(confirmed, (await preview(confirmed)).token, 'f')
+    await appendFile(original, '\nEdited after opening the draft.\n')
+    await send(stale)
+    const staleResult = await read(stale.sessionId, true)
+    assert.equal(staleResult.status, 'unavailable')
+    assert.equal(staleResult.reason, 'changed-material')
+    assert.equal(staleResult.canReview, undefined)
+    assert.equal(staleResult.draft, undefined)
+    await writeFile(original, body)
+
+    assert.deepEqual((await host.request(endpoint)).value.plans, initialPlans)
+    assert.deepEqual(await comparisonArm(), practiceProof)
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual((await invoke('lesson-task-options', source)).source, options.source)
+    for (const [sessionId, proved] of proofs) assert.deepEqual(await read(sessionId), proved)
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('verified Lighthouse lesson gear carries into a new native task on personal material', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-lesson-task-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }

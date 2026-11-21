@@ -1791,7 +1791,7 @@ window.__ModuleLoader__.load({
               busy: Boolean(launch), canStart: !materialWarning && (!setup || Boolean(workspaces.length)),
               onStart: directLesson || evidence || kind === 'rematch' ? undefined : start, onVisit, putTask,
               onReuse: onUse && value.id ? arm => setReuse({ id: value.id, arm }) : undefined,
-              onLessonTask: lesson ? setLessonTask : undefined,
+              onLessonTask: practice ? setLessonTask : undefined,
               onRematch: canRematchComparisonArm(kind, arm) && value.id && !(lesson && materialWarning)
                 ? arm => setRematch({ id: value.id, arm: arm.id, sessionId: arm.sessionId }) : undefined,
               onNotice: outcome => setNotice(t(draftNotices[outcome] ?? draftNotices.blocked)) }))),
@@ -4003,7 +4003,7 @@ window.__ModuleLoader__.load({
       const workspace = workspaces.find(item => item.workspaceId === chosenWorkspaceId)
       const preview = reviewed?.value
       const origin = preview?.source ?? lessonSource
-      const originArm = origin && comparisonKinds[origin.kind]?.arms.find(item => item.id === origin.arm)
+      const originArm = origin && comparisonArmConfig(origin.kind, origin.arm)
       const sourceLabel = origin && [comparisonArmName(originArm, origin), origin.heroName].filter(Boolean).join(' · ')
       const actionPrefix = lessonSource ? 'lesson-task' : 'plan-task'
 
@@ -6946,7 +6946,7 @@ window.__ModuleLoader__.load({
       const current = cached && cached.version === version && cached.retry === retry && cached.language === language ? cached : null
       const result = current?.result
       const source = result?.source
-      const sourceArm = source && comparisonKinds[source.kind]?.arms.find(item => item.id === source.arm)
+      const sourceArm = source && comparisonArmConfig(source.kind, source.arm)
       const sourceLabel = source && [comparisonArmName(sourceArm, source), source.heroName].filter(Boolean).join(' · ')
 
       useEffect(() => {
