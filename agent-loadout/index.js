@@ -3702,7 +3702,33 @@ export async function apply(ctx) {
     }
   }
 
+  async function checkedPersonalRematchBaseline(selection, signal) {
+    const original = await personalRematchEvidence(selection, signal)
+    if (!original || !original.canReuse) throw new Error('请选择一局已核验的实战作为原局。')
+    const { target, hero, sessionId } = original
+    const { workspaceId, cwd, material, digest, task, presetId, identity } = target
+    const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
+    if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
+    const state = await personalTaskMaterialState(target, signal)
+    if (state !== 'verified') throw new Error(state === 'changed' ? '材料已变化，请用现在的文件开始新的对照。'
+      : '无法读取所选材料，请核对工作区内的文件路径。')
+    const ecosystem = await discover()
+    const heroId = hero.id
+    const preset = ecosystem.presets.find(item => item.id === heroId && !item.broken)
+    if (!preset) throw new Error('当前英雄的基础阵容不可用。')
+    const { draft, candidate, identity: current } = await verifySavedPlan({ presetId, heroId }, ecosystem)
+    if (identity !== current) throw new Error('本机配置已变化，无法核对这局的原出装。')
+    const { kind, comparisonId, arm } = selection
+    const baseline = { kind, comparisonId, arm, sessionId, presetId, heroId, heroName: hero.name, identity }
+    const { title: workspaceTitle } = workspace
+    const view = { workspaceId, workspaceTitle, material, task, baseline: { sessionId, heroName: hero.name } }
+    const brief = task.split('\n').slice(2, -1).join('\n').trim()
+    signal?.throwIfAborted()
+    return { ecosystem, preset, draft, candidate, baseline, view, fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
+  }
+
   async function checkedRematchBaseline(selection, signal) {
+    if (selection.kind === 'personal') return checkedPersonalRematchBaseline(selection, signal)
     const { comparisons, record, arm } = rematchReference(selection)
     const [observed, saved] = await Promise.all([readComparisonArm(comparisons, record, arm, signal), comparisons.readArm(record.id, arm)])
     if (!saved?.opened || !observed.canRematch) throw new Error('请选择一局已核验的实战作为原局。')
@@ -3894,6 +3920,7 @@ export async function apply(ctx) {
   function previousComparison(comparison) {
     if (!comparison.baseline) return
     const { kind, comparisonId, arm, sessionId, presetId, identity } = comparison.baseline
+    if (kind === 'personal') return { personal: comparison.baseline }
     const comparisons = comparisonStores[kind]
     const original = comparisons.read(comparisonId)
     if (!original || original === comparison || !comparisons.armsFor(original).includes(arm) ||
@@ -3910,6 +3937,15 @@ export async function apply(ctx) {
     const id = 'baseline'
     const missing = { id, sessionId, heroName, planName, status: 'unavailable', reason: 'session-unavailable' }
     if (!previous) return missing
+    if (previous.personal) {
+      const original = await personalRematchEvidence(previous.personal, signal)
+      if (!original || original.sessionId !== sessionId) return missing
+      const { target, observed, canReuse } = original
+      if (target.presetId !== previous.personal.presetId || target.identity !== previous.personal.identity ||
+        target.workspaceId !== comparison.workspaceId || target.cwd !== comparison.cwd ||
+        target.digest !== comparison.digest || target.material !== comparison.material || target.task !== comparison.task) return missing
+      return { id, sessionId, heroName, planName, ...observed, canReuse, canRematch: false }
+    }
     const { comparisons, original } = previous
     const result = await readComparisonArm(comparisons, original, arm, signal)
     if (sessionId !== result.sessionId) return missing
@@ -3920,7 +3956,7 @@ export async function apply(ctx) {
     const previous = previousComparison(record)
     const arms = comparisons.armsFor(record).map(arm => readComparisonArm(comparisons, record, arm, signal))
     if (record.baseline) arms.unshift(readRematchBaseline(record, previous, signal))
-    return { arms: await Promise.all(arms), ...(previous && { previous: previous.view }) }
+    return { arms: await Promise.all(arms), ...(previous?.view && { previous: previous.view }) }
   }
 
   function comparisonChoices({ entries = [] }) {
@@ -4009,30 +4045,59 @@ export async function apply(ctx) {
     })
   }
 
-  async function readLessonTaskResult({ sessionId, review }, signal) {
+  async function observeLessonTask(sessionId, signal, strict = false) {
     const source = await observePlanTask(sessionId, signal, 'all')
-    if (!source) return null
-    let launch
-    let observed
-    const { cwd, agentPreset: presetId } = source.header
+    if (!source) return
     try {
-      launch = planTaskDetails(source).launch
-      if (!launch?.source || !validRematchReference(launch.source)) return null
-      observed = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
-        verifyMaterialProof: false, verifyMaterialDelivery: true, includeWindows: true }, receipts)
+      const { header, launch } = planTaskDetails(source)
+      if (!launch?.source || !validRematchReference(launch.source)) return
+      const { cwd, agentPreset: presetId } = header
+      const target = personalTaskTarget(launch, header)
+      if (strict && !target) return
+      const evidence = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
+        verifyMaterialProof: strict, verifyMaterialDelivery: true, includeWindows: !strict }, receipts)
+      return { launch, cwd, presetId, evidence, target }
     } finally {
       source[Symbol.dispose]()
     }
+  }
+
+  async function personalRematchEvidence(selection, signal) {
+    if (selection.kind !== 'personal' || !validRematchReference(selection)) return
+    const sessionId = 'session-' + selection.comparisonId
+    const original = await observeLessonTask(sessionId, signal, true)
+    if (!original) return
+    const { target, evidence, presetId } = original
+    const record = records.get(presetId)
+    const hero = matchHero(presetId, record)
+    const canReuse = evidence.status === 'complete' && (evidence.materialDelivered || comparisonChoices(evidence).length > 0)
+    return { sessionId, target, hero, observed: evidence, canReuse }
+  }
+
+  async function readLessonTaskResult({ sessionId, review }, signal) {
+    const resultView = await observeLessonTask(sessionId, signal)
+    if (!resultView) return null
+    const { launch, cwd, presetId, evidence: observed, target } = resultView
     const { windows = [], ...evidence } = observed
     const choices = comparisonChoices(evidence)
     const canReview = evidence.status === 'complete' && (evidence.materialDelivered || choices.length > 0)
     const receiptIds = windows.map(({ endSeq }) => sessionId + ':' + endSeq)
-    const awards = (await growth.settlementAwards(sessionId, receiptIds))
-      .filter(item => item.kind)
+    const reference = canReview && target && { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }
+    const [settled, original] = await Promise.all([
+      growth.settlementAwards(sessionId, receiptIds),
+      reference && personalRematchEvidence(reference, signal),
+    ])
+    const awards = settled.filter(item => item.kind)
       .map(({ id, name, kind, xp, sourceName }) => ({ id, name, kind, xp, ...(sourceName && { sourceName }) }))
+    const rematchSource = original?.canReuse ? reference : undefined
+    const workspace = canReview && ctx.get('workspaceRegistry')?.list()
+      .find(item => item.path === cwd && item.sessionIds.includes(sessionId))
+    const brief = launch.task.split('\n').slice(2, -1).join('\n').trim()
+    const rebaseline = workspace && brief ? { workspaceId: workspace.id, material: launch.material, brief } : undefined
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
-      receiptIds, ...(awards.length && { awards }), ...(canReview && { canReview }) }
+      receiptIds, ...(awards.length && { awards }), ...(canReview && { canReview }),
+      ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }) }
     if (review !== true || !canReview) return result
     try {
       const [checked, uploaded] = await Promise.all([verifiedLessonTaskSource(launch.source, signal), appearance.index()])
@@ -4057,6 +4122,7 @@ export async function apply(ctx) {
     if (record?.baseline && arm === 'baseline') {
       const observed = await readRematchBaseline(record, previousComparison(record), signal)
       if (!observed.canReuse) throw new Error('这局还没有可复用出装的实战记录。')
+      if (record.baseline.kind === 'personal') return readLessonTaskResult({ sessionId: record.baseline.sessionId, review: true }, signal)
       return comparisonLoadout(record.baseline, signal)
     }
     if (!record || !store.armsFor(record).includes(arm)) throw new Error('找不到这局实战对照。')
