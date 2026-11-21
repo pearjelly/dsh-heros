@@ -1997,7 +1997,10 @@ window.__ModuleLoader__.load({
           const value = await request(action, { action, kind, comparisonId, arm, change }, abort.signal, language)
           if (!abort.signal.aborted) setChecked({ value, change, language, viaSuggestion })
         } catch (reason) {
-          if (!abort.signal.aborted) setError(reason.message)
+          if (!abort.signal.aborted) {
+            setError(reason.message)
+            if (viaSuggestion) setNeedsRefresh(true)
+          }
         } finally {
           pending.current = null
           if (!abort.signal.aborted) setWorking('')
@@ -2057,7 +2060,7 @@ window.__ModuleLoader__.load({
             ? t('默认工作区') : options.workspaceTitle], [t('材料文件相对路径'), options.material], [t('基准局的换装'), baselineChange]] }),
           h('div', { className: 'moba-lighthouse-task' },
             h('label', null, t('两边共用的任务'), h('textarea', { readOnly: true, rows: 4, value: preview?.task ?? options.task }))),
-          !preview && !reading && !loaded?.error && personalSuggestion &&
+          !preview && !reading && !loaded?.error && !needsRefresh && personalSuggestion &&
             h('aside', { className: 'moba-lighthouse-arm', 'aria-label': t('试试交付前复核') },
               h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t('原局已交付') + ' · ' + options.material), ' ',
                 t('可以先看草稿，再决定确认交付或退回修改。')),
