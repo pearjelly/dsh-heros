@@ -71,6 +71,7 @@ export async function openMatchComparisons(directory, name, arms, saveEntry, war
 
   const armDirectory = id => join(recordDirectory, id)
   return { arms, identity, create, armDirectory, read: id => records.get(id), member: id => members.get(id), latest: () => latest,
+    list: () => records.values(),
     readArm: (id, arm) => readJson(join(armDirectory(id), arm + '.json')),
     writeArm: (id, arm, info) => saveEntry(armDirectory(id), arm, info) }
 }

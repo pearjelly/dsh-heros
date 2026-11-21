@@ -3296,12 +3296,125 @@ export async function apply(ctx) {
       if (!saved?.opened && !workspace?.sessionIds.includes(sessionId)) return { id: arm, status: 'unopened' }
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material }, receipts)
-      return { id: arm, sessionId, ...result }
+      return { id: arm, sessionId, ...result, canReuse: reusableComparisonArm(arm, result) }
     } catch {
       signal?.throwIfAborted()
       return { id: arm, ...(saved?.opened && { sessionId }), status: 'unavailable', reason: 'session-unavailable' }
     } finally {
       source?.[Symbol.dispose]()
+    }
+  }
+
+  function comparisonChoices({ entries = [] }) {
+    return [...new Set(entries.flatMap(entry => entry.name === 'ask_user_question' && entry.state === 'completed' ? entry.choices ?? [] : []))]
+  }
+
+  function reusableComparisonArm(arm, result) {
+    if (result.status !== 'complete') return false
+    if (arm === 'review') return comparisonChoices(result).length > 0
+    if (arm === 'recon') return result.entries.some(entry => entry.name === 'glob' && entry.state === 'completed')
+    return result.deliverables.length > 0
+  }
+
+  function comparisonHistoryOrder(a, b) {
+    return b.createdAt - a.createdAt || b.id.localeCompare(a.id) || b.kind.localeCompare(a.kind)
+  }
+
+  async function comparisonHistory({ query = '', kind = 'all', outcome = 'all', before }, signal) {
+    if (typeof query !== 'string' || query.length > 200 || !['all', 'workspace', 'lighthouse'].includes(kind) ||
+      !['all', 'delivered', 'decisions'].includes(outcome)) throw new Error('实战记录筛选无效，请重新选择。')
+    let older
+    if (before !== undefined) {
+      const fields = typeof before === 'string' && /^(\d{1,16}):(workspace|lighthouse):([a-f0-9]{32})$/.exec(before)
+      if (!fields || !Number.isSafeInteger(Number(fields[1]))) throw new Error('找不到这页实战记录。')
+      older = { createdAt: Number(fields[1]), kind: fields[2], id: fields[3] }
+    }
+    const words = query.normalize('NFKC').toLowerCase().trim().split(/\s+/u).filter(Boolean)
+    const registry = ctx.get('workspaceRegistry')
+    const groups = [['lighthouse', lighthouseComparisons], ['workspace', workspaceComparisons]]
+    const matches = groups.filter(([category]) => kind === 'all' || kind === category).flatMap(([category, store]) =>
+      Array.from(store.list(), record => {
+        const { createdAt, id, task, material, workspaceId } = record
+        const workspaceTitle = registry?.get(workspaceId)?.title ?? record.workspaceTitle
+        const title = category === 'lighthouse' ? '灯塔补给行动'
+          : task.split('\n').slice(2, -1).join(' ').trim().slice(0, 120) || '实战同题对照'
+        return { id, kind: category, createdAt, title, material, workspaceTitle, store, record }
+      }).filter(item => {
+        if (older && comparisonHistoryOrder(item, older) <= 0) return false
+        const headings = item.kind === 'lighthouse' ? '灯塔补给行动 Lighthouse Supply Run' : '实战同题对照 Workspace comparison'
+        const workspaceName = item.workspaceTitle === 'default-workspace' ? 'default-workspace 默认工作区 Default workspace' : item.workspaceTitle
+        const searchable = [headings, workspaceName, item.material, item.record.task].join('\n').normalize('NFKC').toLowerCase()
+        return words.every(word => searchable.includes(word))
+      })).sort(comparisonHistoryOrder)
+
+    const pageSize = 12
+    const scanLimit = Math.min(matches.length, outcome === 'all' ? pageSize : 48)
+    const items = []
+    let inspected = 0
+    while (inspected < scanLimit && items.length < pageSize) {
+      signal?.throwIfAborted()
+      const group = matches.slice(inspected, inspected + Math.min(6, pageSize - items.length, scanLimit - inspected))
+      const cards = await Promise.all(group.map(async ({ store, record, ...item }) => {
+        const arms = await Promise.all(store.arms.map(async id => {
+          const arm = await readComparisonArm(store, record, id, signal)
+          const { status, sessionId, turn, deliverables, reason, continuationReason, canReuse } = arm
+          const choices = comparisonChoices(arm)
+          return { id, status, sessionId, turn, deliverables, choices, reason, continuationReason, canReuse: Boolean(canReuse),
+            pending: Boolean(arm.pendingQuestions?.length) }
+        }))
+        return { ...item, arms }
+      }))
+      inspected += cards.length
+      items.push(...cards.filter(item => outcome === 'all' || item.arms.some(arm =>
+        (outcome === 'delivered' ? arm.deliverables : arm.choices)?.length)))
+    }
+    const last = matches[inspected - 1]
+    return { items, ...(last && inspected < matches.length && { before: `${last.createdAt}:${last.kind}:${last.id}` }) }
+  }
+
+  async function comparisonLoadout({ kind, comparisonId, arm }, signal) {
+    const store = kind === 'workspace' ? workspaceComparisons : kind === 'lighthouse' ? lighthouseComparisons : undefined
+    const record = store?.read(comparisonId)
+    if (!record || !store.arms.includes(arm)) throw new Error('找不到这局实战对照。')
+    const observed = await readComparisonArm(store, record, arm, signal)
+    if (!observed.canReuse) throw new Error('这局还没有可复用出装的实战记录。')
+    const saved = await store.readArm(comparisonId, arm)
+    const original = records.get(saved?.presetId)
+    const heroId = original?.baseId ?? 'standard'
+    const [ecosystem, uploaded] = await Promise.all([discover(), appearance.index()])
+    const art = packageArt(uploaded, ecosystem)
+    const hero = { id: heroId, name: matchHero(heroId, original).name, art: art('hero', heroId) }
+    const { sessionId, turn, entries, deliverables } = observed
+    const choices = comparisonChoices(observed)
+    const workspaceId = ctx.get('workspaceRegistry')?.get(saved?.workspaceId)?.id
+    const result = { sessionId, workspaceId, hero, turn, entries, deliverables, choices, gear: [] }
+    if (!saved?.presetId || (!original && saved.presetId !== heroId)) {
+      return { ...result, reason: '实战中的原出装目前无法读取。' }
+    }
+    const ids = original?.equipmentIds ?? []
+    const sources = original ? savedToolSources(original, ecosystem) : {}
+    const draft = { presetId: heroId, equipmentIds: ids.map(id => currentEquipmentId(id, ecosystem)),
+      equipmentSources: Object.fromEntries(Object.entries(sources).map(([id, source]) =>
+        [currentEquipmentId(id, ecosystem), currentEquipmentId(source, ecosystem)])),
+      removedEquipmentIds: (original?.removedEquipmentIds ?? []).map(id => currentEquipmentId(id, ecosystem)) }
+    result.gear = ids.map(key => {
+      const id = currentEquipmentId(key, ecosystem)
+      const card = equipmentById.get(id) ?? ecosystem.equipment.get(id)
+      const sourceId = draft.equipmentSources[id]
+      return { id, name: original?.equipmentLabels?.[key] ?? card?.name ?? id, kind: card?.kind ?? 'featured',
+        art: art('gear', id, sourceId), sourceName: original?.equipmentSourceLabels?.[key],
+        evidence: id === 'review' && choices.length ? 'decision' : 'equipped' }
+    })
+    try {
+      signal?.throwIfAborted()
+      const preset = await ctx.agentPresets.resolve(saved.presetId)
+      const candidate = await plan(draft, ecosystem)
+      if (preset.broken || candidate.id !== saved.presetId) throw new Error('本机配置已变化，无法核对这局的原出装。')
+      const comparison = await compare(draft, ecosystem, candidate)
+      return { ...result, gear: result.gear.map(item => ({ ...item, available: true })), draft, comparison }
+    } catch (error) {
+      signal?.throwIfAborted()
+      return { ...result, reason: error instanceof Error ? error.message : '本机配置已变化，无法核对这局的原出装。' }
     }
   }
 
@@ -4432,6 +4545,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-comparison-open') value = await openComparisonArm(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'workspace-comparison') value = await readComparison(workspaceComparisons, selection, english, request.signal)
         else if (selection?.action === 'workspace-comparison-open') value = await openComparisonArm(workspaceComparisons, selection, english, request.signal)
+        else if (selection?.action === 'comparison-history') value = await comparisonHistory(selection, request.signal)
+        else if (selection?.action === 'comparison-loadout-preview') value = await comparisonLoadout(selection, request.signal)
         else if (selection?.action === 'field-playbook-preview') value = await previewFieldPlaybook(selection)
         else if (selection?.action === 'match-settlements' || selection?.action === 'match-settlements-page') value = await matchSettlements(selection)
         else if (selection?.action === 'match-follow-up' || selection?.action === 'match-follow-up-preview') value = await matchFollowUp(selection)

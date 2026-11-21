@@ -5,7 +5,7 @@ window.__ModuleLoader__.load({
     const panelId = 'agent-loadout'
     let activeLanguage = { getSnapshot: () => 'zh', subscribe: () => () => {} }
     let english = Object.create(null)
-    const t = text => activeLanguage.getSnapshot() === 'en' && Object.hasOwn(english, text) ? english[text] : text
+    const t = (text, key = text) => activeLanguage.getSnapshot() === 'en' && Object.hasOwn(english, key) ? english[key] : text
     const panelLabel = () => t('深度荣耀')
 
     function useLanguage() {
@@ -1209,10 +1209,29 @@ window.__ModuleLoader__.load({
       preserved: '已保留输入栏原有草稿。可复制同题任务后手动粘贴。',
       blocked: '可复制同题任务，粘贴到会话输入栏。',
     }
+    const runHistoryLabel = () => t('实战记录', '实战记录（同题对照）')
+    const backToRunHistoryLabel = () => t('返回实战记录', '返回实战记录（同题对照）')
 
-    function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart }) {
+    function closeComparisonOnEscape(event, close) {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      close()
+    }
+
+    function ObservedComparisonCalls({ entries }) {
+      const tools = entries?.filter(entry => entry.type === 'tool') ?? empty
+      if (!tools.length) return null
+      return h('ul', { className: 'moba-lighthouse-results', 'aria-label': t('实测工具调用') },
+        tools.map((entry, index) => h('li', { key: index },
+          h('div', null, h('strong', null, entry.name),
+            entry.sourceNames?.length > 0 && h('small', null, t('调用来源 ') + entry.sourceNames.join(' / ')),
+            entry.choices?.length > 0 && h('small', null, t('你实际选择了 ') + entry.choices.join(' / '))),
+          h('span', { 'data-state': entry.state }, t(reportToolStates[entry.state] ?? entry.state)))))
+    }
+
+    function ComparisonArm({ arm, config, task, sessionId, busy, onStart, onVisit, putTask, onNotice, canStart, onReuse }) {
       const files = arm.deliverables ?? empty
-      const tools = arm.entries?.filter(entry => entry.type === 'tool') ?? empty
       const pendingQuestions = arm.pendingQuestions ?? empty
       return h('section', { className: 'moba-lighthouse-arm', 'data-state': arm.status },
         h('header', null, h(Glyph, { kind: config.icon, size: 20 }),
@@ -1228,16 +1247,13 @@ window.__ModuleLoader__.load({
           pendingQuestions.map((question, index) => h('div', { key: index }, h('p', null, question.question),
             question.options?.length > 0 && h('p', null, question.options.join(' / ')))),
           h('p', null, t('请在原会话的 DSH 确认卡上选择。'))),
-        tools.length > 0 && h('ul', { className: 'moba-lighthouse-results', 'aria-label': t('实测工具调用') },
-          tools.map((entry, index) => h('li', { key: index },
-            h('div', null, h('strong', null, entry.name),
-              entry.sourceNames?.length > 0 && h('small', null, t('调用来源 ') + entry.sourceNames.join(' / ')),
-              entry.choices?.length > 0 && h('small', null, t('你实际选择了 ') + entry.choices.join(' / '))),
-            h('span', { 'data-state': entry.state }, t(reportToolStates[entry.state] ?? entry.state))))),
+        h(ObservedComparisonCalls, { entries: arm.entries }),
         (arm.status === 'complete' || files.length > 0) && h('div', { className: 'moba-lighthouse-artifacts' },
           h('h4', null, t('交付文件') + ' · ' + files.length),
           files.length > 0 && h('ul', null, files.map((file, index) => h('li', { key: index }, file.name)))),
         h('footer', null,
+          arm.canReuse && onReuse && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
+            'data-reuse-arm': arm.id, onClick: () => onReuse(arm.id) }, t('核对并复用出装')),
           arm.sessionId ? h(Fragment, null,
             task && typeof putTask === 'function' && arm.sessionId === sessionId && arm.status === 'waiting' && h('button', {
               type: 'button', className: 'moba-roster-open', disabled: busy, onClick: () => onNotice(putTask(task)),
@@ -1274,7 +1290,7 @@ window.__ModuleLoader__.load({
     }
 
     function RunComparison({ kind = 'lighthouse', request, comparisonId, sessionId, onClose, onVisit, putTask,
-      workspaces = empty, initialWorkspaceId }) {
+      workspaces = empty, initialWorkspaceId, onUse, onHistory, onBack }) {
       const language = useLanguage()
       const config = comparisonKinds[kind]
       const personal = kind === 'workspace'
@@ -1284,8 +1300,10 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState('')
       const [attempt, retry] = useState(0)
       const [launch, setLaunch] = useState('')
+      const [reuse, setReuse] = useState(null)
       const starting = useRef(false)
       const launchIds = useRef(new Map())
+      const reuseFocus = useRef('')
       const taskField = useRef(null)
       const workspaceForm = useRef(null)
       const [selectedWorkspaceId, setWorkspaceId] = useState(initialWorkspaceId ?? '')
@@ -1385,13 +1403,13 @@ window.__ModuleLoader__.load({
         retry(value => value + 1)
       }
 
+      if (reuse) return h(ComparisonLoadoutReview, { kind, comparisonId: reuse.id, arm: reuse.arm, request,
+        onBack: () => { reuseFocus.current = reuse.arm; setReuse(null) }, onClose, onUse })
+
       return h(InstallDialog, { title: t(config.title), className: 'moba-lighthouse-comparison', busy: Boolean(launch),
-        onCancel: onClose, initialFocus: '.moba-lighthouse-close', onKeyDown: event => {
-          if (event.key !== 'Escape') return
-          event.preventDefault()
-          event.stopPropagation()
-          if (!starting.current) onClose()
-        } },
+        onCancel: onBack ?? onClose, initialFocus: reuseFocus.current
+          ? `[data-reuse-arm="${reuseFocus.current}"]` : '.moba-lighthouse-close',
+        onKeyDown: event => closeComparisonOnEscape(event, () => { if (!starting.current) (onBack ?? onClose)() }) },
         h('p', { className: 'moba-lighthouse-note' }, t(personal
           ? '用同一份材料试两种交付方式。进入各自会话后，用输入栏手动发送任务。'
           : '两边用同一段任务。进入各自会话后，用输入栏手动发送。')),
@@ -1416,9 +1434,12 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm =>
             h(ComparisonArm, { key: arm.id, arm, config: config.arms.find(item => item.id === arm.id), task: materialWarning ? undefined : task, sessionId,
               busy: Boolean(launch), canStart: !materialWarning && (!setup || Boolean(workspaces.length)), onStart: start, onVisit, putTask,
+              onReuse: onUse && value.id ? arm => setReuse({ id: value.id, arm }) : undefined,
               onNotice: outcome => setNotice(t(comparisonDraftNotices[outcome] ?? comparisonDraftNotices.blocked)) }))),
           finished && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t('两次尝试已完成，可以回看实际调用和交付。'))),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
+          (onBack || onHistory) && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
+            onClick: onBack ?? onHistory }, onBack ? backToRunHistoryLabel() : runHistoryLabel()),
           value?.id && !prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
             onClick: () => switchPreview(true) }, t('开始新的对照')),
           prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
@@ -1427,7 +1448,179 @@ window.__ModuleLoader__.load({
             onClick: onClose }, t('关闭同题对照'))))
     }
 
-    function RunComparisonAnchor({ kind, member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn, workspaces }) {
+    function ComparisonHistoryEntry({ item, onOpen, onSource, onReuse, storeFocus }) {
+      const config = comparisonKinds[item.kind]
+      const title = item.kind === 'lighthouse' ? t('灯塔补给行动')
+        : !item.title || item.title === config.title ? t(config.title) : item.title
+      const workspace = item.workspaceTitle && workspaceTitle({ title: item.workspaceTitle })
+      const subtitle = [t(config.title), workspace, item.material].filter(text => text && text !== title).join(' · ')
+      const time = new Date(item.createdAt)
+      return h('li', { className: 'moba-history-entry' },
+        h('header', null,
+          h('div', null, h('h3', null, title),
+            subtitle && h('p', null, subtitle)),
+          Number.isFinite(time.getTime()) && h('time', { dateTime: time.toISOString() }, reportTime(time))),
+        h('ul', { className: 'moba-history-arms' }, item.arms.map(arm => {
+          const setup = config.arms.find(option => option.id === arm.id)
+          const state = arm.pending ? 'waiting-choice' : arm.status
+          const files = arm.deliverables ?? empty
+          return h('li', { key: arm.id },
+            h('strong', null, t(setup.name)),
+            h('span', { className: 'moba-history-state', 'data-state': state }, t(comparisonArmStates[state] ?? state)),
+            arm.reason && h('p', null, t(comparisonArmReasons[arm.reason] ?? arm.reason)),
+            arm.continuationReason && h('p', null, t('续答后的材料或阵容无法核对。请到原会话查看后续结果。')),
+            arm.choices?.length > 0 && h('p', null, t('你实际选择了 ') + arm.choices.join(' / ')),
+            files.length > 0 && h('p', null, t('交付文件') + ' · ' + files.map(file => file.name).join(' / ')),
+            h('div', { className: 'moba-history-actions' },
+              arm.sessionId && h('button', { type: 'button', className: 'moba-text', onClick: () => onSource(arm.sessionId),
+                'aria-label': t('查看原会话') + ' · ' + t(setup.name) }, t('查看原会话')),
+              arm.canReuse && h('button', { type: 'button', className: 'moba-text', ref: node => storeFocus(arm.id, node),
+                onClick: () => onReuse(item, arm.id), 'aria-label': t('核对并复用出装') + ' · ' + t(setup.name) }, t('核对并复用出装'))))
+        })),
+        h('button', { type: 'button', className: 'moba-roster-open', ref: node => storeFocus('board', node),
+          onClick: () => onOpen(item) }, t('查看对照'), h(Glyph, { kind: 'arrow', size: 15 })))
+    }
+
+    function ComparisonHistory({ request, workspaces, initialWorkspaceId, onClose, onSource, onVisit, onUse, initialKind = 'all' }) {
+      const language = useLanguage()
+      const [query, setQuery] = useState('')
+      const [kind, setKind] = useState(initialKind)
+      const [outcome, setOutcome] = useState('all')
+      const [state, setState] = useState(null)
+      const [page, setPage] = useState(null)
+      const [attempt, retry] = useState(0)
+      const [selection, setSelection] = useState(null)
+      const focus = useRef(new Map())
+      const term = query.trim()
+      const key = JSON.stringify([term, kind, outcome, language])
+      const before = page?.key === key ? page.before : undefined
+      const current = state?.key === key ? state : undefined
+      const loading = !current || current.cursor !== before || current.attempt !== attempt
+      const filters = {
+        kind: [['all', '全部对照'], ['workspace', comparisonKinds.workspace.title], ['lighthouse', comparisonKinds.lighthouse.title]],
+        outcome: [['all', '全部结果'], ['delivered', '有交付文件'], ['decisions', '有用户选择']],
+      }
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'comparison-history'
+        const timer = setTimeout(async () => {
+          try {
+            const value = await request(action, { action, query: term, kind, outcome, before }, abort.signal, language)
+            if (abort.signal.aborted) return
+            setState(previous => {
+              const rows = before && previous?.key === key ? previous.items : empty
+              const byId = new Map([...rows, ...value.items].map(item => [item.kind + ':' + item.id, item]))
+              return { key, items: [...byId.values()], before: value.before, cursor: before, attempt }
+            })
+          } catch (reason) {
+            if (!abort.signal.aborted) setState(previous => ({ key, items: previous?.key === key ? previous.items : empty,
+              before: previous?.key === key ? previous.before : undefined, cursor: before, attempt, error: reason.message }))
+          }
+        }, term && !before ? 180 : 0)
+        return () => { abort.abort(); clearTimeout(timer) }
+      }, [request, key, term, kind, outcome, before, attempt, language])
+
+      function select(item, arm) {
+        setSelection({ id: item.id, kind: item.kind, arm })
+      }
+
+      function back() {
+        const target = [selection.kind, selection.id, selection.arm ?? 'board'].join(':')
+        setSelection(null)
+        requestAnimationFrame(() => focus.current.get(target)?.focus())
+      }
+
+      if (selection?.arm) return h(ComparisonLoadoutReview, { kind: selection.kind, comparisonId: selection.id,
+        arm: selection.arm, request, onBack: back, onClose, onUse })
+      if (selection) return h(RunComparison, { kind: selection.kind, comparisonId: selection.id, request,
+        workspaces, initialWorkspaceId, onBack: back, onClose, onVisit, onUse })
+
+      return h(InstallDialog, { title: runHistoryLabel(), className: 'moba-lighthouse-comparison moba-comparison-history',
+        onCancel: onClose, initialFocus: '.moba-comparison-history-query', onKeyDown: event => closeComparisonOnEscape(event, onClose) },
+        h('div', { className: 'moba-history-filters' },
+          h('label', { className: 'moba-search' }, h(Glyph, { kind: 'search', size: 17 }),
+            h('input', { className: 'moba-comparison-history-query', type: 'search', maxLength: 200, value: query,
+              'aria-label': t('搜索实战记录'), placeholder: t('搜索任务、材料或工作区'),
+              onChange: event => { setQuery(event.target.value); setPage(null) } })),
+          h('label', null, t('对照类型'), h('select', { value: kind,
+            onChange: event => { setKind(event.target.value); setPage(null) } },
+            filters.kind.map(([id, name]) => h('option', { key: id, value: id }, t(name))))),
+          h('label', null, t('结果筛选'), h('select', { value: outcome,
+            onChange: event => { setOutcome(event.target.value); setPage(null) } },
+            filters.outcome.map(([id, name]) => h('option', { key: id, value: id }, t(name)))))),
+        current?.items.length > 0 && h('ul', { className: 'moba-history-list' }, current.items.map(item =>
+          h(ComparisonHistoryEntry, { key: item.kind + ':' + item.id, item, onOpen: select, onReuse: select,
+            onSource, storeFocus: (arm, node) => {
+              const id = [item.kind, item.id, arm].join(':')
+              if (node) focus.current.set(id, node)
+              else focus.current.delete(id)
+            } }))),
+        loading ? h('p', { className: 'moba-empty', role: 'status' }, t('正在读取同题对照记录…'))
+          : current.error ? h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
+            h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重试')))
+            : !current.items.length && h('p', { className: 'moba-empty', role: 'status' }, t(current.before
+              ? '这页没有匹配项，仍有更早的记录可查。' : term || kind !== 'all' || outcome !== 'all'
+                ? '没有符合条件的对照。' : '还没有实战或灯塔对照。')),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          current?.before && (loading || current.before !== before) && h('button', { type: 'button', className: 'moba-roster-open',
+            disabled: loading || Boolean(current.error), onClick: () => setPage({ key, before: current.before }) }, t('加载更多记录')),
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: onClose }, t('关闭'))))
+    }
+
+    function ComparisonLoadoutReview({ kind, comparisonId, arm, request, onBack, onClose, onUse }) {
+      const language = useLanguage()
+      const [state, setState] = useState(null)
+      const [attempt, retry] = useState(0)
+      const action = 'comparison-loadout-preview'
+      const config = comparisonKinds[kind].arms.find(item => item.id === arm)
+      const key = JSON.stringify([kind, comparisonId, arm, language, attempt])
+      const current = state?.key === key ? state : undefined
+      const value = current?.value
+      const recordedChoices = new Set(value?.entries?.flatMap(entry => entry.choices ?? empty))
+      const otherChoices = value?.choices?.filter(choice => !recordedChoices.has(choice)) ?? empty
+      const gearTitle = t(value?.draft ? '已验证的原出装' : '原出装记录')
+
+      useEffect(() => {
+        const abort = new AbortController()
+        request(action, { action, kind, comparisonId, arm }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setState({ key, value }) })
+          .catch(reason => { if (!abort.signal.aborted) setState({ key, error: reason.message }) })
+        return () => abort.abort()
+      }, [request, key, kind, comparisonId, arm, language])
+
+      return h(InstallDialog, { title: t('核对并复用出装'), className: 'moba-lighthouse-comparison moba-history-reuse',
+        onCancel: onBack, initialFocus: '.moba-history-reuse-back', onKeyDown: event => closeComparisonOnEscape(event, onBack) },
+        !current && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对本回合出装…')),
+        current?.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
+          h('button', { type: 'button', className: 'moba-text', onClick: () => retry(attempt => attempt + 1) }, t('重试'))),
+        value && h(Fragment, null,
+          value.hero && h('div', { className: 'moba-proven-hero' },
+            h(HeroArt, { ...value.hero, className: 'moba-match-plan-portrait' }),
+            h('div', null, h('strong', null, value.hero.name), h('p', null, t(config.name)))),
+          value.gear?.length > 0 && h('section', { className: 'moba-history-gear', 'aria-label': gearTitle },
+            h('h3', null, gearTitle),
+            h('ul', null, value.gear.map(item => h('li', { key: item.id }, h(ItemArt, { item }),
+              h('div', null, h('strong', null, item.name),
+                item.sourceName && h('small', null, t('原来源 ') + item.sourceName)))))),
+          h(ObservedComparisonCalls, { entries: value.entries }),
+          otherChoices.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('你实际选择了 ') + otherChoices.join(' / ')),
+          value.deliverables?.length > 0 && h('div', { className: 'moba-lighthouse-artifacts' },
+            h('h4', null, t('已交付的文件')), h('ul', null, value.deliverables.map((item, index) => h('li', { key: index }, item.name)))),
+          value.reason && h('p', { className: 'moba-alert', role: 'status' }, t(value.reason)),
+          value.draft && h(Fragment, null,
+            h(SharedPlanCapabilities, { comparison: value.comparison }),
+            h('p', { className: 'moba-lighthouse-note' }, t('复用会替换大厅的出装草稿。你可以在开局前检查或调整。')))),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open moba-history-reuse-back', onClick: onBack }, t('返回')),
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: onClose }, t('关闭')),
+          h('button', { type: 'button', className: 'moba-roster-open', disabled: !value?.draft,
+            onClick: () => onUse(value, false) }, t('试装复练')),
+          h('button', { type: 'button', className: 'moba-start', disabled: !value?.draft,
+            onClick: () => onUse(value, true) }, t('保存为方案'))))
+    }
+
+    function RunComparisonAnchor({ kind, member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn, workspaces, onUse }) {
       const config = comparisonKinds[kind]
       const [open, setOpen] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
@@ -1452,6 +1645,7 @@ window.__ModuleLoader__.load({
           draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
         open && h(RunComparison, { kind, request, comparisonId: member.id, sessionId, onClose: close, workspaces,
           putTask: task => putTask(sessionId, task),
+          onUse: (preview, save) => { setOpen(false); onUse(preview, save) },
           onVisit: (next, task) => {
             if (next === sessionId) {
               if (task) setDraftStatus(putTask(sessionId, task))
@@ -3830,7 +4024,7 @@ window.__ModuleLoader__.load({
       const [equipmentIds, setEquipmentIds] = useState(proven?.draft.equipmentIds ?? [])
       const [equipmentSources, setEquipmentSources] = useState(proven?.draft.equipmentSources ?? {})
       const [removedEquipmentIds, setRemovedEquipmentIds] = useState(proven?.draft.removedEquipmentIds ?? [])
-      const [draftLabels, setDraftLabels] = useState(() => Object.fromEntries(proven?.gear.map(item => [item.id, item.name]) ?? empty))
+      const [draftLabels, setDraftLabels] = useState(() => Object.fromEntries(proven?.gear?.map(item => [item.id, item.name]) ?? empty))
       const [savedId, setSavedId] = useState('')
       const [inspected, setInspected] = useState(proven?.draft.equipmentIds[0] ?? 'evidence')
       const [requestedGear, setRequestedGear] = useState(null)
@@ -3845,6 +4039,8 @@ window.__ModuleLoader__.load({
       const playbooksButton = useRef(null)
       const [workspaceCompareOpen, setWorkspaceCompareOpen] = useState(false)
       const workspaceCompareButton = useRef(null)
+      const [runHistory, setRunHistory] = useState('')
+      const runHistoryButton = useRef(null)
       const [notice, setNotice] = useState(proven ? t('已载入实战出装草稿。') : '')
       const [appearance, setAppearance] = useState(null)
       const [actionTarget, setActionTarget] = useState(null)
@@ -4136,6 +4332,28 @@ window.__ModuleLoader__.load({
         const labels = Object.fromEntries(draft.equipmentIds.map(id => [id, catalog.get(id)?.name ?? id]))
         applyHistoricalDraft(draft, labels, draft.equipmentIds[0] ?? 'evidence',
           t(adapted ? '已采用「%s」的换装草稿。' : '已采用「%s」的分享出装。').replace('%s', () => name), { preserveMatchMode: true })
+      }
+
+      function showRunHistory(kind = 'all') {
+        setLighthouseCompareOpen(false)
+        setWorkspaceCompareOpen(false)
+        setRunHistory(kind)
+      }
+
+      function closeRunHistory() {
+        setRunHistory('')
+        requestAnimationFrame(() => runHistoryButton.current?.focus())
+      }
+
+      function adoptComparisonLoadout({ draft, gear, workspaceId }, save) {
+        const labels = Object.fromEntries((gear ?? empty).map(item => [item.id, item.name]))
+        applyHistoricalDraft(draft, labels, draft.equipmentIds[0] ?? 'evidence', t('已载入实战出装草稿。'))
+        setMatchMode('fresh')
+        if (workspaceList.items.some(item => item.workspaceId === workspaceId)) setWorkspaceChoice(workspaceId)
+        setLighthouseCompareOpen(false)
+        setWorkspaceCompareOpen(false)
+        setRunHistory('')
+        if (save) setPlanMode('create')
       }
 
       function applyFlagLoadout(flag, { draft, slots, practice }, mode) {
@@ -4453,6 +4671,9 @@ window.__ModuleLoader__.load({
                 ref: workspaceCompareButton, 'aria-haspopup': 'dialog', onClick: () => setWorkspaceCompareOpen(true) },
               h(Glyph, { kind: 'swap', size: 15 }), t('实战同题对照')),
               data && h('button', { className: 'moba-roster-open', type: 'button', disabled: pending,
+                ref: runHistoryButton, 'aria-haspopup': 'dialog', onClick: () => showRunHistory() },
+              h(Glyph, { kind: 'report', size: 15 }), runHistoryLabel()),
+              data && h('button', { className: 'moba-roster-open', type: 'button', disabled: pending,
                 'aria-haspopup': 'dialog', onClick: () => {
                   setLoadAttempt(attempt => attempt + 1)
                   setPlanMode('library')
@@ -4488,7 +4709,8 @@ window.__ModuleLoader__.load({
             }, onEquip: () => cue('equip'),
             onCompare: () => { setStarterOpen(false); setLighthouseCompareOpen(true) },
             onOpen: sessionId => { cue('lock'); setStarterOpen(false); openSource(sessionId) } }),
-          lighthouseCompareOpen && h(RunComparison, { request, onClose: () => {
+          lighthouseCompareOpen && h(RunComparison, { request, onUse: adoptComparisonLoadout,
+            onHistory: () => showRunHistory('lighthouse'), onClose: () => {
             setLighthouseCompareOpen(false)
             requestAnimationFrame(() => lighthouseCompareButton.current?.focus())
           }, onVisit: (sessionId, task) => {
@@ -4499,11 +4721,20 @@ window.__ModuleLoader__.load({
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
             onClose: closePlaybooks, onAdopt: adoptPlaybook }),
           workspaceCompareOpen && h(RunComparison, { kind: 'workspace', request, workspaces: comparableWorkspaces,
-            initialWorkspaceId: workspace?.workspaceId, onClose: () => {
+            initialWorkspaceId: workspace?.workspaceId, onUse: adoptComparisonLoadout,
+            onHistory: () => showRunHistory('workspace'), onClose: () => {
               setWorkspaceCompareOpen(false)
               requestAnimationFrame(() => workspaceCompareButton.current?.focus())
             }, onVisit: (sessionId, task) => {
               setWorkspaceCompareOpen(false)
+              openComparisonSession(sessionId, task)
+            } }),
+          runHistory && h(ComparisonHistory, { request, workspaces: comparableWorkspaces, initialWorkspaceId: workspace?.workspaceId,
+            initialKind: runHistory, onClose: closeRunHistory, onUse: adoptComparisonLoadout, onSource: sessionId => {
+              setRunHistory('')
+              openSource(sessionId)
+            }, onVisit: (sessionId, task) => {
+              setRunHistory('')
               openComparisonSession(sessionId, task)
             } }),
           error && h('div', { className: 'moba-alert', role: 'alert' }, error,
@@ -6247,6 +6478,10 @@ window.__ModuleLoader__.load({
         openLobby(sessionId, snapshot, { proven: { ...preview, save } })
       }
 
+      function reuseComparisonLoadout(preview, save) {
+        openLobby(preview.sessionId, undefined, { proven: { ...preview, save } })
+      }
+
       function show(event, target) {
         const element = popover.current
         const panel = ['report', 'plan', 'growth', 'settlement', 'teammate'].includes(target?.kind)
@@ -6481,11 +6716,11 @@ window.__ModuleLoader__.load({
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
         snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
           kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openComparisonSession,
-          consumeDraft: consumeComparisonDraft, putTask: putComparisonTask, hasTurn: Boolean(snapshot.running || receipt),
+          consumeDraft: consumeComparisonDraft, putTask: putComparisonTask, hasTurn: Boolean(snapshot.running || receipt), onUse: reuseComparisonLoadout,
         }),
         snapshot?.workspaceComparison && h(WorkspaceComparisonAnchor, {
           member: snapshot.workspaceComparison, sessionId, request, onVisit: openComparisonSession,
-          consumeDraft: consumeComparisonDraft, putTask: putComparisonTask, hasTurn: Boolean(snapshot.running || receipt), workspaces,
+          consumeDraft: consumeComparisonDraft, putTask: putComparisonTask, hasTurn: Boolean(snapshot.running || receipt), workspaces, onUse: reuseComparisonLoadout,
         }),
         showReceipt && h(SettlementRibbon, { key: receipt.id, receipt, quest: questReady, snapshot, controls: id,
           onDetails: event => show(event, settlementAction), onQuest: event => show(event, growthAction),
@@ -7186,7 +7421,8 @@ window.__ModuleLoader__.load({
       .moba-header, .moba-heading { display: flex; align-items: center; gap: 13px; }
       .moba-header { justify-content: space-between; min-height: 53px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
       .moba-heading { color: var(--gold); }
-      .moba-heading h1 { font-family: "STIX Two Text", "Songti SC", serif; font-size: clamp(26px, 4cqi, 41px); margin: 0; letter-spacing: .035em; font-weight: 700; line-height: 1.16; }
+      .moba-heading h1 { font-family: "STIX Two Text", "Songti SC", serif; font-size: clamp(26px, 4cqi, 41px); margin: 0; letter-spacing: .035em;
+        font-weight: 700; line-height: 1.16; white-space: nowrap; }
       .moba-header-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; align-items: end; min-width: 0; }
       .moba-icon-action { width: 33px; height: 33px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); background: #151c28; color: var(--muted) !important; }
       .moba-icon-action:hover, .moba-icon-action[aria-pressed="true"] { color: var(--gold) !important; border-color: var(--gold); }
@@ -7658,6 +7894,34 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-artifacts li { font-size: 12px; }
       .moba-comparison-pending { padding: 6px; border: 1px solid #8c7053; background: #342821; color: #f6dcaf; font-size: 12px; }
       .moba-comparison-pending p { margin: 3px 0 0; }
+      .moba-history-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-block: 10px; }
+      .moba-history-filters label { min-width: 0; color: var(--muted); font-size: 12px; }
+      .moba-history-filters .moba-search { grid-column: 1 / -1; margin: 0; }
+      .moba-history-filters select { display: block; width: 100%; margin-top: 3px; padding: 6px; border: 1px solid #4b655f;
+        background: #111b24; color: var(--ink); font: inherit; }
+      .moba-history-list, .moba-history-arms, .moba-history-gear ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+      .moba-history-entry { display: grid; gap: 7px; min-width: 0; padding: 8px; border: 1px solid var(--line);
+        background: #141b27; overflow-wrap: anywhere; }
+      .moba-history-entry header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 10px; }
+      .moba-history-entry h3 { margin: 0; color: var(--ink); font-size: 15px; }
+      .moba-history-entry p, .moba-history-entry time { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
+      .moba-history-entry time { flex: none; }
+      .moba-history-entry > button { justify-self: end; }
+      .moba-history-arms { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); align-items: start; gap: 5px; }
+      .moba-history-arms > li { min-width: 0; padding: 5px; border: 1px solid #3d4051; font-size: 12px; }
+      .moba-history-state { margin-inline-start: 6px; color: var(--muted); }
+      .moba-history-state[data-state="complete"] { color: #afddc0; }
+      .moba-history-state[data-state="waiting-choice"] { color: #f6dcaf; }
+      .moba-history-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 7px; }
+      .moba-history-actions button { margin-top: 4px; }
+      .moba-history-gear h3 { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
+      .moba-history-gear ul { grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
+      .moba-history-gear li { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 5px; min-width: 0;
+        padding: 5px; border: 1px solid #3d4051; font-size: 12px; overflow-wrap: anywhere; }
+      .moba-history-gear .moba-item-art { width: 30px; }
+      .moba-history-gear small { display: block; color: var(--muted); }
+      .moba-history-reuse > .moba-proven-hero { margin-block: 8px; }
+      .moba-history-reuse > .moba-history-gear, .moba-history-reuse > .moba-lighthouse-results { margin-block-end: 8px; }
       .moba-lighthouse-arm footer { display: flex; flex-wrap: wrap; gap: 5px; justify-content: end; }
       .moba-lighthouse-comparison > .moba-market-actions { position: sticky; inset-block-end: 0; background: #171c27; padding-block: 4px; }
       .moba-lighthouse-anchor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
@@ -7888,7 +8152,7 @@ window.__ModuleLoader__.load({
         .moba-header { gap: 5px; }
         .moba-heading { gap: 5px; }
         .moba-heading svg { width: 23px; }
-        .moba-heading h1 { font-size: clamp(20px, 6cqi, 27px); white-space: nowrap; }
+        .moba-heading h1 { font-size: clamp(20px, 6cqi, 27px); }
         .moba-icon-action { width: 27px; height: 31px; }
         .moba-icon-action svg { width: 15px; }
         .moba-shop { padding: 8px; }
@@ -8020,7 +8284,8 @@ window.__ModuleLoader__.load({
           if (returnDraft === draft) returnDraft = undefined
         }
         function openLobby(sessionId, snapshot, { selectionPresetId, followUp, inspect, relaySetup, flagId, proven } = {}) {
-          const workspace = ctx.workspaces.list.getSnapshot().items.find(item => item.sessionIds.includes(sessionId))
+          const workspaces = ctx.workspaces.list.getSnapshot().items
+          const workspace = workspaces.find(item => item.workspaceId === proven?.workspaceId) ?? workspaces.find(item => item.sessionIds.includes(sessionId))
           const projection = ctx.sessions.list.getSnapshot().byId[sessionId]?.projectionValues?.agentPreset
           returnDraft = { sessionId, workspaceId: workspace?.workspaceId, presetId: snapshot?.presetId ?? projection, selectionPresetId,
             running: snapshot?.running, continuation: snapshot?.continuation, followUp, inspect, relaySetup, flagId, proven }
