@@ -1,10 +1,10 @@
 {
   "name": "dsh-agent-loadout",
-  "version": "0.142.0",
+  "version": "0.143.0",
   "description": "DSH-Heros · 深度荣耀 — a visual loadout for DeepSeek Harness Agent Presets, tools, and plugins",
   "type": "module",
   "engines": {
-    "dsh": "0.2.1-rc.1 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5"
+    "dsh": "0.2.1-rc.1 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5 || 0.2.3-alpha.2"
   },
   "exports": {
     ".": "./index.js",

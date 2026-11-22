@@ -32,7 +32,11 @@ export function runtimeModule(ctx, name, subpath = '') {
 export async function entryYaml(ctx) {
   const name = '@deepseek-ai/cordis-plugin-include'
   const require = requireFrom(ctx, name)
-  const { entryListSchema, applyEntryPatches } = await import(pathToFileURL(require.resolve(name)).href)
+  const { entryListSchema, applyEntryPatches, parseEntryYaml, stringifyEntryYaml } =
+    await import(pathToFileURL(require.resolve(name)).href)
+  if (typeof parseEntryYaml === 'function' && typeof stringifyEntryYaml === 'function') {
+    return { parse: parseEntryYaml, dump: stringifyEntryYaml, applyEntryPatches }
+  }
   const yaml = require('js-yaml')
   return { parse: text => yaml.load(text, { schema: entryListSchema }), dump: yaml.dump, applyEntryPatches }
 }
