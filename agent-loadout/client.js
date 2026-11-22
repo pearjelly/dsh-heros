@@ -9624,6 +9624,7 @@ window.__ModuleLoader__.load({
       const sourceLabel = source && [comparisonArmName(sourceArm, source), source.heroName].filter(Boolean).join(' · ')
       const alternateLabel = alternateTaskLabels[result?.alternateTask?.arm]
       const handoffAlternate = result?.handoffAlternate
+      const singleSave = result?.canReview && !result.heroPair && !result.handoffPair
       const sourceTrial = !alternateLabel && result?.sourceTrial?.arm === 'standard' ? result.sourceTrial : undefined
       const reviewedEvidence = pairSide && result?.draft && (result.handoffKeep || result.materialDelivered === true) && {
         side: pairSide, originalAttached: result.materialDelivered === true, draft: result.draft,
@@ -9703,12 +9704,15 @@ window.__ModuleLoader__.load({
                 t(result.status === 'unavailable' ? '暂不可核对' : comparisonArmStates[result.status] ?? result.status),
                 result.turn && t('第 ') + result.turn + t(' 回合'),
               ].filter(Boolean).join(' · ')),
-              alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
-                onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
-              handoffAlternate && h('button', { ref: handoffAlternateButton, type: 'button', className: 'moba-match-move',
-                'aria-haspopup': 'dialog', 'data-personal-handoff-alternate': handoffAlternate.style,
-                onClick: () => onPersonalFlow({ mode: 'handoff-alternate', ...handoffAlternate, handoffAlternateOf: sessionId }) },
-              t(handoffAlternate.style === 'review' ? '用复核后交付再试' : '用直接交付再试'), h(Glyph, { kind: 'arrow', size: 16 })),
+              (alternateLabel || handoffAlternate || singleSave) && h('div', { className: 'moba-lesson-result-options' },
+                alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
+                  onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
+                handoffAlternate && h('button', { ref: handoffAlternateButton, type: 'button', className: 'moba-match-move',
+                  'aria-haspopup': 'dialog', 'data-personal-handoff-alternate': handoffAlternate.style,
+                  onClick: () => onPersonalFlow({ mode: 'handoff-alternate', ...handoffAlternate, handoffAlternateOf: sessionId }) },
+                t(handoffAlternate.style === 'review' ? '用复核后交付再试' : '用直接交付再试'), h(Glyph, { kind: 'arrow', size: 16 })),
+                singleSave && h('button', { ref: reviewButton, type: 'button', className: 'moba-match-move',
+                  onClick: () => setReview('current') }, t('核对并保存出装'), h(Glyph, { kind: 'arrow', size: 16 }))),
               sourceTrial && h('button', { ref: sourceTrialButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'source-trial', source: sourceTrial }) },
                 t('在灯塔试玩标准模式'), h(Glyph, { kind: 'arrow', size: 16 })),
@@ -9728,7 +9732,7 @@ window.__ModuleLoader__.load({
                 className: result.rematchSource ? 'moba-text' : 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'rebaseline', source: result.source, armoryDraft: result.armoryDraft,
                   rebaseline: result.rebaseline }) }, t(rebaselineTaskLabel)),
-              result?.canReview && h('button', { ref: reviewButton, type: 'button', className: 'moba-match-move',
+              result?.canReview && !singleSave && h('button', { ref: reviewButton, type: 'button', className: 'moba-match-move',
                 onClick: () => setReview('current') }, t('核对本次出装'), h(Glyph, { kind: 'arrow', size: 16 })),
               result?.rematchSource && h('button', { ref: rematchButton, type: 'button', className: 'moba-match-move',
                 'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'rematch', source: result.rematchSource,
@@ -11443,6 +11447,8 @@ window.__ModuleLoader__.load({
       .moba-proven-files li small { color: var(--muted); }
       .moba-lesson-result { display: grid; gap: 8px; min-width: 0; padding: 8px; border: 1px solid #705a3c; background: #201d26; }
       .moba-lesson-result > h3 { margin: 0; color: var(--gold); font-size: 15px; overflow-wrap: anywhere; }
+      .moba-lesson-result-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: 6px; }
+      .moba-lesson-result-options button { min-width: 0; min-height: 44px; overflow-wrap: anywhere; white-space: normal; }
       .moba-lesson-result .moba-lighthouse-results { margin: 0; }
       .moba-lesson-result .moba-settlement-footer button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
       .moba-lesson-result [data-hero-personal-pair] { --ink: #f3e9d2; --muted: #cdc4b7; --line: #564532; margin: 0; }

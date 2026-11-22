@@ -2303,6 +2303,7 @@
   "本次任务经验": "Task XP",
   "会话结算记录": "Session settlement log",
   "核对本次出装": "Review this loadout",
+  "核对并保存出装": "Review and save loadout",
   "返回任务结果": "Back to task result",
   "以当前材料重跑原局": "Rerun baseline with current material",
   "用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。": "Review the current material with the original loadout. Open a fresh session and send the task yourself. Compare gear after the run finishes.",

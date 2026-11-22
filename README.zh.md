@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.185.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.186.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -155,6 +155,8 @@ dsh web
 两张卡都可点 **用这套出装**。选自己的文件，写一段新任务，在核对材料和出装后再开草稿。若复核局实际选择了退回修改，即使没有附件，也可以带走这套出装。
 
 在 **浏览文件** 里，可以切换自己的工作区，或在宿主支持时直接点 **添加材料文件夹**。新文件夹通过核对后，会接着打开它的文件列表，表单保留你写好的任务说明。
+
+首次个人任务通过核验后，打开 **查看任务结果**，首屏可点 **核对并保存出装**。有另一套打法时，两条入口也一起显示。核对配置后，再决定是否命名并保存方案。
 
 在 v0.171.0 从结果卡开的个人任务通过核验后，可以用另一套打法再试一次。表单会带入刚才的文件和任务说明，核对另一套实测出装后再打开草稿并手动发送。
 
