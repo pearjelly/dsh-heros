@@ -1277,7 +1277,7 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }
-      return h(InstallDialog, { title: t(evidence ? '灯塔证据取舍' : '灯塔换装练习'), className: 'moba-starter-dialog', busy, onCancel,
+      return h(InstallDialog, { title: t(evidence ? '灯塔证据取舍' : '灯塔换装练习'), className: 'moba-starter-dialog moba-lighthouse-lesson', busy, onCancel,
         initialFocus: evidence ? 'input:checked' : '.moba-start',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!starting.current) onCancel() }) },
         h('form', { onSubmit: start },
@@ -3244,7 +3244,7 @@ window.__ModuleLoader__.load({
       const [noteTarget, setNoteTarget] = useState(null)
       const [savedNoteArm, setSavedNoteArm] = useState('')
       const [lessonTask, setLessonTask] = useState(null)
-      const [lessonLaunchOpen, setLessonLaunchOpen] = useState(false)
+      const [lessonLaunch, setLessonLaunch] = useState(null)
       const [challengeShareId, setChallengeShareId] = useState('')
       const [evidenceReport, setEvidenceReport] = useState('')
       const starting = useRef(false)
@@ -3431,9 +3431,9 @@ window.__ModuleLoader__.load({
       if (lessonTask) return h(PersonalLoadoutTask, { source: lessonTask.lessonTaskSource, workspaces, initialWorkspaceId, request, onVisit,
         handoffStyle: lessonTask.handoffStyle, backLabel: lessonTask.fromSummary ? '返回两局实测结果' : undefined,
         onBack: () => { returnFocus.current = `[data-lesson-task-arm="${lessonTask.id}"], .moba-lighthouse-close`; setLessonTask(null) } })
-      if (lessonLaunchOpen) return h(LighthouseLessonLaunch, { request, lesson: lessonMarker, onOpen: onVisit, onCancel: () => {
-        returnFocus.current = '.moba-new-lesson'
-        setLessonLaunchOpen(false)
+      if (lessonLaunch) return h(LighthouseLessonLaunch, { request, lesson: lessonLaunch.lesson, onOpen: onVisit, onCancel: () => {
+        returnFocus.current = lessonLaunch.returnSelector
+        setLessonLaunch(null)
       } })
       if (challengeShareId) return h(LighthouseChallengeShare, { comparisonId: challengeShareId, request, onBack: () => {
         returnFocus.current = '.moba-lighthouse-challenge-share'
@@ -3446,7 +3446,8 @@ window.__ModuleLoader__.load({
         } })
 
       const freshLesson = practice && value?.id && h('button', { type: 'button', className: 'moba-roster-open moba-new-lesson',
-        disabled: canRepeatLighthouseReview && Boolean(launch), onClick: () => setLessonLaunchOpen(true) },
+        disabled: canRepeatLighthouseReview && Boolean(launch),
+        onClick: () => setLessonLaunch({ lesson: lessonMarker, returnSelector: '.moba-new-lesson' }) },
         t(evidence ? '开始新的证据取舍' : '开始新的换装练习'))
       const workspaceFacts = personal && value?.id && h(InstallFacts, { facts: [
         ['工作区', linkedWorkspace ? workspaceTitle(linkedWorkspace) : value.workspaceTitle], ['材料文件相对路径', value.material],
@@ -3482,8 +3483,16 @@ window.__ModuleLoader__.load({
         value && h(Fragment, null,
           setup && h(WorkspaceComparisonForm, { form: workspaceForm, workspaces, workspaceId, setWorkspaceId, request,
             material, setMaterial, brief, defaultBrief, setBrief, busy: Boolean(launch) }),
-          ownReviewPair && h(HandoffOutcomeSummary, { outcome: ownReviewPair, ownReview: true, onVisit, busy: Boolean(launch),
-            onLessonTask: arm => setLessonTask({ id: arm.id, lessonTaskSource: arm.lessonTaskSource, fromSummary: true, handoffStyle: arm.style }) }),
+          ownReviewPair && h(Fragment, null,
+            h(HandoffOutcomeSummary, { outcome: ownReviewPair, ownReview: true, onVisit, busy: Boolean(launch),
+              onLessonTask: arm => setLessonTask({ id: arm.id, lessonTaskSource: arm.lessonTaskSource, fromSummary: true, handoffStyle: arm.style }) }),
+            h('button', { type: 'button', className: 'moba-roster-open moba-handoff-gear-change moba-next-evidence',
+              disabled: Boolean(launch), 'aria-haspopup': 'dialog',
+              onClick: () => setLessonLaunch({ lesson: lighthouseEvidenceLesson, returnSelector: '.moba-next-evidence' }) },
+              h(ItemArt, { item: evidenceArm }),
+              h('span', null, h('strong', null, t('新挑战 · 证据核验')),
+                h('small', null, t('缺证时可以补证、降级推荐或暂缓提交。'))),
+              h(Glyph, { kind: 'arrow', size: 14 }))),
           armoryHandoffOutcome ? h(Fragment, null,
             h(HandoffOutcomeSummary, { outcome: armoryHandoffOutcome, armory: true, onVisit, onPreserve: preserveHandoff, busy: Boolean(launch) }),
             h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看任务和出装')), workspaceFacts, gearChange, sharedTask))
@@ -12056,7 +12065,7 @@ window.__ModuleLoader__.load({
       .moba-direct-form input[type="file"]::file-selector-button { margin-right: 8px; padding: 6px 9px; border: 1px solid #745f40; background: #1b2331; color: var(--ink); cursor: pointer; }
       .moba-market-dialog .moba-market-actions { margin-top: 12px; }
       .moba-starter-dialog { width: min(535px, calc(100vw - 28px)); }
-      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation) {
+      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation, .moba-lighthouse-lesson) {
         --ink: #f3e9d2; --muted: #b6b4bc; --gold: #e6bc70; --line: #564532; --blue: #9ed4ec; --deep: #0a0e17;
       }
       .moba-lighthouse-comparison { width: min(700px, calc(100vw - 28px)); }
@@ -12070,7 +12079,7 @@ window.__ModuleLoader__.load({
         border: 1px solid #4b655f; background: #111b24; color: var(--ink); font: inherit; }
       .moba-rematch-fields p { margin: 0; }
       .moba-lighthouse-comparison button { font: inherit; }
-      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation) :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation, .moba-lighthouse-lesson) :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
       .moba-lighthouse-note { margin: 6px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
       .moba-comparison-previous { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; margin-block: 7px; }
       .moba-comparison-previous p { margin: 0; }
@@ -12189,6 +12198,8 @@ window.__ModuleLoader__.load({
       .moba-handoff-gear-change svg { flex: none; color: var(--gold); }
       .moba-handoff-gear-change strong, .moba-handoff-gear-change small { display: block; line-height: 1.25; }
       .moba-handoff-gear-change small { margin-top: 2px; color: #e5d1a6; white-space: normal; }
+      .moba-handoff-outcome:has(+ .moba-next-evidence) { margin-block-end: 6px; }
+      .moba-next-evidence { margin-block-end: 10px; }
       .moba-handoff-report-side[data-met="true"] dd:last-child { color: #afddc0; }
       .moba-handoff-report-side[data-met="false"] dd:last-child { color: #efc3a4; }
       .moba-lighthouse-comparison > .moba-market-actions { position: sticky; inset-block-end: 0; background: #171c27; padding-block: 4px; }
