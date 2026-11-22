@@ -6414,11 +6414,12 @@ export async function apply(ctx) {
         value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }),
           ...evidenceReplayView(baseline) }
       }
-      const heroTrial = heroTrials.member(sessionId)
-      if (heroTrial && (await heroTrials.readArm(heroTrial.id, heroTrial.arm))?.opened) {
+      const heroMember = heroTrials.member(sessionId)
+      if (heroMember && (await heroTrials.readArm(heroMember.id, heroMember.arm))?.opened) {
+        const record = heroTrials.read(heroMember.id)
+        const heroTrial = { ...heroMember, need: record.need }
         value.heroTrial = heroTrial
         if (!value.running) {
-          const record = heroTrials.read(heroTrial.id)
           if (heroTrial.arm === lighthouseHeroDelivery) {
             const [original, replay] = await Promise.all([
               readHeroTrialArm(record, 'minimal', request.signal), readHeroTrialArm(record, lighthouseHeroDelivery, request.signal),

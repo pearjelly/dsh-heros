@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.147.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.148.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -30,7 +30,7 @@ In the Armory, use **Choose a loadout** to jump to **Hero roster**. Select a her
 ## Try two heroes on the same task
 
 1. Choose **Lighthouse hero trial** from the lobby's **Armory** or from **Standard** or **Minimal** in **Hero gallery**. Both supported stock presets need to be active in your profile.
-2. Choose **Openable original** or **Verifiable text summary**. For an original, Standard can attach the file and Minimal can hand off text, with Deliverable Preview available for a replay. For a summary, both can write one, and Minimal reads the card in the terminal. Choose **Open Standard session** or **Open Minimal session** to open that hero’s DSH draft. Review and manually send the prepared task.
+2. Choose **Openable original** or **Verifiable text summary**. For an original, Standard can attach the file and Minimal can hand off text, with Deliverable Preview available for a replay. For a summary, the key facts are enough. Minimal reads the card in the terminal, and Standard can also attach the original. Choose **Open Standard session** or **Open Minimal session**. The DSH draft shows what the next shift needs. Review and manually send the prepared task.
 3. Choose **View the hero trial** from the session, or **Continue the last trial** in the Armory’s Lighthouse section to open your latest comparison directly. You can view it even if a stock preset is disabled. To play the other hero, open that session when ready. The two sessions use the same task and separate copies of the same bundled card. Compare actual replies and attachments, and open either source session to see the full result.
 
 [Hero selection](docs/media/lighthouse-choose-en.webp) · [Recorded handoff comparison](docs/media/lighthouse-results-en.webp)

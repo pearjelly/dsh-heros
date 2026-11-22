@@ -1551,7 +1551,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       assert.equal(byHero(waiting, hero).status, 'waiting')
       assert.equal(byHero(waiting, hero).summary, undefined)
       assert.deepEqual((await equipmentIn(host, opened.sessionId)).heroTrial,
-        { id: trial.id, arm: hero, task: trial.task, firstTaskPending: true })
+        { id: trial.id, arm: hero, task: trial.task, need: 'original', firstTaskPending: true })
       drafts.set(hero, native)
     }
     const materialBytes = await readFile(join(drafts.get('standard').workspacePath, material))
@@ -1670,6 +1670,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.ok(!recipientDraft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
     assert.deepEqual(await readFile(join(recipientDraft.workspacePath, material)), materialBytes)
     const recipientTrial = () => receive('hero-trial', { comparisonId: joined.id })
+    assert.deepEqual((await equipmentIn(recipient, joined.sessionId)).heroTrial,
+      { id: joined.id, arm: 'minimal', task: trial.task, need: 'original', firstTaskPending: true })
     assert.deepEqual((await recipient.request(endpoint)).value.lastHeroTrial, { id: joined.id, need: 'original' })
     assert.deepEqual((await recipientTrial()).arms.map(({ id, status }) => [id, status]), [['standard', 'unopened'], ['minimal', 'waiting']])
     assert.deepEqual((await receive('lighthouse-pending-runs')).items.map(item => [item.sessionId, item.arm]), [[joined.sessionId, 'minimal']])
@@ -1765,7 +1767,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual((await readdir(nativeDraft.workspacePath)).sort(), (await readdir(original.workspacePath)).sort())
     assert.deepEqual(await readFile(join(nativeDraft.workspacePath, material)), materialBytes)
     assert.deepEqual((await equipmentIn(host, replay.sessionId)).heroTrial,
-      { id: trial.id, arm: 'minimal-present', task: trial.task, firstTaskPending: true })
+      { id: trial.id, arm: 'minimal-present', task: trial.task, need: 'original', firstTaskPending: true })
     const replayWaiting = await read(trial.id)
     assert.deepEqual(replayWaiting.arms, result.arms)
     assert.equal(replayWaiting.minimalReplay.id, 'minimal-present')
@@ -2019,6 +2021,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(summary.need, 'summary')
     assert.deepEqual((await host.request(endpoint)).value.lastHeroTrial, { id: summary.id, need: 'summary' })
     const minimalSummary = await open(summary.id, 'minimal')
+    assert.deepEqual((await equipmentIn(host, minimalSummary.sessionId)).heroTrial,
+      { id: summary.id, arm: 'minimal', task: summary.task, need: 'summary', firstTaskPending: true })
     const summaryTransfer = { kind: 'hero-trial', comparisonId: summary.id, arm: 'minimal' }
     await invoke('lesson-task-options', summaryTransfer, 422)
     await send(minimalSummary)

@@ -2258,6 +2258,7 @@ window.__ModuleLoader__.load({
       const availableReplay = member.arm === 'minimal' && member.canReplayMinimalDelivery === true
       const verifiedDeliveryReplay = member.verifiedDeliveryReplay === true
       const taskPending = member.firstTaskPending && !hasTurn
+      const need = taskPending ? heroTrialNeeds.find(item => item.id === member.need) : undefined
       const hero = member.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === member.arm)
       useEffect(() => {
         const status = consumeDraft(sessionId)
@@ -2291,8 +2292,10 @@ window.__ModuleLoader__.load({
               t(stockTrialTaskLabels[member.arm] ?? lessonTaskLabel)),
             availableReplay && h('button', { ref: replayTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setReplayOpen(true) }, t(minimalDeliveryReplayLabel))),
+          need && h('p', null, h('strong', null, t('接班需求')), ' · ', t(need.name),
+            need.id === 'summary' && member.arm === 'standard' && ' ' + t('要点已足够，标准模式也可能附上原件。')),
           taskPending ? h(ChallengeTaskDraft, { task: member.task, presetChanged: member.presetChanged,
-            sessionId, draftStore, putTask, backLabel: '返回试玩会话' })
+            sessionId, draftStore, putTask, backLabel: '返回试玩会话', readyNotice: '试玩任务已就绪。请手动发送以记录本局。' })
             : verifiedDeliveryReplay ? h('p', { role: 'status' }, t('加装后已附上补给卡原件，符合接班需求。'))
             : availableReplay ? h('p', { role: 'status' }, t('这局交接了文字，接班人还需要可打开的原件。'))
             : !hasTurn && !availablePersonalTask && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
@@ -3779,7 +3782,8 @@ window.__ModuleLoader__.load({
 
     const unavailableDraftStore = { subscribe: () => () => {}, getSnapshot: () => null }
 
-    function ChallengeTaskDraft({ task, sessionId, draftStore, putTask, backLabel, presetChanged }) {
+    function ChallengeTaskDraft({ task, sessionId, draftStore, putTask, backLabel, presetChanged,
+      readyNotice = '原任务已就绪。请手动发送以记录本局。' }) {
       const store = useMemo(() => {
         const state = draftStore(sessionId)
         return state ? { subscribe: state.subscribe.bind(state), getSnapshot: state.getSnapshot.bind(state) } : unavailableDraftStore
@@ -3789,7 +3793,7 @@ window.__ModuleLoader__.load({
       if (draft && ['adjudicating', 'submitting', 'sending'].includes(draft.phase)) return null
       const changed = draft && (draft.attachmentIds?.length || draft.occurrences?.length || draft.phase === 'claimed')
       const presetNotice = presetChanged && t('原出装已变化。这局无法按原挑战核验。')
-      if (!changed && draft?.draft === task) return h('p', { role: 'status' }, presetNotice || t('原任务已就绪。请手动发送以记录本局。'))
+      if (!changed && draft?.draft === task) return h('p', { role: 'status' }, presetNotice || t(readyNotice))
       if (!changed && draft?.draft === '' && !fillBlocked) return h('div', { className: 'moba-task-pending' },
         h('p', { role: 'status' }, t('填入原任务后，再手动发送。'), presetNotice && ' ' + presetNotice),
         h('button', { type: 'button', className: 'moba-settlement-button',
