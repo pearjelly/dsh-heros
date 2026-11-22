@@ -9063,7 +9063,28 @@ window.__ModuleLoader__.load({
           h('span', null, '+' + award.xp + ' XP')))))
     }
 
-    function LessonTaskResult({ sessionId, version, request, onSource, onUse, onPersonalFlow, initialPersonalFocus }) {
+    function HeroPersonalPairResult({ pair, onOpenMatch }) {
+      const heading = useId()
+      const runs = [
+        { label: '原局', action: '查看原局会话', run: pair.original },
+        { label: '换装局', action: '查看换装局会话', run: pair.alternate },
+      ]
+      return h('section', { className: 'moba-handoff-outcome', 'data-hero-personal-pair': true, 'aria-labelledby': heading },
+        h('h4', { id: heading }, t('同一任务的两次实测')),
+        h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t('材料文件')), ' · ', h('code', null, pair.material)),
+        h('div', { className: 'moba-lighthouse-arms moba-handoff-report-grid' }, runs.map(({ label, action, run }) => {
+          const equipped = run.arm === minimalDeliveryReplayArm.id
+          const hero = equipped ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === run.arm)
+          return h('article', { key: run.sessionId, className: 'moba-lighthouse-arm moba-handoff-report-side' },
+            h('header', null, h(HeroArt, { id: equipped ? 'minimal' : run.arm, art: hero?.art, className: 'moba-starter-hero' }),
+              h('h4', null, t(label), h('span', null, t(hero?.name ?? run.arm)))),
+            h('p', { className: 'moba-lighthouse-note' }, t(run.originalAttached ? '已交付所选材料。' : '未核验所选材料的附件。')),
+            run.tools?.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('实测工具调用'), ' · ', h('code', null, run.tools.join(' · '))),
+            h('footer', null, h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(run.sessionId) }, t(action))))
+        })))
+    }
+
+    function LessonTaskResult({ sessionId, version, request, onOpenMatch, onUse, onPersonalFlow, initialPersonalFocus }) {
       const language = useLanguage()
       const headingId = useId()
       const [review, setReview] = useState(false)
@@ -9135,6 +9156,7 @@ window.__ModuleLoader__.load({
           current?.error && h('button', { type: 'button', className: 'moba-text', onClick: () => setRetry(value => value + 1) }, t('重试'))),
         !current && h('p', { className: 'moba-match-action-note', role: 'status' }, t(review ? '正在核对本回合出装…' : '正在读取任务结果…')),
         result && h(Fragment, null,
+          !review && result.heroPair && h(HeroPersonalPairResult, { pair: result.heroPair, onOpenMatch }),
           sourceLabel && h('p', { className: 'moba-match-action-note' }, t('练习出装') + ' · ' + sourceLabel),
           review ? result.draft && h(Fragment, null,
             h(PlanEquipment, { items: result.gear ?? empty, removed: result.removed ?? empty }),
@@ -9155,7 +9177,7 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'moba-match-move', disabled: !result?.draft,
               onClick: () => onUse(result, true) }, t('保存为方案')))
             : h(Fragment, null,
-              h('button', { type: 'button', className: 'moba-text', onClick: onSource }, t('查看原会话')),
+              h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(sessionId) }, t('查看原会话')),
               alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
               result?.rebaseline && h('button', { ref: rebaselineButton, type: 'button',
@@ -9264,7 +9286,7 @@ window.__ModuleLoader__.load({
       const totalXp = receipt?.awards.reduce((sum, item) => sum + item.xp, 0)
       const review = quest && !receipts?.some(item => item.id === quest.id) ? quest : undefined
       return h('div', { className: 'moba-match-body moba-match-plan moba-settlement' },
-        lessonTaskResult && h(LessonTaskResult, { key: sessionId, sessionId, version, request, onSource: () => onOpenMatch(sessionId), onUse,
+        lessonTaskResult && h(LessonTaskResult, { key: sessionId, sessionId, version, request, onOpenMatch, onUse,
           initialPersonalFocus, onPersonalFlow: flow => onPersonalFlow(flow, receipt?.id, cursors) }),
         lessonTaskResult && h('h3', { className: 'moba-session-settlement-title' }, t('会话结算记录')),
         collectionError && h('p', { className: 'moba-match-action-error', role: 'alert' }, collectionError),
@@ -10863,6 +10885,8 @@ window.__ModuleLoader__.load({
       .moba-lesson-result > h3 { margin: 0; color: var(--gold); font-size: 15px; overflow-wrap: anywhere; }
       .moba-lesson-result .moba-lighthouse-results { margin: 0; }
       .moba-lesson-result .moba-settlement-footer button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
+      .moba-lesson-result [data-hero-personal-pair] { --ink: #f3e9d2; --muted: #cdc4b7; --line: #564532; margin: 0; }
+      .moba-lesson-result [data-hero-personal-pair] .moba-lighthouse-arm { gap: 5px; }
       .moba-lesson-result-files li > div { display: flex; flex-wrap: wrap; align-items: baseline; min-width: 0; gap: 3px 8px; }
       .moba-lesson-result-awards h4, .moba-session-settlement-title { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
       .moba-lesson-result-awards ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }

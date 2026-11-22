@@ -2004,16 +2004,29 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       assert.equal(draft.presetId, targetTrace.presetId)
       assert.equal(draft.inherited, 0)
       assert.ok(!draft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+      assert.equal((await invoke('lesson-task-result', { sessionId: opened.sessionId })).heroPair, undefined)
       await send(opened)
       const completed = await history(opened.sessionId)
       assert.deepEqual(traceTools(completed).map(event => event.data.name), [readTool, 'present'])
       assert.deepEqual(traceFiles(completed).map(file => file.path), [await realpath(ownPath)])
       for (const name of [readTool, 'present']) assert.deepEqual(toolSource(completed, name), toolSource(targetTrace, name))
       assert.deepEqual(await alternateOpen(started.sessionId, preview.token), { sessionId: opened.sessionId, workspaceId })
-      assert.equal((await invoke('lesson-task-result', { sessionId: opened.sessionId })).alternateTask, undefined)
+      const afterAlternate = await invoke('lesson-task-result', { sessionId: opened.sessionId })
+      assert.equal(afterAlternate.alternateTask, undefined)
+      assert.deepEqual(afterAlternate.heroPair, { material: ownMaterial,
+        original: { sessionId: started.sessionId, arm: arm === 'standard' ? 'minimal-present' : 'standard',
+          tools: traceTools(priorTrace).map(event => event.data.name), originalAttached: true },
+        alternate: { sessionId: opened.sessionId, arm, tools: [readTool, 'present'], originalAttached: true } })
       assert.deepEqual(await history(started.sessionId), priorTrace)
     }
     assert.deepEqual(await nativeSessions(), [...beforeAlternates, ...alternateSessions].sort())
+    await appendFile(ownPath, '\nEdited after both personal handoffs.\n')
+    for (const sessionId of alternateSessions) {
+      const pair = (await invoke('lesson-task-result', { sessionId })).heroPair
+      assert.equal(pair?.material, ownMaterial)
+      assert.equal(pair?.alternate.originalAttached, true)
+    }
+    await writeFile(ownPath, ownContent)
 
     const personalSource = stockResult.rematchSource
     assert.deepEqual(personalSource, { kind: 'personal', comparisonId: standardOwn.sessionId.slice('session-'.length), arm: 'task' })

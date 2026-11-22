@@ -4136,10 +4136,16 @@ export async function apply(ctx) {
   const heroAlternateChanged = '材料、任务或出装已变化，请重新核对。'
   const heroAlternateSessionId = /^session-a076[a-f0-9]{28}$/u
 
+  function oppositePersonalHeroArm(source) {
+    if (!source) return
+    if (isStandardTrialSource(source)) return lighthouseHeroDelivery
+    if (isHeroDeliveryTrialSource(source)) return 'standard'
+  }
+
   function alternateHeroSource(launch) {
     const source = launch?.source
-    if (launch?.alternateOf || !source || heroTrials.read(source.comparisonId)?.need !== 'original') return
-    const arm = isStandardTrialSource(source) ? lighthouseHeroDelivery : isHeroDeliveryTrialSource(source) ? 'standard' : undefined
+    const arm = !launch?.alternateOf && oppositePersonalHeroArm(source)
+    if (arm && heroTrials.read(source.comparisonId)?.need !== 'original') return
     if (arm) return { kind: 'hero-trial', comparisonId: source.comparisonId, arm }
   }
 
@@ -4192,6 +4198,25 @@ export async function apply(ctx) {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error(heroAlternateUnavailable)
     const launchId = createHash('sha256').update(JSON.stringify([planTaskOwner, 'hero-alternate', sessionId])).digest('hex').slice(0, 32)
     return openReviewedTask({ sessionId, token, launchId }, english, signal, 'alternate')
+  }
+
+  async function personalHeroPair(sessionId, current, signal) {
+    const { alternateOf, source } = current.launch
+    if (typeof alternateOf !== 'string' || !heroAlternateSessionId.test(alternateOf) ||
+      !oppositePersonalHeroArm(source) || !current.target || current.evidence.status !== 'complete' ||
+      current.evidence.materialState !== 'verified' || current.evidence.continuationReason) return
+    const original = await observeLessonTask(alternateOf, signal, true)
+    if (!original?.target || !original.presentBinding || !verifiedPresentHandoff(original.evidence) ||
+      original.evidence.status !== 'complete' || original.launch.alternateOf ||
+      source.comparisonId !== original.launch.source?.comparisonId ||
+      source.arm !== oppositePersonalHeroArm(original.launch.source)) return
+    const sameInput = ['workspaceId', 'cwd', 'digest', 'material', 'task'].every(key => original.target[key] === current.target[key])
+    if (!sameInput) return
+    function side(id, result) {
+      const tools = [...new Set(result.evidence.entries.filter(entry => entry.state === 'completed').map(entry => entry.name))]
+      return { sessionId: id, arm: result.launch.source.arm, tools, originalAttached: Boolean(result.presentBinding) }
+    }
+    return { material: current.target.material, original: side(alternateOf, original), alternate: side(sessionId, current) }
   }
 
   async function checkedPersonalRematchBaseline(selection, signal, original) {
@@ -4941,10 +4966,11 @@ export async function apply(ctx) {
     const canContinue = canReview && (!publicReplay || evidence.materialDelivered)
     const reference = canContinue && target && !minimalText && (!evidenceSource || choices.length > 0) &&
       { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }
-    const [settled, original, alternateTask] = await Promise.all([
+    const [settled, original, alternateTask, heroPair] = await Promise.all([
       growth.settlementAwards(sessionId, receiptIds),
       reference && personalRematchEvidence(reference, signal),
       canReview && review !== true && heroAlternateTaskOption(sessionId, resultView, signal),
+      review !== true && personalHeroPair(sessionId, resultView, signal),
     ])
     const awards = settled.filter(item => item.kind)
       .map(({ id, name, kind, xp, sourceName }) => ({ id, name, kind, xp, ...(sourceName && { sourceName }) }))
@@ -4980,6 +5006,7 @@ export async function apply(ctx) {
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
+      ...(heroPair && { heroPair }),
       ...(armoryDraft && { armoryDraft }), ...(armoryReason && { reason: armoryReason }) }
     if (review !== true || !canReview) return result
     try {
