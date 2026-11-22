@@ -2973,6 +2973,20 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal((await first.inspect()).handoffPair, undefined)
     const reviewSide = (sessionId, pairSide, status) => invoke('lesson-task-result', { sessionId, review: true, pairSide }, status)
     const saveSide = (handoffKeep, name, status) => invoke('handoff-pair-plan-save', { ...handoffKeep, name }, status)
+    const soloSessionIds = carriedResults.map(({ opened }) => opened.sessionId)
+    const reviewCurrent = sessionId => invoke('lesson-task-result', { sessionId, review: true })
+    const [firstReviewProof, firstDirectProof] = await Promise.all(soloSessionIds.map(reviewCurrent))
+    assert.equal(firstReviewProof.handoffStyle, 'review')
+    assert.equal(firstDirectProof.handoffStyle, 'direct')
+    for (const [index, proof] of [firstReviewProof, firstDirectProof].entries()) {
+      assert.equal(proof.sessionId, soloSessionIds[index])
+      assert.equal(proof.handoffKeep.sessionId, proof.sessionId)
+      assert.equal(proof.handoffKeep.pairSide, 'current')
+    }
+    assert.deepEqual(firstReviewProof.deliverables, [])
+    assert.deepEqual(firstReviewProof.entries.map(item => item.choices), [['Revise draft']])
+    assert.equal(firstDirectProof.deliverables[0].name, basename(carryMaterial))
+    await saveSide({ ...firstReviewProof.handoffKeep, sessionId: firstDirectProof.sessionId }, 'Wrong current result', 422)
     await invoke('lesson-task-result', { sessionId: next.sessionId, pairSide: 'direct' }, 422)
     await reviewSide(first.opened.sessionId, 'review', 422)
     const [directSide, reviewSideResult] = await Promise.all([
@@ -2987,28 +3001,36 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.deepEqual(reviewSideResult.deliverables, [])
     assert.equal(reviewSideResult.handoffKeep.sessionId, next.sessionId)
     await saveSide({ ...directSide.handoffKeep, pairSide: 'review' }, 'Wrong route proof', 422)
+    await saveSide({ ...directSide.handoffKeep, pairSide: 'current' }, 'Wrong proof scope', 422)
     assert.deepEqual((await catalog()).plans, before.plans)
     await appendFile(carryFile, '\nChanged after the replay.\n')
     assert.equal((await inspectNext()).handoffPair, undefined)
     await saveSide(reviewSideResult.handoffKeep, 'Stale private review', 422)
+    await saveSide(firstReviewProof.handoffKeep, 'Stale initial review', 422)
+    assert.equal((await reviewCurrent(firstReviewProof.sessionId)).handoffKeep, undefined)
     assert.deepEqual((await catalog()).plans, before.plans)
     await writeFile(carryFile, carryText)
     assert.deepEqual((await inspectNext()).handoffPair, nextProof.handoffPair)
     const keptDirect = await saveSide(directSide.handoffKeep, 'Private direct result')
     const originalReview = await saveSide(reviewSideResult.handoffKeep, 'Private review result')
+    const keptSoloReview = await saveSide(firstReviewProof.handoffKeep, 'First private review')
+    const keptSoloDirect = await saveSide(firstDirectProof.handoffKeep, 'First private direct')
     const origin = ({ id, revision }, status) => invoke('plan-handoff-origin', { id, revision }, status)
     const keptReview = await invoke('plan-save', { id: originalReview.id, revision: originalReview.revision,
       name: 'Private review for the next shift', note: 'Check delivery first' })
     const storedPlan = async id => JSON.parse(await readFile(join(env.DSH_HOME, 'profiles/web/agent-loadouts/plans', id + '.json'), 'utf8'))
     assert.equal(keptDirect.presetId, (await history(next.sessionId)).presetId)
     assert.equal(keptReview.presetId, (await history(first.opened.sessionId)).presetId)
-    const keptIds = [keptDirect.id, keptReview.id].sort()
-    const sources = [[keptDirect, next.sessionId, 'direct'], [keptReview, first.opened.sessionId, 'review']]
+    const keptIds = [keptDirect, keptReview, keptSoloReview, keptSoloDirect].map(plan => plan.id).sort()
+    const sources = [[keptDirect, next.sessionId, 'direct'], [keptReview, first.opened.sessionId, 'review'],
+      [keptSoloReview, firstReviewProof.sessionId, 'review'], [keptSoloDirect, firstDirectProof.sessionId, 'direct']]
     const expectedOrigins = new Map([
       [next.sessionId, { sessionId: next.sessionId, style: 'direct', materialDelivered: true,
         choices: [], tools: ['present'], fileNames: [basename(carryMaterial)] }],
       [first.opened.sessionId, { sessionId: first.opened.sessionId, style: 'review', materialDelivered: false,
         choices: ['Revise draft'], tools: ['ask_user_question'], fileNames: [] }],
+      [firstDirectProof.sessionId, { sessionId: firstDirectProof.sessionId, style: 'direct', materialDelivered: true,
+        choices: [], tools: ['present'], fileNames: [basename(carryMaterial)] }],
     ])
     await origin(originalReview, 422)
     for (const [saved, sessionId, style] of sources) {
@@ -3021,7 +3043,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
       assert.ok(exported.code?.startsWith('DSHH1.'), JSON.stringify(exported))
       const portable = Buffer.from(exported.code.slice('DSHH1.'.length), 'base64url').toString('utf8')
       assert.doesNotMatch(portable, /"(?:handoffOrigin|hasHandoffOrigin|sessionId|material|choices)"\s*:/u)
-      for (const localDetail of [carryMaterial, carryBrief, first.opened.sessionId, next.sessionId, 'Revise draft']) {
+      for (const localDetail of [carryMaterial, carryBrief, sessionId, 'Revise draft']) {
         assert.ok(!JSON.stringify(saved).includes(localDetail))
         assert.ok(!portable.includes(localDetail), localDetail)
       }
@@ -3057,13 +3079,13 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     const newMaterial = '会签 文件.md'
     const newFile = join(carryPath, newMaterial)
     await writeFile(newFile, '# Next personal handoff')
-    const nextPlanFields = { id: keptReview.id, revision: keptReview.revision, workspaceId: carryWorkspace.workspaceId,
+    const nextPlanFields = { id: keptSoloReview.id, revision: keptSoloReview.revision, workspaceId: carryWorkspace.workspaceId,
       material: newMaterial, task: 'Deliver the next handoff note.' }
     const nextPlanPreview = await invoke('plan-task-preview', nextPlanFields)
     assert.ok(nextPlanPreview.comparison.gained.some(item => item.id === 'review'))
     const reused = await invoke('plan-task-open', { ...nextPlanFields, token: nextPlanPreview.token, launchId: '7'.repeat(32) })
     assert.ok(noMessages(await history(reused.sessionId)))
-    assert.equal((await history(reused.sessionId)).presetId, keptReview.presetId)
+    assert.equal((await history(reused.sessionId)).presetId, keptSoloReview.presetId)
     assert.ok(!reused.task.includes(carryBrief))
     await finishFriendReview(reused, 'Confirm handoff', async () => ({
       status: (await host.request(questions, { sessionId: reused.sessionId })).question ? 'waiting-choice' : 'complete',

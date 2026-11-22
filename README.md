@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.186.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.187.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -155,6 +155,8 @@ Choose **Use this loadout** on either card to take that route into your own task
 In **Browse files**, you can switch personal workspaces or use **Add a materials folder** when the host offers it. The picker continues in the added folder after it is verified, with your task brief ready on the form.
 
 After the first personal task is verified, **View task result** offers **Review and save loadout** beside the other route when it is available. Check the setup first, then name and save it if you want to reuse it.
+
+When you save a verified personal handoff brought from a Lighthouse comparison, the plan library can reopen that exact original conversation and show what it delivered. The plan’s share code carries the reusable loadout.
 
 After a verified result from a v0.171.0 personal task opened from these cards, try the other route on the same task. The form brings in your file and brief, and shows the other tested loadout before you open a draft and send it yourself.
 

@@ -6895,7 +6895,7 @@ window.__ModuleLoader__.load({
               h(Fragment, null,
                 (mode === 'create' || mode === 'replace') && h('div', { className: 'moba-plan-save-preview' },
                   h('strong', null, subject), h(PlanEquipment, { items: current.items, removed: current.removed }),
-                  reviewedPair && h(ReviewedPairEvidence, { evidence: reviewedPair, showLabel: true })),
+                  reviewedPair && h(ReviewedTaskEvidence, { evidence: reviewedPair, showLabel: true })),
                 h('label', null, t('方案名称'), h('input', { type: 'text', ref: focus, required: true, maxLength: 48,
                   value: name, disabled: busy, onChange: event => setName(event.target.value) })),
                 h('label', null, t('适用情形（选填）'), h('textarea', { value: note, rows: 3, maxLength: 240,
@@ -9564,7 +9564,7 @@ window.__ModuleLoader__.load({
         tools?.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('实测工具调用'), ' · ', h('code', null, tools.join(' · '))))
     }
 
-    function ReviewedPairEvidence({ evidence, showLabel }) {
+    function ReviewedTaskEvidence({ evidence, showLabel }) {
       const { side, choices, deliveredCount, originalAttached, tools, handoffKeep } = evidence
       const label = handoffKeep ? handoffStyleLabels[side] : heroPersonalPairSides[side].label
       return h(Fragment, null, showLabel && h('p', { className: 'moba-plan-note' }, t(label)),
@@ -9626,8 +9626,9 @@ window.__ModuleLoader__.load({
       const handoffAlternate = result?.handoffAlternate
       const singleSave = result?.canReview && !result.heroPair && !result.handoffPair
       const sourceTrial = !alternateLabel && result?.sourceTrial?.arm === 'standard' ? result.sourceTrial : undefined
-      const reviewedEvidence = pairSide && result?.draft && (result.handoffKeep || result.materialDelivered === true) && {
-        side: pairSide, originalAttached: result.materialDelivered === true, draft: result.draft,
+      const reviewedSide = result?.handoffStyle ?? pairSide
+      const reviewedEvidence = reviewedSide && result?.draft && (result.handoffKeep || result.materialDelivered === true) && {
+        side: reviewedSide, originalAttached: result.materialDelivered === true, draft: result.draft,
         tools: [...new Set(result.entries?.filter(entry => entry.type === 'tool' && entry.state === 'completed').map(entry => entry.name))],
         ...(result.handoffKeep && { handoffKeep: result.handoffKeep, deliveredCount: result.deliverables?.length ?? 0,
           choices: [...new Set(result.entries?.flatMap(entry => entry.name === 'ask_user_question' && entry.state === 'completed' ? entry.choices ?? [] : []))] }),
@@ -9696,7 +9697,7 @@ window.__ModuleLoader__.load({
           pairSide ? h('p', { className: 'moba-match-action-note' }, [t(pairLabel), result.hero?.name].filter(Boolean).join(' · '))
             : sourceLabel && h('p', { className: 'moba-match-action-note' }, t('练习出装') + ' · ' + sourceLabel),
           review ? result.draft && h(Fragment, null,
-            reviewedEvidence && h(ReviewedPairEvidence, { evidence: reviewedEvidence }),
+            reviewedEvidence && h(ReviewedTaskEvidence, { evidence: reviewedEvidence }),
             h(PlanEquipment, { items: result.gear ?? empty, removed: result.removed ?? empty }),
             h(SharedPlanCapabilities, { comparison: result.comparison }))
             : h(Fragment, null,

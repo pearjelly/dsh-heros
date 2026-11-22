@@ -5380,10 +5380,15 @@ export async function apply(ctx) {
     }) }
   }
 
-  async function verifiedPersonalHandoffSide(sessionId, result, pairSide, signal) {
+  async function verifiedPersonalHandoffSelection(sessionId, result, pairSide, signal) {
     const alternate = result && await personalHandoffAlternate(sessionId, result, signal)
-    const arms = alternate && await personalHandoffPair(sessionId, result, alternate, signal)
-    const picked = arms && arms.find(item => item.style === pairSide)
+    let picked
+    if (alternate && pairSide === 'current') {
+      picked = { sessionId, style: alternate.style === 'direct' ? 'review' : 'direct', result }
+    } else if (alternate) {
+      const arms = await personalHandoffPair(sessionId, result, alternate, signal)
+      picked = arms?.find(item => item.style === pairSide)
+    }
     if (!picked) throw new Error(personalLoadoutUnavailable)
     const { launch, presetId, target, evidence } = picked.result
     const checked = await verifiedLessonTaskSource(launch.source, signal)
@@ -5397,10 +5402,10 @@ export async function apply(ctx) {
 
   async function savePersonalHandoffPlan({ sessionId, pairSide, token, name, note }, signal) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
-    if ((pairSide !== 'direct' && pairSide !== 'review') || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+    if (!['current', 'direct', 'review'].includes(pairSide) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
       throw new Error(personalLoadoutUnavailable)
     }
-    const picked = await verifiedPersonalHandoffSide(sessionId, await observeLessonTask(sessionId, signal), pairSide, signal)
+    const picked = await verifiedPersonalHandoffSelection(sessionId, await observeLessonTask(sessionId, signal), pairSide, signal)
     if (picked.keep.token !== token) throw new Error(personalLoadoutUnavailable)
     const { result, checked } = picked
     return buildPlans.write({ name, note }, checked.draft.presetId, async () => {
@@ -5441,7 +5446,7 @@ export async function apply(ctx) {
     let resultView = await observeLessonTask(sessionId, signal)
     let handoff
     if (handoffReview) {
-      handoff = await verifiedPersonalHandoffSide(sessionId, resultView, pairSide, signal)
+      handoff = await verifiedPersonalHandoffSelection(sessionId, resultView, pairSide, signal)
       sessionId = handoff.sessionId
       resultView = handoff.result
     } else if (pairReview) {
@@ -5521,6 +5526,9 @@ export async function apply(ctx) {
     try {
       const uploaded = await appearance.index()
       let checked, heroName
+      if (!pairReview && launch.source?.handoffPairId) {
+        handoff = await verifiedPersonalHandoffSelection(sessionId, resultView, 'current', signal)
+      }
       if (handoff) {
         checked = handoff.checked
         heroName = checked.view.heroName
@@ -5550,7 +5558,8 @@ export async function apply(ctx) {
       const removed = historicalRemovals(candidate, presetEquipment(ecosystem, draft.presetId), ecosystem)
       const comparison = await compare(draft, ecosystem, candidate)
       signal?.throwIfAborted()
-      return { ...result, sessionId, hero, draft, gear, removed, comparison, ...(handoff && { handoffKeep: handoff.keep }) }
+      return { ...result, sessionId, hero, draft, gear, removed, comparison,
+        ...(handoff && { handoffKeep: handoff.keep, handoffStyle: handoff.style }) }
     } catch (error) {
       signal?.throwIfAborted()
       return { ...result, reason: error instanceof Error ? error.message : '本机配置已变化，无法核对这局的原出装。' }
