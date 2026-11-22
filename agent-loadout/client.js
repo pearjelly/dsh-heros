@@ -6322,8 +6322,14 @@ window.__ModuleLoader__.load({
           request, onVisit, onClose: back, onBack: back, backLabel: t('返回方案库') }))
     }
 
+    function sameReviewedDraft(draft, reviewed) {
+      return draft.presetId === reviewed.presetId && JSON.stringify(draft.equipmentIds) === JSON.stringify(reviewed.equipmentIds) &&
+        JSON.stringify(draft.removedEquipmentIds ?? empty) === JSON.stringify(reviewed.removedEquipmentIds ?? empty) &&
+        draft.equipmentIds.every(id => draft.equipmentSources?.[id] === reviewed.equipmentSources?.[id])
+    }
+
     function BuildPlans({ plans, initialMode, initialTaskReference, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport,
-      workspaces, workspaceId, onOpenTask, onOpenSource, evidenceSave }) {
+      workspaces, workspaceId, onOpenTask, onOpenSource, evidenceSave, pairSaveEvidence }) {
       const [editor, setEditor] = useState(initialMode === 'create' ? { mode: 'create' } : null)
       const [sharing, setSharing] = useState(null)
       const [taskPlan, setTaskPlan] = useState(null)
@@ -6467,6 +6473,8 @@ window.__ModuleLoader__.load({
       const mode = editor?.mode
       const subject = mode === 'create' ? current.hero?.name : editor?.target?.name
       const cannotSaveDraft = (mode === 'create' || mode === 'replace') && !canSave
+      const reviewedPair = initialMode === 'create' && mode === 'create' && canSave && pairSaveEvidence &&
+        sameReviewedDraft(draft, pairSaveEvidence.draft) ? pairSaveEvidence : undefined
       return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
         'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan || initialTaskReference || pairPlan), 'aria-labelledby': title,
         onCancel: event => { event.preventDefault(); if (pairPlan) closePair(); else if (taskPlan) closeTask(); else if (sharing) closeSharing(); else close() },
@@ -6506,7 +6514,10 @@ window.__ModuleLoader__.load({
             mode === 'remove' ? h('p', { className: 'moba-plan-note' }, t('移除「') + subject + t('」的方案入口。历史对局仍可打开。')) :
               h(Fragment, null,
                 (mode === 'create' || mode === 'replace') && h('div', { className: 'moba-plan-save-preview' },
-                  h('strong', null, subject), h(PlanEquipment, { items: current.items, removed: current.removed })),
+                  h('strong', null, subject), h(PlanEquipment, { items: current.items, removed: current.removed }),
+                  reviewedPair && h(Fragment, null,
+                    h('p', { className: 'moba-plan-note' }, t(heroPersonalPairSides[reviewedPair.side].label)),
+                    h(HeroPersonalRunEvidence, { originalAttached: true, tools: reviewedPair.tools }))),
                 h('label', null, t('方案名称'), h('input', { type: 'text', ref: focus, required: true, maxLength: 48,
                   value: name, disabled: busy, onChange: event => setName(event.target.value) })),
                 h('label', null, t('适用情形（选填）'), h('textarea', { value: note, rows: 3, maxLength: 240,
@@ -7235,6 +7246,7 @@ window.__ModuleLoader__.load({
       const [historicalHero, setHistoricalHero] = useState(proven?.draft.presetId ?? returning?.followUp?.heroId ?? '')
       const [journalOpen, setJournalOpen] = useState(false)
       const [planMode, setPlanMode] = useState(proven?.save ? 'create' : '')
+      const [pairSaveEvidence, setPairSaveEvidence] = useState(proven?.pairSaveEvidence)
       const [receiptTask, setReceiptTask] = useState(null)
       const receiptTaskButton = useRef(null)
       const acknowledgedReceipt = useRef(null)
@@ -7687,6 +7699,7 @@ window.__ModuleLoader__.load({
 
       function closePlans() {
         setPlanMode('')
+        setPairSaveEvidence(undefined)
         if (receiptTask) {
           setReceiptTask(null)
           requestAnimationFrame(() => receiptTaskButton.current?.focus())
@@ -8094,7 +8107,7 @@ window.__ModuleLoader__.load({
             } }),
           journalOpen && h(QuestJournal, { request, onClose: () => setJournalOpen(false), onOpenMatch: openSource }),
           data && (planMode || receiptTask) && h(BuildPlans, { initialMode: planMode, initialTaskReference: receiptTask,
-            request, draft: loadoutDraft(), canSave: canCompare,
+            request, draft: loadoutDraft(), canSave: canCompare, pairSaveEvidence,
             workspaces: comparableWorkspaces, workspaceId: workspace?.workspaceId,
             onOpenTask: ({ sessionId, task }) => openDraftSession(sessionId, task), onOpenSource: openSource,
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
@@ -9271,7 +9284,7 @@ window.__ModuleLoader__.load({
           review ? h(Fragment, null,
             h('button', { type: 'button', className: 'moba-text', onClick: returnToResult }, t('返回任务结果')),
             h('button', { type: 'button', className: 'moba-match-move', disabled: !result?.draft,
-              onClick: () => onUse(result, true) }, t('保存为方案')))
+              onClick: () => onUse(result, true, reviewedRunTools && { side: pairSide, tools: reviewedRunTools, draft: result.draft }) }, t('保存为方案')))
             : h(Fragment, null,
               h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(sessionId) }, t('查看原会话')),
               result?.rebaseline && h('button', { ref: rebaselineButton, type: 'button',
@@ -10027,9 +10040,9 @@ window.__ModuleLoader__.load({
         setAction({ kind, item })
       }
 
-      function reuseProvenLoadout(preview, save) {
+      function reuseProvenLoadout(preview, save, pairSaveEvidence) {
         popover.current.hidePopover()
-        openLobby(sessionId, snapshot, { proven: { ...preview, save } })
+        openLobby(sessionId, snapshot, { proven: { ...preview, save, pairSaveEvidence } })
       }
 
       function reuseComparisonLoadout(preview, save) {

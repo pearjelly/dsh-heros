@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.162.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.163.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -80,7 +80,7 @@ dsh web
 
 同一本机试玩的标准模式和加装极简模式都通过原件交付核验时，用其中一套交付个人文件后，任务结果顶部会提供「用标准模式试同一任务」或「用极简模式 + 交付物预览试同一任务」。核对两套出装、原文件和原任务，再打开独立草稿并手动发送。
 
-换装局完成后，可以在任务结果并排看两局使用的工具和所选文件交付情况，也可打开各自原会话核对细节。在交付了所选原件的一侧点「保留这套出装」，核对英雄、装备变化和本局实际调用与交付，再命名保存。下次开局时，可以另选材料并填写新任务。
+换装局完成后，可以在任务结果并排看两局使用的工具和所选文件交付情况，也可打开各自原会话核对细节。在交付了所选原件的一侧点「保留这套出装」，核对英雄、装备变化和本局实际调用与交付。命名保存时仍可看到这些实测信息。下次开局时，可以另选材料并填写新任务。
 
 ## 玩一局灯塔证据取舍
 

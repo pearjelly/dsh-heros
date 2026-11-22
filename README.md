@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.162.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.163.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -78,7 +78,7 @@ After a verified personal delivery with equipped Minimal, **Try Standard in the 
 
 If Standard and equipped Minimal both delivered the original in the same local trial, a verified personal delivery can show **Try the same task with Standard** or **Try the same task with Minimal + Deliverable Preview** near the top of its task result. Review the two loadouts and your original file and task. Confirm to open a separate draft, then send it manually.
 
-After the alternate session finishes, its task result can show both personal runs together. Open either native session to check the details. On a run that attached the selected original, choose **Keep this loadout**. The review shows its hero, added or removed equipment, and the actual tool calls and attachment from that run. Name the plan, then choose new material and write a new brief when you run it again.
+After the alternate session finishes, its task result can show both personal runs together. Open either native session to check the details. On a run that attached the selected original, choose **Keep this loadout**. Review its hero, equipment changes, actual tool calls, and attachment. The naming form keeps those observations in view while you save the selected build. Choose new material and write a fresh brief when you run the plan again.
 
 ## Play Lighthouse evidence choices
 
