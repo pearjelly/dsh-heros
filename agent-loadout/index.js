@@ -9,7 +9,7 @@ import { englishStrings, englishText, localizeDisplay } from './localization.js'
 import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, roles } from './catalog.js'
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
-import { openBuildPlans, planTaskPrompt } from './build-plans.js'
+import { openBuildPlans, planTaskPrompt, planTaskSessionId as heroAlternateSessionId } from './build-plans.js'
 import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, decodeLighthouseReviewChallenge, decodeLighthouseReviewReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, encodeLighthouseReviewChallenge, encodeLighthouseReviewReport, isLighthouseHeroChallenge, isLighthouseReviewChallenge, lighthouseChallengeName } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
@@ -803,8 +803,8 @@ export async function apply(ctx) {
       : '方案的英雄或阵容当前不可用。'
   }
 
-  function publicBuildPlan({ evidenceOrigin, ...plan }) {
-    return { ...plan, ...(evidenceOrigin && { hasEvidenceOrigin: true }) }
+  function publicBuildPlan({ evidenceOrigin, handoffOrigin, ...plan }) {
+    return { ...plan, ...(evidenceOrigin && { hasEvidenceOrigin: true }), ...(handoffOrigin && { hasHandoffOrigin: true }) }
   }
 
   function planCard(plan, art, unavailable) {
@@ -4351,7 +4351,6 @@ export async function apply(ctx) {
 
   const heroAlternateUnavailable = '同组已核验的另一套出装暂不可用。'
   const heroAlternateChanged = '材料、任务或出装已变化，请重新核对。'
-  const heroAlternateSessionId = /^session-a076[a-f0-9]{28}$/u
 
   function oppositePersonalHeroArm(source) {
     if (!source) return
@@ -5338,8 +5337,27 @@ export async function apply(ctx) {
     return buildPlans.write({ name, note }, checked.draft.presetId, async () => {
       if (await personalTaskMaterialState(result.target, signal) !== 'verified') throw new Error(personalLoadoutUnavailable)
       signal?.throwIfAborted()
-      return { presetId: result.presetId, heroId: checked.draft.presetId, heroName: checked.view.heroName }
+      return { presetId: result.presetId, heroId: checked.draft.presetId, heroName: checked.view.heroName,
+        handoffOrigin: { sessionId: picked.sessionId, style: picked.style } }
     })
+  }
+
+  async function readPlanHandoffOrigin({ id, revision }, signal) {
+    const { presetId, handoffOrigin } = buildPlans.read(id, revision)
+    const unavailable = '这份方案的实测来源已不可查看。'
+    if (!handoffOrigin) throw new Error(unavailable)
+    const { sessionId, style } = handoffOrigin
+    const run = await observeLessonTask(sessionId, signal, true)
+    const source = run?.launch.source
+    const direct = source?.kind === 'workspace' && source.arm === 'direct'
+    const workspace = run && ctx.get('workspaceRegistry')?.get(run.target.workspaceId)
+    if (!source?.handoffPairId || direct !== (style === 'direct') || run.presetId !== presetId || !workspace ||
+      workspace.path !== run.cwd || !workspace.sessionIds.includes(sessionId) || !completedPersonalHandoff(run.evidence, style)) {
+      throw new Error(unavailable)
+    }
+    buildPlans.read(id, revision)
+    signal?.throwIfAborted()
+    return { sessionId }
   }
 
   async function readLessonTaskResult({ sessionId, review, pairSide }, signal) {
@@ -7313,6 +7331,8 @@ export async function apply(ctx) {
           updates.notify()
         } else if (selection?.action === 'plan-evidence-origin') {
           value = await readPlanEvidenceOrigin(selection, request.signal)
+        } else if (selection?.action === 'plan-handoff-origin') {
+          value = await readPlanHandoffOrigin(selection, request.signal)
         } else if (selection?.action === 'evidence-retest-options') {
           value = await evidenceRetestOptions(selection, request.signal)
         } else if (selection?.action === 'evidence-retest-note') {

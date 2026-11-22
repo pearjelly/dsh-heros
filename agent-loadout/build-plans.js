@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { comparisonIdValid, workspaceMaterialPath } from './match-comparisons.js'
 
 const planKey = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/
+export const planTaskSessionId = /^session-a076[a-f0-9]{28}$/u
 
 export function planTaskPrompt({ material: value, task }, english) {
   const material = workspaceMaterialPath(value)
@@ -29,6 +30,13 @@ function evidenceOrigin(value) {
   }
 }
 
+function handoffOrigin(value) {
+  if (typeof value?.sessionId === 'string' && planTaskSessionId.test(value.sessionId) &&
+    (value.style === 'direct' || value.style === 'review')) {
+    return { sessionId: value.sessionId, style: value.style }
+  }
+}
+
 export async function openBuildPlans(directory, saveEntry, warnings) {
   const plans = new Map()
   let writes = Promise.resolve()
@@ -45,11 +53,12 @@ export async function openBuildPlans(directory, saveEntry, warnings) {
         ![record.presetId, record.heroId, record.heroName].every(value => typeof value === 'string' && value)) {
         throw new Error('Invalid build plan')
       }
-      const { evidenceOrigin: storedOrigin, ...plan } = record
+      const { evidenceOrigin: storedOrigin, handoffOrigin: storedHandoff, ...plan } = record
       const origin = evidenceOrigin(storedOrigin)
+      const handoff = handoffOrigin(storedHandoff)
       const fields = metadata(plan)
-      if (storedOrigin !== undefined && !origin) warnings.push(file)
-      plans.set(id, { ...plan, ...fields, ...(origin && { evidenceOrigin: origin }) })
+      if ((storedOrigin !== undefined && !origin) || (storedHandoff !== undefined && !handoff)) warnings.push(file)
+      plans.set(id, { ...plan, ...fields, ...(origin && { evidenceOrigin: origin }), ...(handoff && { handoffOrigin: handoff }) })
     } catch {
       warnings.push(file)
     }
@@ -81,8 +90,10 @@ export async function openBuildPlans(directory, saveEntry, warnings) {
       const target = current && !updating ? current : await resolveDraft()
       const { presetId, heroId, heroName } = target
       const origin = evidenceOrigin(target.evidenceOrigin)
+      const handoff = handoffOrigin(target.handoffOrigin)
       const record = { id: current?.id ?? randomUUID(), revision: randomUUID(), ...fields,
-        presetId, heroId, heroName, updatedAt: Date.now(), ...(origin && { evidenceOrigin: origin }) }
+        presetId, heroId, heroName, updatedAt: Date.now(), ...(origin && { evidenceOrigin: origin }),
+        ...(handoff && { handoffOrigin: handoff }) }
       await saveEntry(directory, record.id, record)
       plans.set(record.id, record)
       return record

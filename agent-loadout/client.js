@@ -6462,21 +6462,23 @@ window.__ModuleLoader__.load({
       const [state, setState] = useState(null)
       const trigger = useRef(null)
       const pending = useRef(null)
+      const handoff = plan.hasHandoffOrigin === true
 
       useEffect(() => () => pending.current?.abort(), [])
 
       async function open() {
         if (pending.current) return
         const abort = pending.current = new AbortController()
-        const action = 'plan-evidence-origin'
+        const action = handoff ? 'plan-handoff-origin' : 'plan-evidence-origin'
         setState({ loading: true })
         try {
           const source = await request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
           if (abort.signal.aborted) return
-          if (!source?.comparisonId || !['baseline', 'rematch'].includes(source.arm) || !source.sessionId) {
+          if (!source?.sessionId || (!handoff && (!source.comparisonId || !['baseline', 'rematch'].includes(source.arm)))) {
             throw new Error(t('这份方案的实测来源已不可查看。'))
           }
-          setState({ source })
+          if (handoff) onVisit(source.sessionId)
+          else setState({ source })
         } catch (reason) {
           if (!abort.signal.aborted) setState({ error: reason.message })
         } finally {
@@ -6492,7 +6494,7 @@ window.__ModuleLoader__.load({
       const source = state?.source
       return h(Fragment, null,
         h('button', { type: 'button', className: 'moba-roster-open', ref: trigger, disabled: Boolean(state?.loading),
-          'aria-haspopup': 'dialog', onClick: open }, t('查看实战来源')),
+          'aria-haspopup': handoff ? undefined : 'dialog', onClick: open }, t('查看实战来源')),
         state?.loading && h('p', { className: 'moba-plan-note', role: 'status' }, t('正在核对实战来源…')),
         state?.error && h('p', { className: 'moba-alert', role: 'alert' }, state.error),
         source && h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId, testedSourceArm: source.arm, evidenceReplayHint: true,
@@ -6743,7 +6745,7 @@ window.__ModuleLoader__.load({
                       onClick: () => setPairPlan({ plan }) }, t('与另一份方案同题对照')),
                     canRetest && h('button', { className: 'moba-roster-open', type: 'button', ref: retestButton,
                       onClick: () => setPairPlan({ plan, evidenceRetest: options }) }, t(evidenceRetestLabel))),
-                  plan.hasEvidenceOrigin && onOpenSource && h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
+                  (plan.hasEvidenceOrigin || plan.hasHandoffOrigin) && onOpenSource && h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
                     onVisit: sessionId => { close(); onOpenSource(sessionId) } }),
                   !plan.broken && !hasAlternative && h('p', { className: 'moba-lighthouse-note' }, t('再保存一套可用出装方案，就能做同题对照。')),
                   h('div', { className: 'moba-plan-manage' },
