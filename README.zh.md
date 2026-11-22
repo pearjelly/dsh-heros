@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.137.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.138.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -24,6 +24,8 @@ dsh web
 从插件社区过来时，用上方命令安装当前版本。带版本的地址使用独立的 pnpm 缓存条目，`-w` 允许 CLI 把插件装到 Profile 工作区根目录。
 
 从 DSH 侧栏打开 **深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
+
+在大厅点 **去配装**，可直接跳到 **英雄阵容**。选好英雄，再从 **装备库** 选用工具和插件。
 
 ## 用同一题试玩两位英雄
 

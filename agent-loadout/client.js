@@ -235,7 +235,7 @@ window.__ModuleLoader__.load({
           style: appearance?.style, 'aria-hidden': true }))
     }
 
-    function HeroStage({ preset, presets, selections, removed, roles, onInspect, onSelect, onBrowse, onAppearance, onActions, disabled }) {
+    function HeroStage({ preset, presets, selections, removed, roles, rosterHeading, onInspect, onSelect, onBrowse, onAppearance, onActions, disabled }) {
       const epithet = preset && portrait(preset.id)[1]
       const rosterRef = useRef(null)
       const rosterTitle = useId()
@@ -276,7 +276,7 @@ window.__ModuleLoader__.load({
               preset.gearCompatibility.length + t(' 件自带装备受版本限制')))),
         h('div', { className: 'moba-roster' },
           h('div', { className: 'moba-roster-heading' },
-            h('h3', { id: rosterTitle }, t('英雄阵容')),
+            h('h3', { id: rosterTitle, ref: rosterHeading, tabIndex: -1 }, t('英雄阵容')),
             h('button', { className: 'moba-roster-open', type: 'button', disabled: disabled || !presets.length,
               'aria-haspopup': 'dialog', onClick: onBrowse }, h(Glyph, { kind: 'search', size: 15 }), t('英雄图鉴'))),
           h('fieldset', { className: 'moba-portraits', ref: rosterRef, 'aria-labelledby': rosterTitle, disabled },
@@ -6967,6 +6967,7 @@ window.__ModuleLoader__.load({
       const comparisonButton = useRef(null)
       const starting = useRef(false)
       const lobby = useRef(null)
+      const rosterHeading = useRef(null)
       const audio = useRef(null)
       const [sound, setSound] = useState(false)
       const [fullscreen, setFullscreen] = useState(false)
@@ -7565,6 +7566,14 @@ window.__ModuleLoader__.load({
         }
       }
 
+      function chooseLoadout() {
+        const pane = lobby.current
+        const heading = rosterHeading.current
+        if (!pane || !heading) return
+        heading.focus({ preventScroll: true })
+        pane.scrollBy({ top: heading.getBoundingClientRect().top - pane.getBoundingClientRect().top - 8, behavior: 'instant' })
+      }
+
       return h('main', { className: 'moba-lobby', lang: language, 'aria-labelledby': 'moba-title', ref: lobby },
         h('div', { className: 'moba-inner' },
           h('header', { className: 'moba-header' },
@@ -7617,6 +7626,8 @@ window.__ModuleLoader__.load({
                 h('span', null, t('找到补给卡就撤，还是带着交付物回来？'))),
               h('span', { className: 'moba-starter-entry-action' }, t('选择路线'), h(Glyph, { kind: 'arrow', size: 18 }))),
             h('div', { className: 'moba-lighthouse-entry-actions' },
+              h('button', { type: 'button', className: 'moba-roster-open', disabled: pending, onClick: chooseLoadout },
+                h(Glyph, { kind: 'team', size: 17 }), t('去配装')),
               data.lastHeroTrial && h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: resumeHeroTrialButton, 'aria-haspopup': 'dialog', 'aria-description': lastTrialNeed && t(lastTrialNeed.name),
                 onClick: () => setHeroTrialOpen({ trigger: resumeHeroTrialButton, comparisonId: data.lastHeroTrial.id }) },
@@ -7789,7 +7800,7 @@ window.__ModuleLoader__.load({
             onClose: () => setPlanMode(''), onChanged: planChanged, onApply: applyPlan, onCompare: showPlanComparison,
             onImport: adoptSharedPlan }),
           data && h('div', { className: 'moba-grid' },
-            h(HeroStage, { preset: stagePreset, presets, selections, removed: removedIds, roles,
+            h(HeroStage, { preset: stagePreset, presets, selections, removed: removedIds, roles, rosterHeading,
               onInspect: item => {
                 setInspected(item.id)
                 setRequestedGear({ id: item.id, name: item.name, discovered: Boolean(item.discovery), sourceId: item.sourceId, sourceName: item.sourceName })
