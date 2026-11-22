@@ -1361,6 +1361,71 @@ window.__ModuleLoader__.load({
             onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对'))))
     }
 
+    function LighthouseDirectRematch({ kind, comparisonId, arm, request, onBack, onOpen, backLabel = '返回练习记录' }) {
+      const language = useLanguage()
+      const [attempt, retry] = useState(0)
+      const [checked, setChecked] = useState(null)
+      const [opening, setOpening] = useState(false)
+      const [openError, setOpenError] = useState('')
+      const pending = useRef(null)
+      const launchId = useRef('')
+      const current = checked?.attempt === attempt && checked.language === language ? checked : null
+      const preview = current?.preview
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'lighthouse-review-direct-preview'
+        request(action, { action, kind, comparisonId, arm }, abort.signal, language)
+          .then(preview => { if (!abort.signal.aborted) setChecked({ attempt, language, preview }) })
+          .catch(reason => { if (!abort.signal.aborted) setChecked({ attempt, language, error: reason.message }) })
+        return () => abort.abort()
+      }, [request, kind, comparisonId, arm, language, attempt])
+      useEffect(() => () => pending.current?.abort(), [])
+
+      async function open() {
+        if (pending.current || !preview?.token || openError) return
+        const abort = pending.current = new AbortController()
+        setOpening(true)
+        if (!launchId.current) launchId.current = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+          byte => byte.toString(16).padStart(2, '0')).join('')
+        const action = 'lighthouse-review-direct-open'
+        try {
+          const result = await request(action, { action, kind, comparisonId, arm, token: preview.token, launchId: launchId.current }, abort.signal, language)
+          if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
+        } catch (reason) {
+          if (!abort.signal.aborted) setOpenError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setOpening(false)
+        }
+      }
+
+      const issue = openError || current?.error
+      return h(InstallDialog, { title: t('试试直接交付'), className: 'moba-lighthouse-comparison moba-starter-dialog',
+        busy: opening, onCancel: onBack, initialFocus: '.moba-direct-rematch-back',
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onBack() }) },
+        h('p', { className: 'moba-lighthouse-note' }, t('沿用原来的灯塔补给卡和任务，只卸下交付前复核。')),
+        preview && h(Fragment, null,
+          h(InstallFacts, { facts: [[t('材料文件相对路径'), preview.material], [t('原局实际选择'), preview.baseline.choice],
+            [t('原局交付文件'), preview.baseline.materialDelivered ? preview.material : t('本局没有交付文件。')],
+            [t('保留的装备'), t('交付物预览')]] }),
+          h(RematchChangeFacts, { change: preview.change }),
+          h('details', { className: 'moba-minimal-replay-detail' },
+            h('summary', null, t('查看试玩任务')),
+            h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
+              h('textarea', { readOnly: true, value: preview.task, rows: 4 })),
+            h(SharedPlanCapabilities, { comparison: preview.comparison, title: '从原局到换装局的变化' })),
+          h('p', { className: 'moba-lighthouse-note' }, t('打开新会话后，由你检查并手动发送这段任务。'))),
+        (!current || opening) && h('p', { className: 'moba-empty', role: 'status' }, t(opening ? '正在准备对局…' : '正在核对换装…')),
+        issue && h('p', { className: 'moba-alert', role: 'alert' }, t(issue)),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open moba-direct-rematch-back', disabled: opening, onClick: onBack }, t(backLabel)),
+          issue && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
+            onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
+          preview?.token && !issue && h('button', { type: 'button', className: 'moba-start', disabled: opening, onClick: open },
+            t('打开换装会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
     function LighthouseChallengeShare({ comparisonId, request, onBack, heroTrial = false, playedHero, reviewSource }) {
       const language = useLanguage()
       const [result, setResult] = useState(null)
@@ -3109,6 +3174,7 @@ window.__ModuleLoader__.load({
       const [launch, setLaunch] = useState('')
       const [reuse, setReuse] = useState(null)
       const [rematch, setRematch] = useState(null)
+      const [directRematch, setDirectRematch] = useState(null)
       const [noteTarget, setNoteTarget] = useState(null)
       const [savedNoteArm, setSavedNoteArm] = useState('')
       const [lessonTask, setLessonTask] = useState(null)
@@ -3294,6 +3360,8 @@ window.__ModuleLoader__.load({
       if (rematch) return h(RematchEditor, { kind, comparisonId: rematch.id, arm: rematch.arm, sourceSessionId: rematch.sessionId, request,
         lesson, evidenceReplayHint: rematch.publicEvidenceReplay, publicEvidenceReplayHint: rematch.publicEvidenceReplay,
         onBack: () => { returnFocus.current = `[data-rematch-arm="${rematch.arm}"]`; setRematch(null) }, onVisit, onClose })
+      if (directRematch) return h(LighthouseDirectRematch, { kind, ...directRematch, request, onOpen: onVisit,
+        onBack: () => { returnFocus.current = '[data-review-direct-preview]'; setDirectRematch(null) } })
       if (lessonTask) return h(PersonalLoadoutTask, { source: lessonTask.lessonTaskSource, workspaces, initialWorkspaceId, request, onVisit,
         handoffStyle: lessonTask.handoffStyle, backLabel: lessonTask.fromSummary ? '返回两局实测结果' : undefined,
         onBack: () => { returnFocus.current = `[data-lesson-task-arm="${lessonTask.id}"], .moba-lighthouse-close`; setLessonTask(null) } })
@@ -3356,6 +3424,9 @@ window.__ModuleLoader__.load({
             : h(Fragment, null, workspaceFacts, gearChange),
           publicReviewOutcome && h(HandoffOutcomeSummary, { outcome: publicReviewOutcome, onVisit, busy: Boolean(launch),
             onLessonTask: arm => setLessonTask({ id: arm.id, lessonTaskSource: arm.lessonTaskSource, fromSummary: true, handoffStyle: arm.style }) }),
+          value.directRematchArm && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+            'data-review-direct-preview': true, disabled: Boolean(launch),
+            onClick: () => setDirectRematch({ comparisonId: value.id, arm: value.directRematchArm }) }, t('试试直接交付')),
           reviewChoiceComparison && h(ReviewChoiceComparison, { comparison: reviewChoiceComparison, onVisit, busy: Boolean(launch) }),
           previous && h(PreviousComparisonLink, { reference: previous, onOpen: onPrevious, disabled: Boolean(launch) }),
           personal && value.materialState === 'verified' && h('p', { className: 'moba-lighthouse-note' }, t('材料与本组记录的版本一致。')),
@@ -4095,6 +4166,7 @@ window.__ModuleLoader__.load({
       const [lessonTaskSource, setLessonTaskSource] = useState(null)
       const [openEvidenceReplay, setOpenEvidenceReplay] = useState(false)
       const [openDeliveryReview, setOpenDeliveryReview] = useState(false)
+      const [openDirectRematch, setOpenDirectRematch] = useState(false)
       const [openReviewInvitation, setOpenReviewInvitation] = useState(false)
       const [openReviewReport, setOpenReviewReport] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
@@ -4102,11 +4174,13 @@ window.__ModuleLoader__.load({
       const lessonTaskTrigger = useRef(null)
       const evidenceReplayTrigger = useRef(null)
       const deliveryReviewTrigger = useRef(null)
+      const directRematchTrigger = useRef(null)
       const reviewInvitationTrigger = useRef(null)
       const reviewReportTrigger = useRef(null)
       const availableLessonTask = evidence && member.lessonTaskSource
       const availableEvidenceReplay = evidence && member.canReplayLighthouseEvidence === true
       const availableDeliveryReview = lesson && kind === 'workspace' && member.canTryDeliveryReview === true
+      const availableDirectRematch = member?.canTryDirectDelivery === true
       const reviewInvitation = member?.reviewInvitation
       const canCompareOwnReview = member?.canCompareOwnReview === true
       const evidenceReportCode = evidence && member.evidenceReportCode
@@ -4139,6 +4213,11 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (deliveryReviewTrigger.current ?? trigger.current)?.focus())
       }
 
+      function closeDirectRematch() {
+        setOpenDirectRematch(false)
+        requestAnimationFrame(() => (directRematchTrigger.current ?? trigger.current)?.focus())
+      }
+
       function closeReviewInvitation() {
         setOpenReviewInvitation(false)
         requestAnimationFrame(() => (reviewInvitationTrigger.current ?? trigger.current)?.focus())
@@ -4156,6 +4235,9 @@ window.__ModuleLoader__.load({
           h('div', null, h('strong', null, t(title)),
             h('span', null, scenario ? t(scenario.name) : comparisonArmName(comparisonArmConfig(kind, member.arm, evidenceReplay), member))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
+            availableDirectRematch && h('button', { ref: directRematchTrigger, type: 'button', 'aria-haspopup': 'dialog',
+              className: 'moba-settlement-button', 'data-review-direct-preview': true,
+              onClick: () => setOpenDirectRematch(true) }, t('试试直接交付')),
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               'data-open-own-review-pair': canCompareOwnReview || undefined, onClick: () => setOpen(true) },
             t(canCompareOwnReview ? '对照我打过的两局'
@@ -4201,6 +4283,8 @@ window.__ModuleLoader__.load({
         openDeliveryReview && h(RematchEditor, { kind, comparisonId: member.id, arm: member.arm, sourceSessionId: sessionId, request,
           lesson: true, guidedReview: true, backLabel: '返回练习会话', onBack: closeDeliveryReview, onClose: closeDeliveryReview,
           onVisit: (next, task) => { if (next === sessionId) closeDeliveryReview(); else { setOpenDeliveryReview(false); onVisit(next, task) } } }),
+        openDirectRematch && h(LighthouseDirectRematch, { kind, comparisonId: member.id, arm: member.arm, request,
+          backLabel: '返回练习会话', onBack: closeDirectRematch, onOpen: (next, task) => { setOpenDirectRematch(false); onVisit(next, task) } }),
         open && h(RunComparison, { kind, request, comparisonId: member.id, sessionId, onClose: close, workspaces, lessonHint: member.lesson,
           evidenceReplayHint: evidenceReplay, publicEvidenceReplayHint: publicEvidenceReplay,
           putTask: task => putTask(sessionId, task),

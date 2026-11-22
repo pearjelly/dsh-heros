@@ -2594,6 +2594,12 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     const confirmedSide = { sessionId: confirmed.sessionId, choices: ['Confirm handoff'], materialDelivered: true,
       deliverables: confirmedResult.outcome.deliverables }
     const revisedSide = { sessionId: revised.sessionId, choices: ['Revise draft'], materialDelivered: false, deliverables: [] }
+    const directPreviewAction = 'lighthouse-review-direct-preview'
+    const checkedZero = await invoke(directPreviewAction, { kind: 'rematch', comparisonId: revised.id, arm: 'rematch' })
+    assert.equal(checkedZero.baseline.choice, 'Revise draft')
+    assert.equal(checkedZero.baseline.materialDelivered, false)
+    assert.equal(checkedZero.change.removed.id, 'review')
+    assert.equal((await equipmentIn(host, revised.sessionId)).rematchComparison.canTryDirectDelivery, true)
     assert.deepEqual(revisedResult.paired, { current: revisedSide, other: confirmedSide })
     const confirmedBoard = await invoke('rematch-comparison', { comparisonId: confirmed.id })
     assert.deepEqual(confirmedBoard.reviewChoiceComparison, { current: confirmedSide, other: revisedSide })
@@ -3010,9 +3016,59 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.deepEqual(await membership(ownReviewDraft.workspaceId), [ownReview.sessionId])
     await startReview({ ...startFields, arm: 'direct' }, 422)
     await shareReview('workspace', ownReview.id, 'review', 422)
+    const soloStartSource = { kind: 'workspace', comparisonId: ownReview.id, arm: 'review' }
+    await invoke(directPreviewAction, soloStartSource, 422)
+    assert.equal((await equipmentIn(host, ownReview.sessionId)).workspaceComparison.canTryDirectDelivery, undefined)
     const chosenOwnReview = await finishFriendReview(ownReview, 'Confirm handoff')
     assert.equal(chosenOwnReview.materialDelivered, true)
+    assert.equal((await equipmentIn(host, ownReview.sessionId)).workspaceComparison.canTryDirectDelivery, true)
+    assert.equal((await read({ comparisonId: ownReview.id })).directRematchArm, 'review')
     assert.deepEqual(await shareReview('workspace', ownReview.id, 'review'), { code: reviewCode })
+    const pendingBeforeDirect = await reviewDrafts()
+    const directPreviewInEnglish = await host.requestRaw(endpoint, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+      body: JSON.stringify({ action: directPreviewAction, ...soloStartSource }),
+    })
+    assert.equal(directPreviewInEnglish.status, 200)
+    const { value: soloChange } = await directPreviewInEnglish.json()
+    assert.equal(soloChange.task, ownReview.task)
+    assert.equal(soloChange.baseline.sessionId, ownReview.sessionId)
+    assert.equal(soloChange.baseline.choice, 'Confirm handoff')
+    assert.equal(soloChange.baseline.materialDelivered, true)
+    assert.deepEqual(Object.keys(soloChange.change), ['removed'])
+    assert.equal(soloChange.change.removed.id, 'review')
+    assert.deepEqual(await reviewDrafts(), pendingBeforeDirect)
+    const openSoloDirect = (fields = {}, status) => invoke('lighthouse-review-direct-open',
+      { ...soloStartSource, token: soloChange.token, launchId: '4'.repeat(32), ...fields }, status)
+    await openSoloDirect({ token: checkedZero.token }, 422)
+    await invoke('rematch-comparison-open', { ...soloStartSource, token: soloChange.token, change: { removeId: 'review' },
+      launchId: '4'.repeat(32) }, 422)
+    const sourceFile = join(ownReviewDraft.workspacePath, material)
+    await appendFile(sourceFile, '\nChanged original sample.\n')
+    await openSoloDirect({}, 422)
+    assert.equal((await equipmentIn(host, ownReview.sessionId)).workspaceComparison.canTryDirectDelivery, undefined)
+    assert.deepEqual(await reviewDrafts(), pendingBeforeDirect)
+    await writeFile(sourceFile, contents[1])
+    const [soloDirectRound, repeatedSoloDirect] = await Promise.all([openSoloDirect(), openSoloDirect()])
+    assert.deepEqual(repeatedSoloDirect, soloDirectRound)
+    assert.equal(soloDirectRound.task, ownReview.task)
+    const newSoloHistory = await history(soloDirectRound.sessionId)
+    assert.ok(noMessages(newSoloHistory))
+    assert.notEqual(newSoloHistory.workspaceId, ownReviewDraft.workspaceId)
+    assert.equal(await readFile(join(newSoloHistory.workspacePath, material), 'utf8'), contents[1])
+    assert.equal((await read({ comparisonId: soloDirectRound.id })).ownReviewPair, undefined)
+    await send(soloDirectRound)
+    const soloDirectBoard = await read({ comparisonId: soloDirectRound.id })
+    assert.deepEqual(soloDirectBoard.ownReviewPair.arms.map(side =>
+      [side.style, side.sessionId, side.materialDelivered, side.choices, side.lessonTaskSource.handoffPairId]), [
+      ['review', ownReview.sessionId, true, ['Confirm handoff'], soloDirectRound.id],
+      ['direct', soloDirectRound.sessionId, true, [], soloDirectRound.id],
+    ])
+    assert.equal(soloDirectBoard.ownReviewPair.arms[1].deliverables[0].name, material)
+    assert.equal((await equipmentIn(host, soloDirectRound.sessionId)).workspaceComparison.canCompareOwnReview, true)
+    for (const side of soloDirectBoard.ownReviewPair.arms) {
+      assert.equal((await invoke('lesson-task-options', side.lessonTaskSource)).source.sessionId, side.sessionId)
+    }
     const ownDirect = await startReview({ ...startFields, launchId: '3'.repeat(32), arm: 'direct' })
     assert.equal(ownDirect.task, ownReview.task)
     const ownDirectDraft = await history(ownDirect.sessionId)

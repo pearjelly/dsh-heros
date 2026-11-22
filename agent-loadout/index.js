@@ -4780,6 +4780,44 @@ export async function apply(ctx) {
     return { ...view, comparison }
   }
 
+  async function checkLighthouseDirectRematch({ kind, comparisonId, arm }, signal) {
+    const source = { kind, comparisonId, arm }
+    if (!validReviewReplaySource(source)) throw new Error(reviewChallengeUnavailable)
+    const review = await requireReviewHandoff(source, signal)
+    if (review.played !== 'review') throw new Error(reviewChallengeUnavailable)
+    const checked = await checkedRematchBaseline(source, signal)
+    const input = requestedRematch({ ...source, change: { removeId: 'review' } })
+    const change = await checkRematch(input, signal, checked)
+    const [reviewPreset, directPreset] = await Promise.all(['review', 'direct']
+      .map(style => plan(deliveryPlaybookDraft(checked.ecosystem, style), checked.ecosystem)))
+    if (reviewPreset.id !== change.before.id || directPreset.id !== change.candidate.id ||
+      !['read', 'present'].every(tool => retainedRematchTool(checked, change.candidate, tool))) {
+      throw new Error(reviewRoutesUnavailable)
+    }
+    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, 'solo-direct-rematch', change.view.token,
+      review.language, review.choiceLabel, review.originalAttached])).digest('hex')
+    const view = { ...change.view, token, baseline: { ...change.view.baseline, choice: review.choiceLabel,
+      materialDelivered: review.originalAttached } }
+    return { ...change, view, source, language: review.language }
+  }
+
+  async function previewLighthouseDirectRematch(selection, signal) {
+    const { view, draft, before, candidate, againstDraft, ecosystem } = await checkLighthouseDirectRematch(selection, signal)
+    const comparison = await compare({ ...draft, againstDraft }, ecosystem, candidate, before)
+    signal?.throwIfAborted()
+    return { ...view, comparison }
+  }
+
+  async function openLighthouseDirectRematch(selection, signal) {
+    const { token, launchId } = selection
+    if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw new Error(challengeChanged)
+    const { view, source, language, candidate } = await checkLighthouseDirectRematch(selection, signal)
+    if (token !== view.token) throw new Error(challengeChanged)
+    const id = createHash('sha256').update(JSON.stringify(['solo-direct-rematch', token, launchId])).digest('hex').slice(0, 32)
+    return openLighthouseLesson({ launchId: id, reviewChallengeArm: 'direct', reviewReplaySource: source },
+      language === 'en', signal, lighthouseLesson, candidate.id)
+  }
+
   async function repeatLighthouseReview({ comparisonId, launchId }, english, signal) {
     if (!validOpeningId(launchId)) throw new Error('开局请求无效，请重试。')
     const record = rematchComparisons.read(comparisonId)
@@ -5703,6 +5741,13 @@ export async function apply(ctx) {
     if (canShareChallenge && materialState === 'verified') practice.canReplayLighthouseEvidence = true
     const currentReview = materialState === 'verified' ? reviewedChoice(publicReviewOutcome) : undefined
     const canRepeatLighthouseReview = currentReview?.choices.length === 1
+    const currentReviewArm = record.reviewChallengeArm === 'review' && materialState === 'verified' &&
+      rounds.arms.find(arm => arm.id === 'review')
+    let directRematchArm = canRepeatLighthouseReview && (currentReview.materialDelivered || currentReview.deliveredCount === 0)
+      ? 'rematch' : undefined
+    if (currentReviewArm && await verifiedReviewHandoff(comparisons, record, 'review', signal, { observed: currentReviewArm })) {
+      directRematchArm = 'review'
+    }
     const reviewChoiceComparison = canRepeatLighthouseReview && await compareReviewChoices(record, currentReview, signal)
     const ownPair = record.reviewReplaySource &&
       await ownReviewPair(record, rounds.arms.find(arm => arm.id === 'direct'), materialState, signal)
@@ -5712,6 +5757,7 @@ export async function apply(ctx) {
       ...(ownPair && { ownReviewPair: ownPair }),
       ...(armoryHandoffOutcome && materialState === 'verified' && { armoryHandoffOutcome }),
       ...(canRepeatLighthouseReview && { canRepeatLighthouseReview: true }),
+      ...(directRematchArm && { directRematchArm }),
       ...(reviewChoiceComparison && { reviewChoiceComparison }),
       ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),
       ...(record.lesson === evidenceLesson && { scenario: record.scenario }), ...(record.evidenceRetest && { evidenceRetest: true }),
@@ -6968,6 +7014,7 @@ export async function apply(ctx) {
           ...(evidenceReplay && materialState === 'verified' && { canReplayLighthouseEvidence: true }),
           ...(deliveryReview && materialState === 'verified' && { canTryDeliveryReview: true }),
           ...(reviewResult && { reviewInvitation: reviewResult.played }),
+          ...(reviewResult?.played === 'review' && { canTryDirectDelivery: true }),
           ...(canCompareOwnReview && { canCompareOwnReview: true }),
           ...(report && { evidenceReportCode: encodeLighthouseEvidenceReport(report.choice, report.delivered) }) }
       }
@@ -6983,6 +7030,7 @@ export async function apply(ctx) {
           await verifiedReviewHandoff(rematchComparisons, record, rematch.arm, request.signal)
         value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }),
           ...(reviewResult && { reviewInvitation: reviewResult.played }),
+          ...(reviewResult?.played === 'review' && { canTryDirectDelivery: true }),
           ...evidenceReplayView(baseline) }
       }
       const heroMember = heroTrials.member(sessionId)
@@ -7226,6 +7274,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-review-repeat') value = await repeatLighthouseReview(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-review-start-preview') value = (await checkReviewStart(english, request.signal)).preview
         else if (selection?.action === 'lighthouse-review-start-open') value = await openReviewStart(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-review-direct-preview') value = await previewLighthouseDirectRematch(selection, request.signal)
+        else if (selection?.action === 'lighthouse-review-direct-open') value = await openLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-challenge-share') value = await shareReviewChallenge(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-report') value = await reviewHandoffReport(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-report-compare') value = await reviewHandoffReport(selection, request.signal, true)

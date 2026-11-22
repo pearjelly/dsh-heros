@@ -2393,6 +2393,8 @@
   "同一份材料、同一段任务，只加装交付前复核。试试确认交付或退回修改。": "Use the same material and task with Delivery Review added. Try confirming delivery or requesting changes.",
   "这局暂时无法加装交付前复核。": "Delivery Review is currently unavailable for this run.",
   "试试直接交付": "Try direct delivery",
+  "沿用原来的灯塔补给卡和任务，只卸下交付前复核。": "Use the same supply card and task with Delivery Review removed.",
+  "返回练习记录": "Back to lesson results",
   "两局实测结果": "Observed handoff results",
   "查看任务和出装": "View task and loadout",
   "用同一套复核出装再试一局": "Replay with this review loadout",
