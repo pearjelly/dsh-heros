@@ -1537,12 +1537,15 @@ window.__ModuleLoader__.load({
       const reviewTrial = preview?.kind === 'delivery-review'
       const hasRoutes = heroTrial || reviewTrial
       const canOpen = !preview?.blocked && preview?.token
+      const reviewInvitationReady = reviewTrial && Boolean(canOpen)
       const canReviewLocal = !hasRoutes && preview?.blocked && preview.canUseLocalLoadout === true
       const localLoadout = !hasRoutes && preview?.localLoadout === true
       const need = heroTrial && heroTrialNeeds.find(item => item.id === preview.need)
       const sampleLanguage = hasRoutes && ({ en: '英文', zh: '中文' })[preview.sampleLanguage]
+      const previewHeading = preview && h('h3', { ref: heading, tabIndex: -1 }, t(heroTrial ? heroTrialTitle
+        : reviewTrial ? '灯塔同题交接' : localLoadout ? '本机标准出装' : '关键证据缺失'))
       useEffect(() => () => pending.current?.abort(), [])
-      useEffect(() => { if (preview) heading.current?.focus() }, [preview])
+      useEffect(() => { if (preview && !reviewInvitationReady) heading.current?.focus() }, [preview, reviewInvitationReady])
 
       async function check(useLocal = false) {
         if (pending.current || (useLocal && !canReviewLocal)) return
@@ -1596,19 +1599,20 @@ window.__ModuleLoader__.load({
       }
 
       return h(InstallDialog, { title: t('加入灯塔挑战'), className: 'moba-starter-dialog',
-        busy: Boolean(busy), onCancel, initialFocus: '.moba-share-code',
+        busy: Boolean(busy), onCancel, initialFocus: reviewInvitationReady ? '.moba-handoff-invitation-heading h3' : '.moba-share-code',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onCancel() }) },
         h('form', { onSubmit: event => { event.preventDefault(); void check() } },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
-            h('label', null, t('挑战邀请或挑战码'),
+            !reviewInvitationReady && h('label', null, t('挑战邀请或挑战码'),
               h('textarea', { className: 'moba-share-code', ref: field, required: true, value: input, rows: 3, maxLength: lighthouseInvitationLimit + 1,
                 readOnly: Boolean(busy), spellCheck: false, autoComplete: 'off', autoCapitalize: 'off',
                 onChange: event => { setInput(event.target.value); setChecked(null); setError(''); setOpeningChoice('') } })),
             error && h('p', { className: 'moba-alert', role: 'alert' }, error),
             busy === 'check' && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对挑战要求…')),
             preview && h('div', { className: 'moba-share-review' },
-              h('h3', { ref: heading, tabIndex: -1 }, t(heroTrial ? heroTrialTitle
-                : reviewTrial ? '灯塔同题交接' : localLoadout ? '本机标准出装' : '关键证据缺失')),
+              reviewInvitationReady ? h('div', { className: 'moba-handoff-invitation-heading' }, previewHeading,
+                h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(busy),
+                  onClick: event => { event.preventDefault(); setChecked(null); setError('') } }, t('编辑邀请'))) : previewHeading,
               localLoadout && h(InstallFacts, { facts: [[t('原挑战的 DSH 版本'), preview.originalHost],
                 [t('本机 DSH 版本'), preview.host?.current ?? preview.host?.version]] }),
               heroTrial ? h(Fragment, null,
@@ -1631,7 +1635,7 @@ window.__ModuleLoader__.load({
               : h('p', { className: 'moba-starter-note' }, t('手动发送练习任务。如果出现证据取舍卡，请在会话里选择。')))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(busy), onClick: onCancel }, t('返回')),
-            h('button', { type: 'submit', className: canOpen || canReviewLocal ? 'moba-roster-open' : 'moba-start',
+            !reviewInvitationReady && h('button', { type: 'submit', className: canOpen || canReviewLocal ? 'moba-roster-open' : 'moba-start',
               disabled: Boolean(busy) || !input.trim() }, t('核对挑战码')),
             canReviewLocal && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy),
               onClick: () => void check(true) }, t('核对本机标准出装')),
@@ -1644,7 +1648,7 @@ window.__ModuleLoader__.load({
       { id: 'review', icon: 'lock', name: '复核后交付', gear: '交付物预览 + 交付前复核', note: '有明确的交接事项时，提示助手先用 DSH 确认卡请你确认交付或退回修改。' },
     ]
     function LighthouseReviewRoutes({ preview, sampleLanguage, disabled, onChoose, practice }) {
-      const showPracticeKit = practice && !preview.blocked && preview.routes.length > 0
+      const showKit = !preview.blocked && preview.routes.length > 0
       const descriptions = {
         direct: '准备好就把补给卡原件附到对话。',
         review: '交付前由你确认，或者退回修改。',
@@ -1654,7 +1658,7 @@ window.__ModuleLoader__.load({
           ? '好友选了直接交付。轮到你接班。' : '好友选了先复核。轮到你接班。')),
         h('fieldset', { className: 'moba-hero-trial-picks', disabled },
           h('legend', null, t('选你的交接打法')),
-          showPracticeKit && h('div', { className: 'moba-handoff-practice-kit' },
+          showKit && h('div', { className: 'moba-handoff-practice-kit' },
             h('span', null, t('共用出装')),
             h('div', null,
               h('span', null, h(Glyph, { kind: 'crest', size: 14 }), t('标准模式')),
@@ -1665,7 +1669,7 @@ window.__ModuleLoader__.load({
               disabled: !available, 'data-review-challenge-route': route.id, onClick: () => onChoose(route.id) },
               h(Glyph, { kind: route.icon, size: 20 }),
               h('span', null, h('strong', null, t(route.name)),
-                showPracticeKit && available && route.id === 'review' && h('small', { className: 'moba-handoff-added-gear' },
+                showKit && available && route.id === 'review' && h('small', { className: 'moba-handoff-added-gear' },
                   h(Glyph, { kind: 'plus', size: 12 }), t('交付前复核')),
                 h('small', null, t(available ? descriptions[route.id] : '本机暂时无法装配这套出装。'))))
           })),
@@ -11715,8 +11719,10 @@ window.__ModuleLoader__.load({
       .moba-stock-trial-task .moba-gallery-footer { flex-wrap: wrap; }
       .moba-stock-trial-task .moba-gallery-footer button { white-space: normal; }
       .moba-plan-fields .moba-share-code { font: 12px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
-      .moba-share-fields > h3, .moba-share-review > h3, .moba-share-section h3 { margin: 0; overflow-wrap: anywhere; }
-      .moba-share-fields > h3, .moba-share-review > h3 { color: var(--gold); font-size: 17px; }
+      .moba-share-fields > h3, .moba-share-review > h3, .moba-handoff-invitation-heading > h3, .moba-share-section h3 { margin: 0; overflow-wrap: anywhere; }
+      .moba-share-fields > h3, .moba-share-review > h3, .moba-handoff-invitation-heading > h3 { color: var(--gold); font-size: 17px; }
+      .moba-handoff-invitation-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
+      .moba-handoff-invitation-heading .moba-roster-open { padding-inline: 8px; }
       .moba-share-section h3 { padding-block: 4px; font-size: 13px; color: var(--gold); }
       .moba-share-review { display: grid; align-items: start; gap: 8px; min-width: 0; }
       .moba-share-host { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr);

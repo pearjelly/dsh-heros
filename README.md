@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.179.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.180.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -136,7 +136,7 @@ The chooser shows the shared loadout of **Standard** and **Deliverable Preview**
 
 After a verified review, choose **Try direct delivery** in the original conversation or its lesson results. Check that only Delivery Review is removed, then open a new draft with the same public sample and task. Send it yourself, then compare your review choice and the new run's actual attachment. You can bring either tested loadout to your own task.
 
-You can also choose **Invite a friend to the same handoff** after the round is verified. Your friend pastes the invitation into **Join a Lighthouse challenge** and picks a route. Both use the same public card and task language. The invitation contains the public sample and your route.
+You can also choose **Invite a friend to the same handoff** after the round is verified. Your friend pastes the invitation into **Join a Lighthouse challenge** and checks the code. The verified invitation shows the shared loadout and the extra Delivery Review gear before they pick a route. **Edit invitation** reopens the pasted text for a new check. Both use the same public card and task language. The invitation contains the public sample and your route.
 
 After both players finish, open **Exchange handoff reports** from a verified handoff. Copy your code and paste your friend's code to compare routes, recorded review decisions, and whether each handoff included the original card. **Try Delivery Review again** opens a new draft for the same public task so you can make another choice. Your files and session stay in your Profile.
 
