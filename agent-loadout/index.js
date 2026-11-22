@@ -6552,9 +6552,10 @@ export async function apply(ctx) {
               readHeroTrialArm(record, 'minimal', request.signal), readHeroTrialArm(record, lighthouseHeroDelivery, request.signal),
             ])
             observed = replay
+            const lessonTaskSource = heroDeliveryLessonSource(record, original, replay)
             value.heroTrial = { ...heroTrial, ...(replay.status === 'waiting' && { firstTaskPending: true }),
               ...(replay.presetChanged && { presetChanged: true }),
-              ...(heroDeliveryLessonSource(record, original, replay) && { verifiedDeliveryReplay: true }) }
+              ...(lessonTaskSource && { verifiedDeliveryReplay: true, lessonTaskSource }) }
           } else {
             const stockTask = heroTrial.arm === 'standard' || record.need === 'summary'
             observed = await readHeroTrialArm(record, heroTrial.arm, request.signal, stockTask)

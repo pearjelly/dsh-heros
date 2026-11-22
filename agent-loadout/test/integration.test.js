@@ -1809,6 +1809,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       originalFile: { name: material, seq: delivery.seq, index: 0 } })
     const replayMember = (await equipmentIn(host, replay.sessionId)).heroTrial
     assert.equal(replayMember.verifiedDeliveryReplay, true)
+    assert.deepEqual(replayMember.lessonTaskSource, replayed.minimalReplay.lessonTaskSource)
     assert.equal(replayMember.canCopyHeroReport, true)
     const equippedOutcome = { arm: 'minimal-present', originalAttached: true, meetsNeed: true }
     const equippedCode = reportCode({ ...standardFields, arm: 'minimal-present' })
@@ -1832,7 +1833,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(registered.rpcId, rpcId)
     assert.equal(registered.result.ok, true, JSON.stringify(registered.result))
     const { workspaceId } = registered.result.value.workspace
-    const options = await invoke('lesson-task-options', transfer)
+    const options = await invoke('lesson-task-options', replayMember.lessonTaskSource)
     assert.ok(options.workspaceIds.includes(workspaceId))
     assert.ok([standard, minimal, replay].every(item => !options.workspaceIds.includes(item.workspaceId)))
     assert.equal(options.source.sessionId, replay.sessionId)
@@ -1844,7 +1845,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const listed = await invoke('lesson-task-materials', { ...transfer, workspaceId, directory: ownFolder })
     assert.deepEqual(listed.entries.map(file => [file.name, file.path, file.kind]), [[ownFilename, ownMaterial, 'file']])
     await invoke('lesson-task-materials', { ...transfer, workspaceId: replay.workspaceId }, 422)
-    const selection = { ...transfer, workspaceId, material: ownMaterial,
+    const selection = { ...replayMember.lessonTaskSource, workspaceId, material: ownMaterial,
       task: '查看台账中已经点验的物资和存放地点，给夜班一条交接摘要，并把该台账的原件附在这个对话。' }
     const ownPreview = await invoke('lesson-task-preview', selection)
     assert.deepEqual(ownPreview.source, options.source)
@@ -1865,6 +1866,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(changedReplay.deliveryReplay, undefined)
     const staleReplay = (await equipmentIn(host, replay.sessionId)).heroTrial
     assert.equal(staleReplay.verifiedDeliveryReplay, undefined)
+    assert.equal(staleReplay.lessonTaskSource, undefined)
     assert.equal(staleReplay.canCopyHeroReport, undefined)
     await shareHandoff(trial.id, 'minimal-present', 422)
     await invoke('lesson-task-options', transfer, 422)
@@ -1872,7 +1874,9 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     await writeFile(replayCard, materialBytes)
     await appendFile(originalCard, '\nChanged after comparing both runs.\n')
     assert.equal((await read(trial.id)).deliveryReplay, undefined)
-    assert.equal((await equipmentIn(host, replay.sessionId)).heroTrial.verifiedDeliveryReplay, undefined)
+    const staleOriginal = (await equipmentIn(host, replay.sessionId)).heroTrial
+    assert.equal(staleOriginal.verifiedDeliveryReplay, undefined)
+    assert.equal(staleOriginal.lessonTaskSource, undefined)
     await writeFile(originalCard, materialBytes)
     assert.deepEqual((await read(trial.id)).deliveryReplay, replayed.deliveryReplay)
     assert.deepEqual(await nativeSessions(), beforePersonal)
@@ -2271,6 +2275,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(wrongReplay.status, 'complete')
     assert.equal(wrongReplay.originalAttached, false)
     assert.equal(wrongReplay.lessonTaskSource, undefined)
+    assert.equal((await equipmentIn(host, badReplay.sessionId)).heroTrial.lessonTaskSource, undefined)
     await invoke('lesson-task-options', { ...transfer, comparisonId: alternateTrial.id }, 422)
     assert.deepEqual((await host.request(endpoint)).value.plans, before.plans)
 
