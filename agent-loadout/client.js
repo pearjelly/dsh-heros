@@ -5918,9 +5918,9 @@ window.__ModuleLoader__.load({
       const [attempt, retry] = useState(0)
       const [opening, setOpening] = useState(false)
       const [addedWorkspace, setAddedWorkspace] = useState(null)
-      const { kind, comparisonId, arm } = source ?? emptyMap
+      const { kind, comparisonId, arm, handoffPairId } = source ?? emptyMap
       const optionsAction = armoryDraft ? 'armory-task-options' : 'lesson-task-options'
-      const reference = JSON.stringify([optionsAction, kind, comparisonId, arm])
+      const reference = JSON.stringify([optionsAction, kind, comparisonId, arm, handoffPairId])
       const membership = JSON.stringify(workspaces.map(item => item.workspaceId).sort())
       const current = loaded?.reference === reference ? loaded : null
       const refreshed = current?.membership === membership && current?.attempt === attempt
@@ -5934,7 +5934,7 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         const abort = new AbortController()
-        request(optionsAction, { action: optionsAction, kind, comparisonId, arm }, abort.signal, language)
+        request(optionsAction, { action: optionsAction, kind, comparisonId, arm, handoffPairId }, abort.signal, language)
           .then(value => { if (!abort.signal.aborted) setLoaded({ value, reference, membership, attempt }) })
           .catch(reason => {
             if (!abort.signal.aborted) setLoaded(previous => ({
@@ -5943,14 +5943,18 @@ window.__ModuleLoader__.load({
             }))
           })
         return () => abort.abort()
-      }, [request, optionsAction, kind, comparisonId, arm, attempt, language, reference, membership])
+      }, [request, optionsAction, kind, comparisonId, arm, handoffPairId, attempt, language, reference, membership])
 
       const stockTaskLabel = kind === 'hero-trial' && stockTrialTaskLabels[arm]
-      return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : armoryDraft ? armoryTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
+      const alternateHandoff = rebaseline && handoffStyle
+      return h(InstallDialog, { title: t(alternateHandoff ? '尝试另一种交接打法'
+        : rebaseline ? rebaselineTaskLabel : armoryDraft ? armoryTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
         className: stockTaskLabel ? 'moba-lighthouse-comparison moba-stock-trial-task' : 'moba-lighthouse-comparison',
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
         handoffStyle && h(InstallFacts, { facts: [[t('交接打法'), t(handoffStyle === 'review' ? '复核后交付' : '直接交付')]] }),
-        rebaseline && h('p', { className: 'moba-lighthouse-note' }, t('用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
+        rebaseline && h('p', { className: 'moba-lighthouse-note' }, t(alternateHandoff
+          ? '已带入刚才的文件和任务说明。核对后打开新草稿，再手动发送。'
+          : '用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
         options ? h(LoadoutTaskForm, { lessonSource: options.source, armoryDraft, workspaces: allowed, request,
           initialWorkspaceId: rebaseline?.workspaceId ?? initialWorkspaceId, initialMaterial: rebaseline?.material, initialBrief: rebaseline?.brief, backLabel,
           workspaceSetup: setup, addedWorkspace: addedAllowed ? addedWorkspace : undefined,
@@ -6141,7 +6145,8 @@ window.__ModuleLoader__.load({
             }
           }
           const selector = armoryDraft ? { draft: armoryDraft.draft } : lessonSource
-            ? { kind: lessonSource.kind, comparisonId: lessonSource.comparisonId, arm: lessonSource.arm }
+            ? { kind: lessonSource.kind, comparisonId: lessonSource.comparisonId, arm: lessonSource.arm,
+              ...(lessonSource.handoffPairId && { handoffPairId: lessonSource.handoffPairId }) }
             : { id: selected.id, revision: selected.revision }
           const input = { ...selector, workspaceId: workspace.workspaceId,
             material: material.trim(), task: brief.trim() }
@@ -9367,6 +9372,7 @@ window.__ModuleLoader__.load({
       const rematchButton = useRef(null)
       const rebaselineButton = useRef(null)
       const alternateButton = useRef(null)
+      const handoffAlternateButton = useRef(null)
       const sourceTrialButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
       const action = 'lesson-task-result'
@@ -9380,6 +9386,7 @@ window.__ModuleLoader__.load({
       const sourceArm = source && comparisonArmConfig(source.kind, source.arm)
       const sourceLabel = source && [comparisonArmName(sourceArm, source), source.heroName].filter(Boolean).join(' · ')
       const alternateLabel = alternateTaskLabels[result?.alternateTask?.arm]
+      const handoffAlternate = result?.handoffAlternate
       const sourceTrial = !alternateLabel && result?.sourceTrial?.arm === 'standard' ? result.sourceTrial : undefined
       const reviewedRunTools = pairSide && result?.draft && result.materialDelivered === true
         ? [...new Set(result.entries?.filter(entry => entry.type === 'tool' && entry.state === 'completed').map(entry => entry.name))]
@@ -9415,7 +9422,8 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (review || !current || !initialPersonalFocus || restoredPersonalFocus.current) return
         restoredPersonalFocus.current = true
-        const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton, 'source-trial': sourceTrialButton }
+        const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton,
+          'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton }
         const button = buttons[initialPersonalFocus]?.current
         const target = button ?? rebaselineButton.current ?? reviewHeading.current
         target?.focus()
@@ -9454,6 +9462,10 @@ window.__ModuleLoader__.load({
               ].filter(Boolean).join(' · ')),
               alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
+              handoffAlternate && h('button', { ref: handoffAlternateButton, type: 'button', className: 'moba-match-move',
+                'aria-haspopup': 'dialog', 'data-personal-handoff-alternate': handoffAlternate.style,
+                onClick: () => onPersonalFlow({ mode: 'handoff-alternate', ...handoffAlternate }) },
+              t(handoffAlternate.style === 'review' ? '用复核后交付再试' : '用直接交付再试'), h(Glyph, { kind: 'arrow', size: 16 })),
               sourceTrial && h('button', { ref: sourceTrialButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'source-trial', source: sourceTrial }) },
                 t('在灯塔试玩标准模式'), h(Glyph, { kind: 'arrow', size: 16 })),
@@ -10512,6 +10524,9 @@ window.__ModuleLoader__.load({
         personalFlow?.mode === 'rebaseline' && h(PersonalBaselineTask, { source: personalFlow.source, rebaseline: personalFlow.rebaseline,
           armoryDraft: personalFlow.armoryDraft, workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'alternate' && h(LessonTaskAlternate, { sessionId, request,
+          onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
+        personalFlow?.mode === 'handoff-alternate' && h(PersonalBaselineTask, { source: personalFlow.source,
+          rebaseline: personalFlow.rebaseline, handoffStyle: personalFlow.style, workspaces, request,
           onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'source-trial' && h(PersonalTaskSourceTrial, { source: personalFlow.source, workspaces, sessionId, request,
           onClose: () => closePersonalFlow(), onVisit: visitPersonalFlow }),

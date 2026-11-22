@@ -54,6 +54,7 @@ const evidenceLesson = 'lighthouse-evidence'
 const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).digest('hex')
 const reviewChallengeUnavailable = '请先完成并核验一局灯塔交付。'
 const reviewRoutesUnavailable = '本机暂时无法装配灯塔交接的出装。'
+const handoffPairChanged = '这两局的实测出装暂不可用，请返回交接对照重新核对。'
 const validReviewReplaySource = source => comparisonIdValid(source?.comparisonId) &&
   ((source.kind === 'workspace' && source.arm === 'review') || (source.kind === 'rematch' && source.arm === 'rematch'))
 const heroTrialUnavailable = '本机的标准模式与极简模式暂时无法进行这场试玩。'
@@ -1925,13 +1926,38 @@ export async function apply(ctx) {
       prior.workspaceId === record.workspaceId) return
     const review = await verifiedReviewHandoff(comparisons, prior, source.arm, signal, { includeSide: true })
     if (review?.played !== 'review' || review.side.sessionId === direct.sessionId) return
-    return { material: record.material, arms: [
+    const arms = [
       { id: 'review', style: 'review', choices: [review.choiceLabel], materialDelivered: review.originalAttached,
         deliveredCount: review.side.deliverables.length, ...review.side },
       { id: 'direct', style: 'direct', choices: [], materialDelivered: true,
         deliveredCount: direct.deliverables.length, sessionId: direct.sessionId, deliverables: direct.deliverables,
         ...(direct.lessonTaskSource && { lessonTaskSource: direct.lessonTaskSource }) },
-    ] }
+    ].map(side => side.lessonTaskSource
+      ? { ...side, lessonTaskSource: { ...side.lessonTaskSource, handoffPairId: record.id } } : side)
+    return { material: record.material, arms }
+  }
+
+  async function matchedHandoffTaskPair({ handoffPairId, kind, comparisonId, arm }, signal) {
+    if (!comparisonIdValid(handoffPairId)) return
+    const record = workspaceComparisons.read(handoffPairId)
+    if (!record?.reviewReplaySource || ctx.get('workspaceRegistry')?.get(record.workspaceId)?.path !== record.cwd) return
+    const [direct, materialState] = await Promise.all([
+      readComparisonArm(workspaceComparisons, record, 'direct', signal),
+      workspaceMaterialState(record, signal),
+    ])
+    const pair = await ownReviewPair(record, direct, materialState, signal)
+    const selected = pair?.arms.find(side => {
+      const source = side.lessonTaskSource
+      return source && source.kind === kind && source.comparisonId === comparisonId && source.arm === arm
+    })
+    const alternate = selected && pair.arms.find(side => side.id !== selected.id && side.lessonTaskSource)
+    if (selected && alternate) return { selected, alternate }
+  }
+
+  async function verifyHandoffTaskPair(source, signal) {
+    if (source.handoffPairId !== undefined && !await matchedHandoffTaskPair(source, signal)) {
+      throw new Error(handoffPairChanged)
+    }
   }
 
   async function reviewChallengeLoadouts(context, tokenScope, signal) {
@@ -4237,12 +4263,14 @@ export async function apply(ctx) {
 
   async function lessonTaskOptions(selection, signal) {
     const { view } = await verifiedLessonTaskSource(selection, signal)
-    return { source: view, workspaceIds: await personalWorkspaceIds(signal) }
+    const { handoffPairId } = selection
+    await verifyHandoffTaskPair(selection, signal)
+    return { source: { ...view, ...(handoffPairId && { handoffPairId }) }, workspaceIds: await personalWorkspaceIds(signal) }
   }
 
   function requestedLessonTask(selection, english) {
-    const { kind, comparisonId, arm, workspaceId } = selection
-    const source = { kind, comparisonId, arm }
+    const { kind, comparisonId, arm, workspaceId, handoffPairId } = selection
+    const source = { kind, comparisonId, arm, ...(handoffPairId !== undefined && { handoffPairId }) }
     if (!validLessonTaskReference(source)) throw new Error('请从已经核验的灯塔练习开始。')
     if (typeof workspaceId !== 'string' || !workspaceId || workspaceId.length > 512) throw new Error('请选择一个现有的工作区。')
     const fields = { source, workspaceId, ...planTaskPrompt(selection, english) }
@@ -4272,13 +4300,16 @@ export async function apply(ctx) {
   async function checkLessonTask(input, signal) {
     const { workspaceId, material, task, hash, english } = input
     const { draft, candidate, ecosystem, proof, view: source, stockBindings } = await verifiedLessonTaskSource(input.source, signal)
+    await verifyHandoffTaskPair(input.source, signal)
     const { workspace, digest } = await readPersonalTaskMaterial(workspaceId, material, signal)
     const cwd = workspace.path
     const lessonName = isStockTrialSource(source) ? presetLabels.get(source.arm)[0]
       : source.heroDeliveryTrial ? '极简模式 + 交付物预览'
       : source.publicEvidenceReplay ? '灯塔证据换装对照' : source.lesson === evidenceLesson ? '灯塔证据取舍' : '灯塔换装练习'
     const planName = english ? englishText(lessonName) : lessonName
-    const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task, source }
+    const { handoffPairId } = input.source
+    const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task,
+      source: { ...source, ...(handoffPairId && { handoffPairId }) } }
     const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, proof])).digest('hex')
     signal?.throwIfAborted()
     return { view, cwd, digest, draft, candidate, ecosystem, token, identity: proof.identity, stockBindings }
@@ -5150,7 +5181,8 @@ export async function apply(ctx) {
     try {
       const { header, launch } = planTaskDetails(source)
       if (!launch || (launch.armory !== true && (!launch.source || !validLessonTaskReference(launch.source)))) return
-      const verifyEvidence = launch.armory === true || isEvidenceLessonSource(launch.source) || isPublicEvidenceReplaySource(launch.source) ||
+      const verifyEvidence = launch.armory === true || Boolean(launch.source?.handoffPairId) ||
+        isEvidenceLessonSource(launch.source) || isPublicEvidenceReplaySource(launch.source) ||
         isHeroTrialTaskSource(launch.source)
       const { cwd, agentPreset: presetId } = header
       const target = personalTaskTarget(launch, header)
@@ -5203,6 +5235,17 @@ export async function apply(ctx) {
     } catch {
       signal?.throwIfAborted()
     }
+  }
+
+  async function personalHandoffAlternate({ launch, target, evidence }, rebaseline, signal) {
+    if (!launch.source?.handoffPairId || !target || !rebaseline || evidence.status !== 'complete' ||
+      evidence.materialState !== 'verified' || evidence.continuationReason) return
+    const proof = await matchedHandoffTaskPair(launch.source, signal)
+    if (!proof) return
+    const attached = evidence.materialDelivered && completedPresentDelivery(evidence)
+    const observed = proof.selected.style === 'direct' ? attached : singleReviewAnswer(evidence)
+    if (!observed || await personalTaskMaterialState(target, signal) !== 'verified') return
+    return { source: proof.alternate.lessonTaskSource, style: proof.alternate.style, rebaseline }
   }
 
   async function readLessonTaskResult({ sessionId, review, pairSide }, signal) {
@@ -5271,11 +5314,13 @@ export async function apply(ctx) {
         }
       }
     }
+    const handoffAlternate = canReview && review !== true && await personalHandoffAlternate(resultView, rebaseline, signal)
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
+      ...(handoffAlternate && { handoffAlternate }),
       ...(sourceTrial && { sourceTrial }),
       ...(heroPair && { heroPair: personalHeroPairResult(heroPair) }),
       ...(armoryDraft && { armoryDraft }), ...(armoryReason && { reason: armoryReason }) }
