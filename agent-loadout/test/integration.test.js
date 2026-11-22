@@ -2262,6 +2262,8 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.ok(preview.comparison.gained.some(item => item.id === 'review'))
     assert.equal(preview.task, baseline.task)
     const retry = launch => invoke('rematch-comparison-open', { ...root, change, token: preview.token, launchId: launch })
+    const replayReview = (comparisonId, launchId, status) => invoke('lighthouse-review-repeat', { comparisonId, launchId }, status)
+    await replayReview(baseline.id, '1'.repeat(32), 422)
     const questions = '/api/loadout-fixture-handoff-question'
     async function choose(attempt, answer) {
       assert.notEqual(attempt.sessionId, baseline.sessionId)
@@ -2288,6 +2290,8 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
         assert.equal(pending.status, 'waiting-choice')
         assert.ok(!pending.deliverables?.length)
         assert.equal(comparison.publicReviewOutcome, undefined)
+        assert.equal(comparison.canRepeatLighthouseReview, undefined)
+        assert.equal(comparison.reviewChoiceComparison, undefined)
       } finally {
         if (question) await host.request(questions, { sessionId: attempt.sessionId, choice: answer })
         await turn
@@ -2301,6 +2305,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
       assert.equal(rematch.status, 'complete')
       assert.deepEqual(rematch.entries[0].choices, [answer])
       const outcome = completed.publicReviewOutcome
+      assert.equal(completed.canRepeatLighthouseReview, true)
       assert.equal(outcome.material, material)
       assert.deepEqual(outcome.arms.map(({ id, style, choices, sessionId }) => [id, style, choices, sessionId]), [
         ['baseline', 'direct', [], baseline.sessionId], ['rematch', 'review', [answer], attempt.sessionId],
@@ -2315,10 +2320,13 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
       const events = (await history(attempt.sessionId)).events
       const user = events.find(item => item.type === 'user/message' && item.data.source.kind === 'user')
       assert.equal(user.data.content[0].text, baseline.task)
-      return { rematch, outcome: outcome.arms[1], presented: events.find(item => item.type === 'deliverables/presented') }
+      return { rematch, outcome: outcome.arms[1], paired: completed.reviewChoiceComparison,
+        presented: events.find(item => item.type === 'deliverables/presented') }
     }
     const confirmed = await retry('b'.repeat(32))
+    await replayReview(confirmed.id, '1'.repeat(32), 422)
     const confirmedResult = await choose(confirmed, 'Confirm handoff')
+    assert.equal(confirmedResult.paired, undefined)
     assert.deepEqual(confirmedResult.rematch.entries.map(item => item.name), ['ask_user_question', 'present'])
     assert.equal(confirmedResult.outcome.materialDelivered, true)
     assert.equal(confirmedResult.outcome.deliveredCount, 1)
@@ -2326,7 +2334,14 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
       [{ name: material, turn: 1, seq: confirmedResult.presented.seq, index: 0 }])
     assert.deepEqual(confirmedResult.rematch.deliverables, confirmedResult.outcome.deliverables)
     assert.equal(confirmedResult.presented.data.files[0].path, directFile.data.files[0].path)
-    const revised = await retry('c'.repeat(32))
+    await replayReview(confirmed.id, '../', 422)
+    const [revised, duplicate] = await Promise.all([replayReview(confirmed.id, 'c'.repeat(32)), replayReview(confirmed.id, 'c'.repeat(32))])
+    assert.deepEqual(duplicate, revised)
+    assert.notEqual(revised.sessionId, confirmed.sessionId)
+    const [confirmedNative, revisedDraft] = await Promise.all([history(confirmed.sessionId), history(revised.sessionId)])
+    assert.equal(revisedDraft.presetId, confirmedNative.presetId)
+    assert.ok(noMessages(revisedDraft))
+    assert.equal((await invoke('rematch-comparison', { comparisonId: confirmed.id })).reviewChoiceComparison, undefined)
     const revisedResult = await choose(revised, 'Revise draft')
     assert.deepEqual(revisedResult.rematch.entries.map(item => item.name), ['ask_user_question'])
     assert.deepEqual(revisedResult.rematch.deliverables, [])
@@ -2334,6 +2349,12 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal(revisedResult.outcome.materialDelivered, false)
     assert.equal(revisedResult.outcome.deliveredCount, 0)
     assert.deepEqual(revisedResult.outcome.deliverables, [])
+    const confirmedSide = { sessionId: confirmed.sessionId, choices: ['Confirm handoff'], materialDelivered: true,
+      deliverables: confirmedResult.outcome.deliverables }
+    const revisedSide = { sessionId: revised.sessionId, choices: ['Revise draft'], materialDelivered: false, deliverables: [] }
+    assert.deepEqual(revisedResult.paired, { current: revisedSide, other: confirmedSide })
+    const confirmedBoard = await invoke('rematch-comparison', { comparisonId: confirmed.id })
+    assert.deepEqual(confirmedBoard.reviewChoiceComparison, { current: confirmedSide, other: revisedSide })
     assert.deepEqual(new Set(await membership(lesson.workspaceId)), new Set([baseline.sessionId, confirmed.sessionId, revised.sessionId]))
 
     const personalPath = join(directory, 'personal')
@@ -2350,7 +2371,10 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal((await equipmentIn(host, baseline.sessionId)).workspaceComparison.canTryDeliveryReview, undefined)
     const staleComparison = await invoke('rematch-comparison', { comparisonId: confirmed.id })
     assert.equal(staleComparison.publicReviewOutcome, undefined)
+    assert.equal(staleComparison.reviewChoiceComparison, undefined)
+    assert.equal(staleComparison.canRepeatLighthouseReview, undefined)
     assert.equal(staleComparison.arms.find(arm => arm.id === 'rematch').status, 'complete')
+    await replayReview(confirmed.id, 'f'.repeat(32), 422)
     assert.deepEqual((await read(filter)).arms[0], direct)
     await invoke('rematch-comparison-options', root, 422)
     await invoke('rematch-comparison-preview', { ...root, change }, 422)

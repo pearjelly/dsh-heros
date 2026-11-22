@@ -4309,6 +4309,19 @@ export async function apply(ctx) {
     return { ...view, comparison }
   }
 
+  async function repeatLighthouseReview({ comparisonId, launchId }, english, signal) {
+    if (!validOpeningId(launchId)) throw new Error('开局请求无效，请重试。')
+    const record = rematchComparisons.read(comparisonId)
+    const unavailable = '请先完成一局已核验的灯塔交付复核。'
+    if (!record || !isLighthouseReviewRematch(record, previousComparison(record))) throw new Error(unavailable)
+    const { publicReviewOutcome } = await readComparisonArms(rematchComparisons, record, signal)
+    if (reviewedChoice(publicReviewOutcome)?.choices.length !== 1) throw new Error(unavailable)
+    const { kind, comparisonId: original, arm } = record.baseline
+    const id = createHash('sha256').update(JSON.stringify(['lighthouse-review-repeat', comparisonId, launchId])).digest('hex').slice(0, 32)
+    const baselineSelection = { kind, comparisonId: original, arm, change: record.edit, token: record.token, launchId: id }
+    return openComparisonArm(rematchComparisons, { arm: 'rematch', launchId: id, baselineSelection }, english, signal)
+  }
+
   async function createRematch(selection, registry, signal) {
     const input = requestedRematch(selection)
     const { launchId, token } = selection
@@ -4448,6 +4461,33 @@ export async function apply(ctx) {
       previous.original.lesson === lighthouseLesson && baseline.arm === 'direct' &&
       baseline.heroId === 'standard' && loadout.heroId === 'standard' &&
       edit.addId === 'review' && edit.removeId === undefined && edit.sourceId === undefined
+  }
+
+  function reviewedChoice(outcome) {
+    return outcome?.arms.find(side => side.style === 'review')
+  }
+
+  async function compareReviewChoices(record, current, signal) {
+    const normalize = choice => choice.normalize('NFKC').trim().toLowerCase()
+    const currentChoice = normalize(current.choices[0])
+    if (!currentChoice) return
+    const candidates = Array.from(rematchComparisons.list()).filter(other =>
+      other.id !== record.id && other.token === record.token && other.workspaceId === record.workspaceId &&
+      other.cwd === record.cwd && other.digest === record.digest && other.material === record.material && other.task === record.task)
+      .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id))
+    for (let index = 0; index < candidates.length; index += 4) {
+      signal?.throwIfAborted()
+      const observed = await Promise.all(candidates.slice(index, index + 4).map(candidate =>
+        readComparisonArm(rematchComparisons, candidate, 'rematch', signal,
+          { verifyPersonalDelivery: true, linkedChoicesOnly: true, includeFileCoordinates: true })))
+      for (const arm of observed) {
+        if (!verifiedEvidenceArm(arm) || typeof arm.materialDelivered !== 'boolean') continue
+        const choices = comparisonChoices(arm)
+        if (choices.length !== 1 || !normalize(choices[0]) || normalize(choices[0]) === currentChoice) continue
+        const side = ({ sessionId, deliverables, materialDelivered }, choices) => ({ sessionId, deliverables, materialDelivered, choices })
+        return { current: side(current, current.choices), other: side(arm, choices) }
+      }
+    }
   }
 
   function observedHandoffOutcome(material, arms, styles) {
@@ -4974,8 +5014,13 @@ export async function apply(ctx) {
     const canShareChallenge = completedLighthouseChallenge(record, practice)
     const canShareEvidenceReport = Boolean(observedLighthouseEvidenceReport(record, practice, materialState))
     if (canShareChallenge && materialState === 'verified') practice.canReplayLighthouseEvidence = true
+    const currentReview = materialState === 'verified' ? reviewedChoice(publicReviewOutcome) : undefined
+    const canRepeatLighthouseReview = currentReview?.choices.length === 1
+    const reviewChoiceComparison = canRepeatLighthouseReview && await compareReviewChoices(record, currentReview, signal)
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
       ...(publicReviewOutcome && materialState === 'verified' && { publicReviewOutcome }),
+      ...(canRepeatLighthouseReview && { canRepeatLighthouseReview: true }),
+      ...(reviewChoiceComparison && { reviewChoiceComparison }),
       ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),
       ...(record.lesson === evidenceLesson && { scenario: record.scenario }), ...(record.evidenceRetest && { evidenceRetest: true }),
       ...(evidenceRetestOutcome && { evidenceRetestOutcome }), ...(evidenceOpeningChoice && { evidenceOpeningChoice }),
@@ -6433,6 +6478,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-evidence-report') value = await evidenceHandoffReport(selection, request.signal)
         else if (selection?.action === 'lighthouse-evidence-report-compare') value = await evidenceHandoffReport(selection, request.signal, true)
         else if (selection?.action === 'lighthouse-evidence-repeat') value = await repeatLighthouseEvidence(selection, request.signal)
+        else if (selection?.action === 'lighthouse-review-repeat') value = await repeatLighthouseReview(selection, english, request.signal)
         else if (selection?.action === 'hero-trial-challenge-share') value = await shareHeroChallenge(selection, request.signal)
         else if (selection?.action === 'hero-trial-handoff-report') value = await heroHandoffReport(selection, request.signal)
         else if (selection?.action === 'hero-trial-handoff-compare') value = await heroHandoffReport(selection, request.signal, true)

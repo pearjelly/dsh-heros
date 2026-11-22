@@ -2333,6 +2333,24 @@ window.__ModuleLoader__.load({
         })))
     }
 
+    function ReviewChoiceComparison({ comparison, onVisit, busy }) {
+      const heading = useId()
+      const rounds = [['本次复核', comparison.current], ['另一次复核', comparison.other]]
+      return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading },
+        h('h3', { id: heading }, t('同一出装的两种取舍')),
+        h('div', { className: 'moba-lighthouse-arms' }, rounds.map(([name, round]) => {
+          const label = t(name)
+          const files = round.deliverables ?? empty
+          return h('section', { key: round.sessionId, className: 'moba-lighthouse-arm', 'aria-label': label },
+            h('h4', null, label), h(ObservedChoiceSummary, { choices: round.choices }),
+            files.length > 0 ? h(LessonTaskFiles, { files, sessionId: round.sessionId,
+              materialDelivered: round.materialDelivered, headingTag: 'h5' })
+              : h('p', { className: 'moba-lighthouse-note' }, t('本局没有交付文件。')),
+            h('footer', null, h('button', { type: 'button', className: 'moba-text', disabled: busy,
+              'aria-label': t('查看原会话') + ' · ' + label, onClick: () => onVisit(round.sessionId) }, t('查看原会话'))))
+        })))
+    }
+
     function EvidenceOutcomeSummary({ outcome, onPreserve, publicReplay, onLessonTask, onVisit, busy }) {
       const heading = useId()
       return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading },
@@ -2844,6 +2862,8 @@ window.__ModuleLoader__.load({
       const evidenceReplay = publicEvidenceReplay || kind === 'rematch' && (value?.evidenceReplay ?? evidenceReplayHint)
       const handoff = kind === 'rematch' && !evidenceReplay ? value?.handoffOutcome : undefined
       const publicReviewOutcome = kind === 'rematch' ? value?.publicReviewOutcome : undefined
+      const canRepeatLighthouseReview = kind === 'rematch' && value?.canRepeatLighthouseReview === true
+      const reviewChoiceComparison = kind === 'rematch' && value?.reviewChoiceComparison
       const evidenceOutcome = evidenceReplay && !testedSourceArm ? value?.evidenceOutcome : undefined
       const evidenceSummary = evidenceOutcome && h(EvidenceOutcomeSummary, { outcome: evidenceOutcome, publicReplay: publicEvidenceReplay,
         busy: Boolean(launch), onVisit, onLessonTask: publicEvidenceReplay ? arm => setLessonTask({ id: arm.id,
@@ -2899,6 +2919,29 @@ window.__ModuleLoader__.load({
           }
           const opened = await request(action, { action, comparisonId: value.id, arm,
             ...(kind !== 'plans' && { launchId: launchIds.current.get(key) }), ...first }, undefined, language)
+          launchIds.current.delete(key)
+          onVisit(opened.sessionId, opened.task)
+        } catch (reason) {
+          setError(reason.message)
+        } finally {
+          starting.current = false
+          setLaunch('')
+        }
+      }
+
+      async function repeatLighthouseReview() {
+        if (starting.current || !canRepeatLighthouseReview || !value.id) return
+        const action = 'lighthouse-review-repeat'
+        const key = JSON.stringify([action, value.id])
+        if (!launchIds.current.has(key)) {
+          const bytes = crypto.getRandomValues(new Uint8Array(16))
+          launchIds.current.set(key, Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''))
+        }
+        starting.current = true
+        setLaunch(action)
+        setError('')
+        try {
+          const opened = await request(action, { action, comparisonId: value.id, launchId: launchIds.current.get(key) }, undefined, language)
           launchIds.current.delete(key)
           onVisit(opened.sessionId, opened.task)
         } catch (reason) {
@@ -2974,6 +3017,9 @@ window.__ModuleLoader__.load({
           setEvidenceReport('')
         } })
 
+      const freshLesson = practice && value?.id && h('button', { type: 'button', className: 'moba-roster-open moba-new-lesson',
+        disabled: canRepeatLighthouseReview && Boolean(launch), onClick: () => setLessonLaunchOpen(true) },
+        t(evidence ? '开始新的证据取舍' : '开始新的换装练习'))
       return h(InstallDialog, { title: t(comparisonTitle(kind, lessonMarker, evidenceReplay, publicEvidenceReplay)),
         className: 'moba-lighthouse-comparison' + (publicEvidenceReplay || canShareEvidenceReport ? ' moba-public-evidence-comparison' : ''),
         busy: Boolean(launch),
@@ -3003,6 +3049,7 @@ window.__ModuleLoader__.load({
           kind === 'rematch' && h(RematchChangeFacts, { change: value.change }),
           publicReviewOutcome && h(HandoffOutcomeSummary, { outcome: publicReviewOutcome, onVisit, busy: Boolean(launch),
             onLessonTask: arm => setLessonTask({ id: arm.id, lessonTaskSource: arm.lessonTaskSource, fromSummary: true }) }),
+          reviewChoiceComparison && h(ReviewChoiceComparison, { comparison: reviewChoiceComparison, onVisit, busy: Boolean(launch) }),
           previous && h(PreviousComparisonLink, { reference: previous, onOpen: onPrevious, disabled: Boolean(launch) }),
           personal && value.materialState === 'verified' && h('p', { className: 'moba-lighthouse-note' }, t('材料与本组记录的版本一致。')),
           materialWarning && h('p', { className: 'moba-alert', role: 'status' }, t(materialWarning), ' ',
@@ -3041,15 +3088,18 @@ window.__ModuleLoader__.load({
               onRematch: !evidenceReplay && canRematchComparisonArm(kind, arm) && value.id && !(lesson && materialWarning)
                 ? arm => setRematch({ id: value.id, arm: arm.id, sessionId: arm.sessionId }) : undefined,
               onNotice: outcome => setNotice(t(draftNotices[outcome] ?? draftNotices.blocked)) }))),
-          finished && !publicReviewOutcome && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t('两次尝试已完成，可以回看实际调用和交付。'))),
+          finished && !publicReviewOutcome && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t('两次尝试已完成，可以回看实际调用和交付。')),
+          canRepeatLighthouseReview && freshLesson && h('div', { className: 'moba-detail-actions' }, freshLesson)),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
+          canRepeatLighthouseReview && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
+            title: t('用同一套复核出装再试一局'), onClick: repeatLighthouseReview },
+            t(launch === 'lighthouse-review-repeat' ? '正在准备对局…' : '复核再试一局')),
           (onBack || onHistory) && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
             onClick: onBack ?? onHistory }, onBack ? backLabel ?? backToRunHistoryLabel() : runHistoryLabel()),
           kind === 'workspace' && evidence && value?.canShareChallenge && h('button', { type: 'button',
             className: 'moba-roster-open moba-lighthouse-challenge-share', 'aria-haspopup': 'dialog',
             onClick: () => setChallengeShareId(value.id) }, t('分享灯塔挑战')),
-          practice && value?.id && h('button', { type: 'button', className: 'moba-roster-open moba-new-lesson',
-            onClick: () => setLessonLaunchOpen(true) }, t(evidence ? '开始新的证据取舍' : '开始新的换装练习')),
+          !canRepeatLighthouseReview && freshLesson,
           !practice && (kind === 'workspace' || kind === 'lighthouse') && value?.id && !prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
             onClick: () => switchPreview(true) }, t('开始新的对照')),
           prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
