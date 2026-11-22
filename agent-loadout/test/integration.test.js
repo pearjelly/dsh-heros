@@ -2710,7 +2710,13 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     await compareReview(directSource, reviewCode, 422)
     const repeatReport = (code, status) =>
       invoke('lighthouse-review-report-replay', { ...reviewSource, code, launchId: '7'.repeat(32) }, status)
+    const tryDirectReport = (code, source = reviewSource, status) =>
+      invoke('lighthouse-review-report-replay', { ...source, code, route: 'direct', launchId: '7'.repeat(32) }, status)
     await repeatReport(differentLanguage, 422)
+    await tryDirectReport(differentLanguage, reviewSource, 422)
+    await tryDirectReport(reviewReport.code, reviewSource, 422)
+    await tryDirectReport(directReport.code, directSource, 422)
+    assert.deepEqual(await reviewDrafts(), [])
     const [reviewAgain, sameAgain] = await Promise.all([repeatReport(directReport.code), repeatReport(directReport.code)])
     assert.deepEqual(sameAgain, reviewAgain)
     assert.equal(reviewAgain.task, friend.task)
@@ -2727,11 +2733,30 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.deepEqual(reportFields(completedAgainReport.code), {
       sample: 'lighthouse-delivery-review-1-zh', played: 'review', decision: 'confirm', originalAttached: true,
     })
+    const [triedDirect, sameDirect] = await Promise.all([tryDirectReport(directReport.code), tryDirectReport(directReport.code)])
+    assert.deepEqual(sameDirect, triedDirect)
+    assert.notEqual(triedDirect.sessionId, reviewAgain.sessionId)
+    assert.equal(triedDirect.task, friend.task)
+    const triedHistory = await history(triedDirect.sessionId)
+    assert.notEqual(triedHistory.workspaceId, friendDraft.workspaceId)
+    assert.equal(triedHistory.presetId, friendDirectHistory.presetId)
+    assert.equal(await readFile(join(triedHistory.workspacePath, material), 'utf8'), contents[1])
+    assert.ok(noMessages(triedHistory))
+    assert.deepEqual(await membership(triedHistory.workspaceId), [triedDirect.sessionId])
+    assert.deepEqual(await reviewDrafts(), [['delivery-review', triedDirect.sessionId, 'direct', 'zh']])
+    await send(triedDirect)
+    const triedResult = (await read({ comparisonId: triedDirect.id })).arms[0]
+    assert.equal(triedResult.materialDelivered, true)
+    assert.deepEqual(triedResult.entries.map(item => item.name), ['present'])
+    assert.deepEqual(await invoke('lighthouse-review-report', {
+      ...directSource, comparisonId: triedDirect.id,
+    }), directReport)
     assert.deepEqual(await invoke('lighthouse-review-report', reviewSource), reviewReport)
     await appendFile(join(friendDraft.workspacePath, material), '\nChanged recipient sample.\n')
     await friendOpen('review', friendId, invitation.token, 422)
     await shareReview('workspace', friend.id, 'review', 422)
     await compareReview(reviewSource, directReport.code, 422)
+    await tryDirectReport(directReport.code, reviewSource, 422)
     const savedDraft = await friendOpen('review', '5'.repeat(32))
     const staleDraft = await friendOpen('direct', '6'.repeat(32))
     const staleReplay = await history(staleDraft.sessionId)

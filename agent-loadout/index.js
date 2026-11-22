@@ -1893,14 +1893,19 @@ export async function apply(ctx) {
   }
 
   async function replayReviewReport(selection, signal) {
-    const { launchId, kind, comparisonId, arm, code } = selection
+    const { launchId, kind, comparisonId, arm, code, route = 'review' } = selection
     if (!validOpeningId(launchId)) throw new Error('开局请求无效，请重试。')
-    const { friend } = await reviewHandoffReport(selection, signal, true)
+    const { local, friend } = await reviewHandoffReport(selection, signal, true)
+    const tryDirect = route === 'direct'
+    if (route !== 'review' && (!tryDirect || local.played !== 'review' || friend.played !== 'direct' || !friend.originalAttached)) {
+      throw new Error('请先核对走直接交付路线的好友战报。')
+    }
     const { routePresets } = await reviewChallengeLoadouts({ sampleLanguage: friend.language }, ['replay'], signal)
-    if (!routePresets?.review) throw new Error(reviewRoutesUnavailable)
-    const id = createHash('sha256').update(JSON.stringify(['lighthouse-review-report-replay', kind, comparisonId, arm, code, launchId])).digest('hex').slice(0, 32)
-    return openLighthouseLesson({ launchId: id, reviewChallengeArm: 'review' }, friend.language === 'en',
-      signal, lighthouseLesson, routePresets.review)
+    if (!routePresets?.[route]) throw new Error(reviewRoutesUnavailable)
+    const namespace = tryDirect ? 'lighthouse-review-report-try-direct' : 'lighthouse-review-report-replay'
+    const id = createHash('sha256').update(JSON.stringify([namespace, kind, comparisonId, arm, code, launchId])).digest('hex').slice(0, 32)
+    return openLighthouseLesson({ launchId: id, reviewChallengeArm: route }, friend.language === 'en',
+      signal, lighthouseLesson, routePresets[route])
   }
 
   async function reviewChallengeLoadouts(context, tokenScope, signal) {

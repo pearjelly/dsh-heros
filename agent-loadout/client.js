@@ -1851,7 +1851,7 @@ window.__ModuleLoader__.load({
       const [openingRound, setOpeningRound] = useState(false)
       const [heroOpenError, setHeroOpenError] = useState('')
       const pending = useRef(null)
-      const repeatLaunchId = useRef(null)
+      const repeatLaunchIds = useRef(new Map())
       const field = useRef(null)
       const replyField = useRef(null)
       const heading = useRef(null)
@@ -1936,16 +1936,16 @@ window.__ModuleLoader__.load({
         }
       }
 
-      function openRepeat() {
+      function openRepeat(route) {
         if (pending.current || !result?.friend || !onOpenRepeat) return
-        if (repeatLaunchId.current === null) {
+        if (!repeatLaunchIds.current.has(route)) {
           const bytes = crypto.getRandomValues(new Uint8Array(16))
-          repeatLaunchId.current = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+          repeatLaunchIds.current.set(route, Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''))
         }
         return openRound(async signal => {
           const action = reviewKind ? 'lighthouse-review-report-replay' : 'lighthouse-evidence-repeat'
-          const opened = await request(action, { action, comparisonId, code: input.trim(), launchId: repeatLaunchId.current,
-            ...(reviewKind && { kind: reviewKind, arm: report.arm }) },
+          const opened = await request(action, { action, comparisonId, code: input.trim(), launchId: repeatLaunchIds.current.get(route),
+            ...(reviewKind && { kind: reviewKind, arm: report.arm, ...(route && { route }) }) },
             signal, language)
           return () => onOpenRepeat(opened.sessionId, opened.task)
         }, setError)
@@ -1971,7 +1971,7 @@ window.__ModuleLoader__.load({
       function changeInput(event) {
         setInput(event.target.value)
         clearFriend()
-        if (reviewKind) repeatLaunchId.current = null
+        if (reviewKind) repeatLaunchIds.current.clear()
         setError('')
         setNotice('')
         setReplyCodeVisible(false)
@@ -1988,7 +1988,8 @@ window.__ModuleLoader__.load({
             h('dl', { className: 'moba-handoff-report-facts' },
               h('dt', null, t('交接打法')), h('dd', null, t(route.name)),
               decision && h(Fragment, null, h('dt', null, t('提问卡选择')), h('dd', null, side.choiceLabel ?? t(decision))),
-              h('dt', null, t('补给卡原件')), h('dd', null, t(side.originalAttached ? '已附上' : '未附上'))))
+              h('dt', null, t('补给卡原件')), h('dd', null, t(side.originalAttached ? '已附上' : '未附上'))),
+            action)
         }
         if (evidence) return h('article', { className: 'moba-lighthouse-arm moba-handoff-report-side' },
           h('header', null, h(ItemArt, { item: { id: 'evidence' } }), h('h4', null, t(title))),
@@ -2020,7 +2021,11 @@ window.__ModuleLoader__.load({
         disabled: openingRound, onClick: event => onPersonalTask(event.currentTarget) }, t(stockTrialTaskLabels[result.local.arm] ?? lessonTaskLabel))
         : replayMinimal && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
           disabled: openingRound, onClick: event => onReplayMinimal(event.currentTarget) }, t(minimalDeliveryReplayLabel))
-      const friendAction = tryHero && h(Fragment, null,
+      const tryFriendDirect = reviewKind && onOpenRepeat && result?.local.played === 'review' &&
+        comparison?.played === 'direct' && comparison.originalAttached === true
+      const friendAction = tryFriendDirect ? h('div', { className: 'moba-detail-actions' },
+        h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, 'data-try-friend-direct': true,
+          onClick: () => openRepeat('direct') }, t('试试好友的直接交付'))) : tryHero && h(Fragment, null,
         h('button', { type: 'button', ref: tryHeroButton, className: 'moba-roster-open', disabled: openingRound,
           onClick: () => openRound(signal => onTryHero(tryHero.id, signal), setHeroOpenError) }, t(tryHero.trySameTask)),
         openingRound && h('p', { role: 'status', className: 'moba-lighthouse-note' }, t('正在打开试玩会话…')),
@@ -2059,7 +2064,7 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: copy },
                   t(evidence ? '复制我的取舍码' : '复制我的战报码')),
                 comparison && (evidence || reviewKind) && onOpenRepeat &&
-                h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: openRepeat },
+                h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: () => openRepeat() },
                   t(openingRound ? '正在打开同题会话…' : reviewKind ? '再试一次交付前复核' : '用同一出装再试一局'))),
               replyCodeVisible && result.code && h('label', null, t(evidence ? '我的取舍码' : '我的战报码'),
                 h('textarea', { ref: replyField, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
