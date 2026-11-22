@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.151.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.152.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -49,6 +49,8 @@ dsh web
 打开相同公开样例、题目语言和接班需求的已核验本机试玩，点 **对照好友战报**。页面分别显示 **本机核对的交接** 和 **好友分享的交接**，后一项来自好友提供的战报码。
 
 点对照结果里的 **复制我的战报码**，手动发给好友，复制时可以继续看两局交接。
+
+本机这局的出装通过个人任务核验后，可以在同一张结果卡带它去选自己的材料。核对工具后再开草稿，点返回可继续看刚才的好友对照。
 
 如果接班人需要原件，你的极简模式只交了文字，而好友战报显示附上了原件，可以在自己的结果点 **给极简模式装上交付物预览**。核对单件加装带来的变化后，再开一份同题草稿并手动发送。
 

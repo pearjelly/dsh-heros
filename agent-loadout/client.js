@@ -1741,7 +1741,7 @@ window.__ModuleLoader__.load({
     const lighthouseHandoffReportCodeLimit = 192
     const heroHandoffReportCode = /^DSHR1\.[A-Za-z0-9_-]+$/u
 
-    function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal }) {
+    function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal, onPersonalTask }) {
       const language = useLanguage()
       const [input, setInput] = useState('')
       const [result, setResult] = useState(null)
@@ -1893,8 +1893,11 @@ window.__ModuleLoader__.load({
       const replayMinimal = onReplayMinimal && result?.need === 'original' && result.local.arm === 'minimal' &&
         result.local.originalAttached === false && comparison?.originalAttached === true &&
         (comparison.arm === 'standard' || comparison.arm === minimalDeliveryReplayArm.id)
-      const localAction = replayMinimal && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
-        disabled: openingRound, onClick: event => onReplayMinimal(event.currentTarget) }, t(minimalDeliveryReplayLabel))
+      const canUseLocal = onPersonalTask && comparison && result.local.arm === report.arm && result.local.meetsNeed === true
+      const localAction = canUseLocal ? h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+        disabled: openingRound, onClick: event => onPersonalTask(event.currentTarget) }, t(stockTrialTaskLabels[result.local.arm] ?? lessonTaskLabel))
+        : replayMinimal && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+          disabled: openingRound, onClick: event => onReplayMinimal(event.currentTarget) }, t(minimalDeliveryReplayLabel))
       const friendAction = tryHero && h(Fragment, null,
         h('button', { type: 'button', ref: tryHeroButton, className: 'moba-roster-open', disabled: openingRound,
           onClick: () => openRound(signal => onTryHero(tryHero.id, signal), setHeroOpenError) }, t(tryHero.trySameTask)),
@@ -1914,7 +1917,7 @@ window.__ModuleLoader__.load({
         onKeyDown: event => closeDialogOnEscape(event, back) },
         h('form', { onSubmit: check },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
-            !tryHero && !replayMinimal && h('p', { className: 'moba-starter-note' }, t(note)),
+            !tryHero && !localAction && h('p', { className: 'moba-starter-note' }, t(note)),
             share && result?.code && h('label', null, t('战报码'),
               h('textarea', { ref: field, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                 spellCheck: false, onFocus: event => event.currentTarget.select() })),
@@ -2024,7 +2027,7 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState('')
       const [attempt, retry] = useState(0)
       const [replayOpen, setReplayOpen] = useState(null)
-      const [personalSource, setPersonalSource] = useState(null)
+      const [personalTask, setPersonalTask] = useState(null)
       const [sharing, setSharing] = useState(false)
       const [handoffReport, setHandoffReport] = useState(null)
       const mutation = useRef(false)
@@ -2039,6 +2042,9 @@ window.__ModuleLoader__.load({
       const minimalReplay = value?.minimalReplay
       const deliveryReplay = value?.deliveryReplay
       const recapPersonalSource = deliveryReplay && minimalReplay?.lessonTaskSource
+      const handoffArm = handoffReport?.arm === minimalDeliveryReplayArm.id ? minimalReplay
+        : value?.arms.find(arm => arm.id === handoffReport?.arm)
+      const handoffPersonalSource = handoffArm?.lessonTaskSource
       const recapReportable = deliveryReplay && minimalReplay?.id === minimalDeliveryReplayArm.id && canReportHeroHandoff(minimalReplay)
       const canReplayMinimal = value?.canReplayMinimalDelivery && !minimalReplay
 
@@ -2150,13 +2156,13 @@ window.__ModuleLoader__.load({
         })
       }
 
-      function openPersonalTask(source, opener) {
+      function openPersonalTask(source, opener, backLabel = '返回试玩对照') {
         personalButton.current = opener
-        setPersonalSource(source)
+        setPersonalTask({ source, backLabel })
       }
 
       function closePersonalTask() {
-        setPersonalSource(null)
+        setPersonalTask(null)
         requestAnimationFrame(() => {
           const opener = personalButton.current
           const target = opener?.isConnected ? opener : heading.current
@@ -2263,11 +2269,12 @@ window.__ModuleLoader__.load({
           playedHero: verifiedHeroes.length === 1 ? verifiedHeroes[0].id : undefined, onBack: closeSharing }),
         handoffReport && h(LighthouseHandoffReport, { report: handoffReport, comparisonId: activeId, request, onBack: closeHandoffReport,
           unopenedHeroes, onTryHero: (arm, signal) => prepareArmVisit(activeId, arm, signal),
-          onReplayMinimal: canReplayMinimal ? opener => openReplay(opener, '返回战报对照') : undefined }),
+          onReplayMinimal: canReplayMinimal ? opener => openReplay(opener, '返回战报对照') : undefined,
+          onPersonalTask: handoffPersonalSource ? opener => openPersonalTask(handoffPersonalSource, opener, '返回战报对照') : undefined }),
         replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: activeId, backLabel: replayOpen.backLabel, onBack: closeReplay,
           onVisit: (next, task) => { setReplayOpen(null); setHandoffReport(null); onVisit(next, task) } }),
-        personalSource && h(PersonalLoadoutTask, { source: personalSource, workspaces, request, backLabel: '返回试玩对照',
-          onBack: closePersonalTask, onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }))
+        personalTask && h(PersonalLoadoutTask, { ...personalTask, workspaces, request,
+          onBack: closePersonalTask, onVisit: (next, task) => { setPersonalTask(null); setHandoffReport(null); onVisit(next, task) } }))
     }
 
     function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, draftStore, hasTurn, workspaces }) {
