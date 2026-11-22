@@ -4407,7 +4407,7 @@ export async function apply(ctx) {
       ...(original.change && { change: original.change }), ...(original.lesson && { lesson: original.lesson }) } }
   }
 
-  async function readRematchBaseline(comparison, previous, signal, verifyPersonalDelivery = false) {
+  async function readRematchBaseline(comparison, previous, signal, { verifyPersonalDelivery = false, publicReview = false } = {}) {
     const { arm, sessionId, heroName, planName } = comparison.baseline
     const id = 'baseline'
     const missing = { id, sessionId, heroName, planName, status: 'unavailable', reason: 'session-unavailable' }
@@ -4424,7 +4424,7 @@ export async function apply(ctx) {
     const { comparisons, original } = previous
     const publicReplay = comparison.baseline.publicEvidenceReplay
     const result = await readComparisonArm(comparisons, original, arm, signal,
-      { verifyPersonalDelivery, linkedChoicesOnly: publicReplay, includeFileCoordinates: publicReplay })
+      { verifyPersonalDelivery, linkedChoicesOnly: publicReplay, includeFileCoordinates: publicReplay || publicReview })
     if (sessionId !== result.sessionId) return missing
     const { lessonTaskSource, ...observed } = result
     return { ...observed, id, heroName, planName, canRematch: false,
@@ -4440,6 +4440,14 @@ export async function apply(ctx) {
     const fromOwnReviewRematch = baseline.kind === 'rematch' && parent?.baseline?.kind === 'personal' &&
       parent.edit.addId === 'review' && parent.edit.removeId === undefined && parent.edit.sourceId === undefined
     if ((fromOwnTask || fromOwnReviewRematch) && edit.removeId === 'review' && edit.addId === undefined) return ['review', 'direct']
+  }
+
+  function isLighthouseReviewRematch(record, previous) {
+    const { baseline, edit, loadout } = record
+    return record.lesson === lighthouseLesson && previous?.comparisons === workspaceComparisons &&
+      previous.original.lesson === lighthouseLesson && baseline.arm === 'direct' &&
+      baseline.heroId === 'standard' && loadout.heroId === 'standard' &&
+      edit.addId === 'review' && edit.removeId === undefined && edit.sourceId === undefined
   }
 
   function observedHandoffOutcome(material, arms, styles) {
@@ -4485,19 +4493,27 @@ export async function apply(ctx) {
   async function readComparisonArms(comparisons, record, signal) {
     const previous = previousComparison(record)
     const styles = comparisons === rematchComparisons && personalHandoffStyles(record, previous)
-    const verifyPersonalDelivery = Boolean(styles)
+    const publicReview = comparisons === rematchComparisons && isLighthouseReviewRematch(record, previous)
+    const verifyPersonalDelivery = Boolean(styles || publicReview)
     const evidenceReplay = evidenceReplayView(record.baseline)
     const pending = comparisons.armsFor(record).map(arm => readComparisonArm(comparisons, record, arm, signal,
-      { verifyPersonalDelivery, includeFileCoordinates: evidenceReplay?.publicEvidenceReplay }))
-    if (record.baseline) pending.unshift(readRematchBaseline(record, previous, signal, verifyPersonalDelivery))
+      { verifyPersonalDelivery, linkedChoicesOnly: publicReview, includeFileCoordinates: evidenceReplay?.publicEvidenceReplay || publicReview }))
+    if (record.baseline) pending.unshift(readRematchBaseline(record, previous, signal, { verifyPersonalDelivery, publicReview }))
     const arms = await Promise.all(pending)
     const handoffOutcome = styles && observedHandoffOutcome(record.material, arms, styles)
+    const review = publicReview && arms.every(verifiedEvidenceArm) && arms[0].materialDelivered &&
+      observedHandoffOutcome(record.material, arms, ['direct', 'review'])
+    const publicReviewOutcome = review && { ...review, arms: review.arms.map((item, index) => {
+      const { sessionId, deliverables } = arms[index]
+      return { ...item, sessionId, deliverables }
+    }) }
     const publicTaskSources = evidenceReplay?.publicEvidenceReplay && previous?.original && {
       baseline: { kind: 'workspace', comparisonId: previous.original.id, arm: 'evidence' },
       rematch: { kind: 'rematch', comparisonId: record.id, arm: 'rematch' },
     }
     const evidenceOutcome = evidenceReplay && observedEvidenceOutcome(arms, publicTaskSources)
     return { arms, ...(previous?.view && { previous: previous.view }), ...(handoffOutcome && { handoffOutcome }),
+      ...(publicReviewOutcome && { publicReviewOutcome }),
       ...evidenceReplay, ...(evidenceOutcome && { evidenceOutcome }) }
   }
 
@@ -4947,7 +4963,7 @@ export async function apply(ctx) {
       arms: (comparisons === workspaceComparisons ? workspaceComparisonArms : comparisons.arms).map(id => ({ id, status: 'unopened' })) }
     const { id, task, workspaceId, material } = record
     const workspace = material && ctx.get('workspaceRegistry')?.get(workspaceId)
-    const [rounds, materialState] = await Promise.all([
+    const [{ publicReviewOutcome, ...rounds }, materialState] = await Promise.all([
       readComparisonArms(comparisons, record, signal),
       material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
     ])
@@ -4959,6 +4975,7 @@ export async function apply(ctx) {
     const canShareEvidenceReport = Boolean(observedLighthouseEvidenceReport(record, practice, materialState))
     if (canShareChallenge && materialState === 'verified') practice.canReplayLighthouseEvidence = true
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
+      ...(publicReviewOutcome && materialState === 'verified' && { publicReviewOutcome }),
       ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),
       ...(record.lesson === evidenceLesson && { scenario: record.scenario }), ...(record.evidenceRetest && { evidenceRetest: true }),
       ...(evidenceRetestOutcome && { evidenceRetestOutcome }), ...(evidenceOpeningChoice && { evidenceOpeningChoice }),

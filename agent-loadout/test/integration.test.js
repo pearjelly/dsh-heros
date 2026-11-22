@@ -2287,6 +2287,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
         const pending = comparison.arms.find(arm => arm.id === 'rematch')
         assert.equal(pending.status, 'waiting-choice')
         assert.ok(!pending.deliverables?.length)
+        assert.equal(comparison.publicReviewOutcome, undefined)
       } finally {
         if (question) await host.request(questions, { sessionId: attempt.sessionId, choice: answer })
         await turn
@@ -2299,21 +2300,36 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
       const rematch = completed.arms.find(arm => arm.id === 'rematch')
       assert.equal(rematch.status, 'complete')
       assert.deepEqual(rematch.entries[0].choices, [answer])
+      const outcome = completed.publicReviewOutcome
+      assert.equal(outcome.material, material)
+      assert.deepEqual(outcome.arms.map(({ id, style, choices, sessionId }) => [id, style, choices, sessionId]), [
+        ['baseline', 'direct', [], baseline.sessionId], ['rematch', 'review', [answer], attempt.sessionId],
+      ])
+      assert.equal(outcome.arms[0].materialDelivered, true)
+      assert.equal(outcome.arms[0].deliveredCount, 1)
+      assert.deepEqual(outcome.arms[0].deliverables, [{ name: material, turn: 1, seq: directFile.seq, index: 0 }])
       const events = (await history(attempt.sessionId)).events
       const user = events.find(item => item.type === 'user/message' && item.data.source.kind === 'user')
       assert.equal(user.data.content[0].text, baseline.task)
-      return { rematch, presented: events.find(item => item.type === 'deliverables/presented') }
+      return { rematch, outcome: outcome.arms[1], presented: events.find(item => item.type === 'deliverables/presented') }
     }
     const confirmed = await retry('b'.repeat(32))
     const confirmedResult = await choose(confirmed, 'Confirm handoff')
     assert.deepEqual(confirmedResult.rematch.entries.map(item => item.name), ['ask_user_question', 'present'])
-    assert.deepEqual(confirmedResult.rematch.deliverables, direct.deliverables)
+    assert.equal(confirmedResult.outcome.materialDelivered, true)
+    assert.equal(confirmedResult.outcome.deliveredCount, 1)
+    assert.deepEqual(confirmedResult.outcome.deliverables,
+      [{ name: material, turn: 1, seq: confirmedResult.presented.seq, index: 0 }])
+    assert.deepEqual(confirmedResult.rematch.deliverables, confirmedResult.outcome.deliverables)
     assert.equal(confirmedResult.presented.data.files[0].path, directFile.data.files[0].path)
     const revised = await retry('c'.repeat(32))
     const revisedResult = await choose(revised, 'Revise draft')
     assert.deepEqual(revisedResult.rematch.entries.map(item => item.name), ['ask_user_question'])
     assert.deepEqual(revisedResult.rematch.deliverables, [])
     assert.equal(revisedResult.presented, undefined)
+    assert.equal(revisedResult.outcome.materialDelivered, false)
+    assert.equal(revisedResult.outcome.deliveredCount, 0)
+    assert.deepEqual(revisedResult.outcome.deliverables, [])
     assert.deepEqual(new Set(await membership(lesson.workspaceId)), new Set([baseline.sessionId, confirmed.sessionId, revised.sessionId]))
 
     const personalPath = join(directory, 'personal')
@@ -2328,6 +2344,9 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     await appendFile(join(native.workspacePath, material), '\nModified old practice material.\n')
     assert.equal((await read(filter)).materialState, 'changed')
     assert.equal((await equipmentIn(host, baseline.sessionId)).workspaceComparison.canTryDeliveryReview, undefined)
+    const staleComparison = await invoke('rematch-comparison', { comparisonId: confirmed.id })
+    assert.equal(staleComparison.publicReviewOutcome, undefined)
+    assert.equal(staleComparison.arms.find(arm => arm.id === 'rematch').status, 'complete')
     assert.deepEqual((await read(filter)).arms[0], direct)
     await invoke('rematch-comparison-options', root, 422)
     await invoke('rematch-comparison-preview', { ...root, change }, 422)

@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.134.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.135.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -105,7 +105,7 @@ Plans saved from a verified evidence comparison in v0.95 or later link to the ru
 
 1. Open **Lighthouse Supply Run** in the lobby and choose **Lighthouse rematch lesson**, then **Start rematch lesson**. The lesson prepares the sample files and a Standard Mode loadout for direct delivery. You can start without setting up a workspace or saving a plan.
 2. In the new DSH session, review and manually send the prepared task. Open the delivered lighthouse card. Once the delivery is verified, choose **Try Delivery Review** in the same conversation.
-3. Review the one change, then open the rematch in its own DSH session and send the same task yourself. When the DSH question card appears, confirm delivery or request changes. Reopen the comparison to check the recorded choice and any delivered file. **View lesson results** in the original conversation still offers the full results and equipment editor.
+3. Review the one change, then open the rematch in its own DSH session and send the same task yourself. When the DSH question card appears, confirm delivery or request changes. Open the rematch result to see **Observed handoff results**. The two sides show the actual choice and what each run delivered, including a run with zero files. **View lesson results** in the original conversation still offers the full results and equipment editor.
 
 **Lighthouse Supply Run** also offers the original **Recon** and **Delivery** routes.
 
