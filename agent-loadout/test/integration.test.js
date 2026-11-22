@@ -1539,7 +1539,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       assert.ok(!native.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
       assert.equal(byHero(waiting, hero).status, 'waiting')
       assert.equal(byHero(waiting, hero).summary, undefined)
-      assert.deepEqual((await equipmentIn(host, opened.sessionId)).heroTrial, { id: trial.id, arm: hero, task: trial.task })
+      assert.deepEqual((await equipmentIn(host, opened.sessionId)).heroTrial,
+        { id: trial.id, arm: hero, task: trial.task, firstTaskPending: true })
       drafts.set(hero, native)
     }
     const materialBytes = await readFile(join(drafts.get('standard').workspacePath, material))
@@ -1552,7 +1553,9 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const between = await read(trial.id)
     assert.equal(byHero(between, 'minimal').status, 'waiting')
     assert.deepEqual(byHero(between, 'standard').lessonTaskSource, standardTransfer)
-    assert.deepEqual((await equipmentIn(host, standard.sessionId)).heroTrial.lessonTaskSource, standardTransfer)
+    const completedStandard = (await equipmentIn(host, standard.sessionId)).heroTrial
+    assert.deepEqual(completedStandard.lessonTaskSource, standardTransfer)
+    assert.equal(completedStandard.firstTaskPending, undefined)
     assert.notEqual(between.canReplayMinimalDelivery, true)
     assert.equal(await minimalShortcut(minimal.sessionId), undefined)
     await previewReplay(trial.id, 422)
@@ -1745,7 +1748,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.ok(!nativeDraft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
     assert.deepEqual((await readdir(nativeDraft.workspacePath)).sort(), (await readdir(original.workspacePath)).sort())
     assert.deepEqual(await readFile(join(nativeDraft.workspacePath, material)), materialBytes)
-    assert.deepEqual((await equipmentIn(host, replay.sessionId)).heroTrial, { id: trial.id, arm: 'minimal-present', task: trial.task })
+    assert.deepEqual((await equipmentIn(host, replay.sessionId)).heroTrial,
+      { id: trial.id, arm: 'minimal-present', task: trial.task, firstTaskPending: true })
     const replayWaiting = await read(trial.id)
     assert.deepEqual(replayWaiting.arms, result.arms)
     assert.equal(replayWaiting.minimalReplay.id, 'minimal-present')
@@ -2434,7 +2438,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       assert.equal(waiting.evidenceOpeningChoice, undefined)
       assert.equal(waiting.arms[0].canReplayLighthouseEvidence, undefined)
       assert.deepEqual((await equipmentIn(host, opened.sessionId)).workspaceComparison, {
-        id: opened.id, arm: 'evidence', task: opened.task, lesson: 'lighthouse-evidence', scenario,
+        id: opened.id, arm: 'evidence', task: opened.task, lesson: 'lighthouse-evidence', scenario, firstTaskPending: true,
       })
       await invoke('workspace-comparison-open', { ...filter, arm: 'review' }, 422)
       if (opened === lower) await replayOptions(opened.id, 422)
@@ -2462,6 +2466,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
           assert.equal(member.lessonTaskSource, undefined)
           assert.equal(member.canReplayLighthouseEvidence, undefined)
           assert.equal(member.evidenceReportCode, undefined)
+          assert.equal(member.firstTaskPending, undefined)
         } finally {
           if (question) await host.request(questions, { sessionId: opened.sessionId, choice: decision })
           await turn
@@ -2493,6 +2498,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       const member = (await equipmentIn(host, opened.sessionId)).workspaceComparison
       assert.deepEqual(member.lessonTaskSource, transfer)
       assert.equal(member.canReplayLighthouseEvidence, scenario === 'gap' ? true : undefined)
+      assert.equal(member.firstTaskPending, undefined)
       if (scenario !== 'gap') assert.equal(member.evidenceReportCode, undefined)
       const openingResult = openingChoice && { choice: openingChoice, actualChoices: [decision] }
       assert.deepEqual(completed.evidenceOpeningChoice, openingResult)
@@ -2738,6 +2744,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const editedMember = (await equipmentIn(host, edited.sessionId)).workspaceComparison
     assert.equal(editedMember.lessonTaskSource, undefined)
     assert.equal(editedMember.evidenceReportCode, undefined)
+    assert.equal(editedMember.firstTaskPending, undefined)
     const changed = await openEnglish('confirmed', 'f'.repeat(32))
     const changedNative = await history(changed.sessionId)
     await appendFile(join(changedNative.workspacePath, material), '\nAn unexpected change to this isolated supply card.\n')

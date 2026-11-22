@@ -2209,7 +2209,7 @@ window.__ModuleLoader__.load({
           onBack: closePersonalTask, onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }))
     }
 
-    function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn, workspaces }) {
+    function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, draftStore, hasTurn, workspaces }) {
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [open, setOpen] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
@@ -2221,6 +2221,7 @@ window.__ModuleLoader__.load({
       const availablePersonalTask = member.lessonTaskSource
       const availableReplay = member.arm === 'minimal' && member.canReplayMinimalDelivery === true
       const verifiedDeliveryReplay = member.verifiedDeliveryReplay === true
+      const taskPending = member.firstTaskPending && !hasTurn
       const hero = member.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === member.arm)
       useEffect(() => {
         const status = consumeDraft(sessionId)
@@ -2243,7 +2244,7 @@ window.__ModuleLoader__.load({
       }
 
       return h(Fragment, null,
-        h('div', { className: 'moba-lighthouse-anchor' },
+        h('div', { className: 'moba-lighthouse-anchor', 'data-task-pending': taskPending || undefined },
           h('div', null, h('strong', null, t(heroTrialTitle)), hero && h('span', null, t(hero.name))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
@@ -2253,7 +2254,8 @@ window.__ModuleLoader__.load({
               t(stockTrialTaskLabels[member.arm] ?? lessonTaskLabel)),
             availableReplay && h('button', { ref: replayTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setReplayOpen(true) }, t(minimalDeliveryReplayLabel))),
-          verifiedDeliveryReplay ? h('p', { role: 'status' }, t('加装后已附上补给卡原件，符合接班需求。'))
+          taskPending ? h(ChallengeTaskDraft, { task: member.task, sessionId, draftStore, putTask, backLabel: '返回试玩会话' })
+            : verifiedDeliveryReplay ? h('p', { role: 'status' }, t('加装后已附上补给卡原件，符合接班需求。'))
             : availableReplay ? h('p', { role: 'status' }, t('这局交接了文字，接班人还需要可打开的原件。'))
             : !hasTurn && !availablePersonalTask && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
         replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: member.id, onBack: closeReplay,
@@ -3543,14 +3545,14 @@ window.__ModuleLoader__.load({
           evidenceSave: { comparisonId, arm }, onChanged: evidenceSaved, onClose: closeNaming }))
     }
 
-    function EvidenceReply({ code }) {
+    function LocalCopyButton({ text, label, fieldLabel, copiedNotice, manualNotice, backLabel }) {
       const [copied, setCopied] = useState(false)
       const [showCode, setShowCode] = useState(false)
       const trigger = useRef(null)
 
       async function copy() {
         try {
-          await navigator.clipboard.writeText(code)
+          await navigator.clipboard.writeText(text)
           setCopied(true)
         } catch {
           setCopied(false)
@@ -3565,19 +3567,43 @@ window.__ModuleLoader__.load({
 
       return h(Fragment, null,
         h('button', { ref: trigger, type: 'button', className: 'moba-settlement-button',
-          onClick: copy }, t('复制取舍码回给好友')),
-        copied && h('span', { role: 'status' }, t('战报码已复制。')),
-        showCode && h(InstallDialog, { title: t('复制取舍码回给好友'), className: 'moba-lighthouse-comparison moba-starter-dialog',
+          onClick: copy }, t(label)),
+        copied && h('span', { role: 'status' }, t(copiedNotice)),
+        showCode && h(InstallDialog, { title: t(label), className: 'moba-lighthouse-comparison moba-starter-dialog',
           onCancel: close, initialFocus: '.moba-share-code', onKeyDown: event => closeDialogOnEscape(event, close) },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
-            h('label', null, t('我的取舍码'), h('textarea', { className: 'moba-share-code', readOnly: true,
-              value: code, rows: 3, spellCheck: false, onFocus: event => event.currentTarget.select() })),
-            h('p', { role: 'status' }, t('战报码已选中，可以手动复制。'))),
+            h('label', null, t(fieldLabel), h('textarea', { className: 'moba-share-code', readOnly: true,
+              value: text, rows: 3, spellCheck: false, onFocus: event => event.currentTarget.select() })),
+            h('p', { role: 'status' }, t(manualNotice))),
           h('div', { className: 'moba-market-actions' },
-            h('button', { type: 'button', className: 'moba-roster-open', onClick: close }, t('返回练习会话')))))
+            h('button', { type: 'button', className: 'moba-roster-open', onClick: close }, t(backLabel)))))
     }
 
-    function RunComparisonAnchor({ kind, member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn, workspaces, onUse }) {
+    const unavailableDraftStore = { subscribe: () => () => {}, getSnapshot: () => null }
+
+    function ChallengeTaskDraft({ task, sessionId, draftStore, putTask, backLabel }) {
+      const store = useMemo(() => {
+        const state = draftStore(sessionId)
+        return state ? { subscribe: state.subscribe.bind(state), getSnapshot: state.getSnapshot.bind(state) } : unavailableDraftStore
+      }, [draftStore, sessionId])
+      const draft = useSyncExternalStore(store.subscribe, store.getSnapshot)
+      const [fillBlocked, setFillBlocked] = useState(false)
+      if (draft && ['adjudicating', 'submitting', 'sending'].includes(draft.phase)) return null
+      const changed = draft && (draft.attachmentIds?.length || draft.occurrences?.length || draft.phase === 'claimed')
+      if (!changed && draft?.draft === task) return h('p', { role: 'status' }, t('原任务已就绪。请手动发送以记录本局。'))
+      if (!changed && draft?.draft === '' && !fillBlocked) return h('div', { className: 'moba-task-pending' },
+        h('p', { role: 'status' }, t('填入原任务后，再手动发送。')),
+        h('button', { type: 'button', className: 'moba-settlement-button',
+          onClick: () => setFillBlocked(putTask(sessionId, task) === 'blocked') }, t('填入原任务')))
+      return h('div', { className: 'moba-task-pending' },
+        h('p', { role: 'status' }, t(draft && (changed || draft.draft)
+          ? '草稿已改动。请恢复原任务并移除额外附件，再手动发送。'
+          : '请复制原任务，粘贴后手动发送以记录本局。')),
+        h(LocalCopyButton, { text: task, label: '复制原任务', fieldLabel: '原任务', copiedNotice: '已复制原任务。',
+          manualNotice: '已选中任务文字，可以手动复制。', backLabel }))
+    }
+
+    function RunComparisonAnchor({ kind, member, sessionId, request, onVisit, consumeDraft, putTask, draftStore, hasTurn, workspaces, onUse }) {
       const config = comparisonKinds[kind]
       const lesson = member?.lesson === lighthouseRematchLesson
       const evidence = member?.lesson === lighthouseEvidenceLesson
@@ -3596,6 +3622,7 @@ window.__ModuleLoader__.load({
       const availableLessonTask = evidence && member.lessonTaskSource
       const availableEvidenceReplay = evidence && member.canReplayLighthouseEvidence === true
       const evidenceReportCode = evidence && member.evidenceReportCode
+      const taskPending = evidence && member.firstTaskPending && !hasTurn
       useEffect(() => {
         if (!member?.id) return
         const outcome = consumeDraft(sessionId)
@@ -3620,20 +3647,23 @@ window.__ModuleLoader__.load({
       }
 
       return h(Fragment, null,
-        h('div', { className: 'moba-lighthouse-anchor', 'data-evidence-result': availableEvidenceReplay || undefined },
+        h('div', { className: 'moba-lighthouse-anchor', 'data-evidence-result': availableEvidenceReplay || undefined,
+          'data-task-pending': taskPending || undefined },
           h('div', null, h('strong', null, t(title)),
             h('span', null, scenario ? t(scenario.name) : comparisonArmName(comparisonArmConfig(kind, member.arm, evidenceReplay), member))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setOpen(true) }, t(evidenceReplay ? title : evidence ? '查看取舍记录' : lesson ? '查看练习记录' : config.entry)),
-            evidenceReportCode && h(EvidenceReply, { key: evidenceReportCode, code: evidenceReportCode }),
+            evidenceReportCode && h(LocalCopyButton, { key: evidenceReportCode, text: evidenceReportCode, label: '复制取舍码回给好友',
+              fieldLabel: '我的取舍码', copiedNotice: '战报码已复制。', manualNotice: '战报码已选中，可以手动复制。', backLabel: '返回练习会话' }),
             availableEvidenceReplay && h('button', { ref: evidenceReplayTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setOpenEvidenceReplay(true) }, t(lighthouseEvidenceReplayLabel)),
             availableLessonTask && h('button', { ref: lessonTaskTrigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setLessonTaskSource(availableLessonTask) }, t(lessonTaskLabel))),
-          draftStatus && h('p', { role: 'status' }, t(draftNotices[draftStatus])),
+          taskPending && h(ChallengeTaskDraft, { task: member.task, sessionId, draftStore, putTask, backLabel: '返回练习会话' }),
+          !taskPending && draftStatus && h('p', { role: 'status' }, t(draftNotices[draftStatus])),
           publicEvidenceReplay && !hasTurn && h('p', null, t('这局使用同一份内置样例和新的练习工作区。')),
-          evidence && !publicEvidenceReplay && !availableLessonTask && h('p', null, t(hasTurn
+          evidence && !taskPending && !publicEvidenceReplay && !availableLessonTask && h('p', null, t(hasTurn
             ? '可以在取舍记录里回看本局的实际选择和交付。'
             : '手动发送练习任务。如果出现证据取舍卡，请在会话里选择。')),
           lesson && kind === 'workspace' && h('p', null, t(hasTurn
@@ -9354,7 +9384,7 @@ window.__ModuleLoader__.load({
     }
 
     function MatchEquipment({ sessionId, request, openLobby, openContinuation, openDraftSession,
-      consumeTaskDraft, putTaskDraft, send, workspaces }) {
+      consumeTaskDraft, putTaskDraft, draftStore, send, workspaces }) {
       const language = useLanguage()
       const id = useId()
       const anchor = '--moba-match-' + id.replace(/[^a-zA-Z0-9-]/g, '')
@@ -9692,14 +9722,15 @@ window.__ModuleLoader__.load({
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
         snapshot?.heroTrial && h(HeroTrialAnchor, { key: sessionId, member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
-          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), workspaces }),
+          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, draftStore, hasTurn: Boolean(snapshot.running || receipt), workspaces }),
         snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
           kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openDraftSession,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), onUse: reuseComparisonLoadout,
         }),
         snapshot?.workspaceComparison && h(WorkspaceComparisonAnchor, {
           member: snapshot.workspaceComparison, sessionId, request, onVisit: openDraftSession,
-          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), workspaces, onUse: reuseComparisonLoadout,
+          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, draftStore,
+          hasTurn: Boolean(snapshot.running || receipt), workspaces, onUse: reuseComparisonLoadout,
         }),
         snapshot?.planComparison && h(WorkspaceComparisonAnchor, {
           kind: 'plans', member: snapshot.planComparison, sessionId, request, onVisit: openDraftSession,
@@ -11019,11 +11050,13 @@ window.__ModuleLoader__.load({
         gap: 3px 7px; padding: 6px 8px; margin-block-end: 5px; border: 1px solid #607d78; background: #192c33; color: #f3e9d2; font-size: 12px; }
       .moba-lighthouse-anchor > div { display: flex; flex-wrap: wrap; gap: 1px 7px; overflow-wrap: anywhere; }
       .moba-lighthouse-anchor .moba-lighthouse-anchor-actions { justify-content: flex-end; gap: 4px 7px; }
-      .moba-lighthouse-anchor[data-evidence-result] { grid-template-columns: minmax(0, 1fr); }
-      .moba-lighthouse-anchor[data-evidence-result] .moba-lighthouse-anchor-actions { justify-content: flex-start; }
+      .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) { grid-template-columns: minmax(0, 1fr); }
+      .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       .moba-lighthouse-anchor-actions .moba-settlement-button { white-space: normal; }
       .moba-lighthouse-anchor > div > span { color: #b8ded4; }
-      .moba-lighthouse-anchor > p { grid-column: 1 / -1; margin: 0; color: #ccdcd8; font-size: 11px; }
+      .moba-lighthouse-anchor > p, .moba-task-pending > p { margin: 0; color: #ccdcd8; font-size: 11px; }
+      .moba-lighthouse-anchor > p { grid-column: 1 / -1; }
+      .moba-lighthouse-anchor > .moba-task-pending { align-items: center; gap: 4px 7px; }
       .moba-plan-task-draft textarea { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 5px; resize: vertical;
         border: 1px solid #607d78; background: #111b24; color: inherit; font: inherit; }
       .moba-starter-dialog h2 { margin: 0 0 12px; font-size: 22px; }
@@ -11420,6 +11453,15 @@ window.__ModuleLoader__.load({
             return 'blocked'
           }
         }
+        function draftStore(sessionId) {
+          const binding = ctx.sessions.binding(sessionId)
+          try {
+            const state = binding && ctx.get('conversation')?.input?.for?.(binding.ctx)?.state
+            if (typeof state?.subscribe === 'function' && typeof state?.getSnapshot === 'function') return state
+          } catch {
+            // Some hosts do not expose an input store for the current binding.
+          }
+        }
         function openDraftSession(sessionId, task) {
           sessionTaskDraft = task ? { sessionId, task } : undefined
           ctx.uiWorkspace.openSession(sessionId)
@@ -11492,7 +11534,7 @@ window.__ModuleLoader__.load({
             const id = sessionId ?? session?.sessionId
             return id ? h(WorkspaceSetupContext.Provider, { value: workspaceSetup },
               h(MatchEquipment, { key: id, sessionId: id, request, openLobby, send, openDraftSession,
-                consumeTaskDraft, putTaskDraft, workspaces: ctx.workspaces.list,
+                consumeTaskDraft, putTaskDraft, draftStore, workspaces: ctx.workspaces.list,
                 openContinuation: next => ctx.uiWorkspace.openSession(next) })) : null
           }))
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(

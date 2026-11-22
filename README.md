@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.131.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.132.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -82,6 +82,8 @@ After **Minimal + Deliverable Preview** delivers the original sample card and pa
 3. If the sample and stock loadout match and only the source package versions differ, choose **Review the local Standard loadout**. Check the original DSH version alongside the gear and sources this session will actually use. You can then record an opening choice and manually send the task in a new DSH session. A missing stock source or a different loadout blocks this option, while exact matches continue to open from the original check.
 4. After your decision is verified, choose **Copy my decision for a friend** in the same DSH conversation and send the code to your friend yourself. When you have their code, open **View evidence run** and choose **Compare a friend's decision**. The code carries only the public sample version, the recorded choice, and whether a file was delivered. The board labels your own verified result and your friend's shared result.
 5. Choose **Play again with the same loadout** from the comparison to try another choice on the same sample. Open the new draft and manually send the same task, then make a fresh decision on the native question card.
+
+Before your first send in an evidence or hero trial, the conversation shows whether the original task is ready. If you clear the draft, choose **Fill original task**. If you edit it or add attachments, choose **Copy original task**, then restore the original text and remove any extra attachments yourself so the game can verify this run.
 
 ### Replay a public challenge with one gear change
 
