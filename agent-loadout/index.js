@@ -1771,11 +1771,16 @@ export async function apply(ctx) {
     const local = await readHeroTrialArm(record, arm, signal)
     signal?.throwIfAborted()
     if (!verifiedHeroHandoff(local)) throw new Error(unavailable)
-    const result = { arm, originalAttached: local.originalAttached, meetsNeed: local.meetsNeed }
-    return compare
-      ? { need, local: result, friend: { arm: friend.arm, originalAttached: friend.originalAttached,
-        meetsNeed: need === 'summary' || friend.originalAttached } }
-      : { need, local: result, code: encodeLighthouseHeroReport(language, need, arm, local.originalAttached) }
+    const result = {
+      need,
+      local: { arm, originalAttached: local.originalAttached, meetsNeed: local.meetsNeed },
+      code: encodeLighthouseHeroReport(language, need, arm, local.originalAttached)
+    }
+    if (friend) {
+      result.friend = { arm: friend.arm, originalAttached: friend.originalAttached,
+        meetsNeed: need === 'summary' || friend.originalAttached }
+    }
+    return result
   }
 
   async function previewHeroChallenge(code, signal) {

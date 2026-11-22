@@ -1700,9 +1700,9 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(friendHandoff, { need: 'original', local: minimalOutcome, code: reportCode(friendFields) })
     assert.deepEqual(JSON.parse(Buffer.from(friendHandoff.code.slice('DSHR1.'.length), 'base64url').toString('utf8')), friendFields)
     assert.deepEqual(await compareHandoff(trial.id, 'standard', friendHandoff.code),
-      { need: 'original', local: standardOutcome, friend: minimalOutcome })
+      { need: 'original', local: standardOutcome, friend: minimalOutcome, code: senderHandoff.code })
     assert.deepEqual(await recipientHandoff('hero-trial-handoff-compare', 'minimal', { code: senderHandoff.code }),
-      { need: 'original', local: minimalOutcome, friend: standardOutcome })
+      { need: 'original', local: minimalOutcome, friend: standardOutcome, code: friendHandoff.code })
     for (const changes of [{ sample: 'lighthouse-hero-handoff-1-en' }, { need: 'summary' }, { arm: 'ptc' },
       { originalAttached: 'yes' }, { status: 'complete' }, { sessionId: joined.sessionId }]) {
       await compareHandoff(trial.id, 'standard', reportCode({ ...friendFields, ...changes }), 422)
