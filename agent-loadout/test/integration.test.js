@@ -2228,7 +2228,9 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.match(contents[1], /North Shore Lighthouse/u)
     assert.deepEqual(await membership(lesson.workspaceId), [baseline.sessionId])
     assert.deepEqual(await catalog(), before)
-    assert.equal((await equipmentIn(host, baseline.sessionId)).workspaceComparison.lesson, lesson.lesson)
+    const draftMember = (await equipmentIn(host, baseline.sessionId)).workspaceComparison
+    assert.equal(draftMember.lesson, lesson.lesson)
+    assert.equal(draftMember.canTryDeliveryReview, undefined)
     await invoke('workspace-comparison-open', { ...filter, arm: 'review' }, 422)
     const reviewHash = createHash('sha256').update(JSON.stringify(['workspace-comparison', baseline.id, 'review', 'session'])).digest('hex')
     assert.equal(await read({ sessionId: 'session-' + reviewHash.slice(0, 32) }), null)
@@ -2241,6 +2243,9 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal(direct.status, 'complete')
     assert.equal(direct.materialDelivered, true)
     assert.equal(direct.canRematch, true)
+    const resultMember = (await equipmentIn(host, baseline.sessionId)).workspaceComparison
+    assert.equal(resultMember.canTryDeliveryReview, true)
+    assert.equal(resultMember.canReplayLighthouseEvidence, undefined)
     assert.deepEqual(direct.entries.map(item => [item.name, item.state]), [['present', 'completed']])
     assert.deepEqual(direct.deliverables, [{ name: material, turn: 1 }])
     const directReplay = await history(baseline.sessionId)
@@ -2266,7 +2271,9 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
       assert.equal(replay.workspaceId, lesson.workspaceId)
       assert.equal(replay.inherited, 0)
       assert.ok(noMessages(replay))
-      assert.equal((await equipmentIn(host, attempt.sessionId)).rematchComparison.lesson, lesson.lesson)
+      const replayMember = (await equipmentIn(host, attempt.sessionId)).rematchComparison
+      assert.equal(replayMember.lesson, lesson.lesson)
+      assert.equal(replayMember.canTryDeliveryReview, undefined)
       const turn = send(attempt)
       turn.catch(() => {})
       let question
@@ -2320,6 +2327,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal((await read()).id, own.id)
     await appendFile(join(native.workspacePath, material), '\nModified old practice material.\n')
     assert.equal((await read(filter)).materialState, 'changed')
+    assert.equal((await equipmentIn(host, baseline.sessionId)).workspaceComparison.canTryDeliveryReview, undefined)
     assert.deepEqual((await read(filter)).arms[0], direct)
     await invoke('rematch-comparison-options', root, 422)
     await invoke('rematch-comparison-preview', { ...root, change }, 422)
@@ -2358,6 +2366,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     const rejected = (await read({ comparisonId: wrong.id })).arms[0]
     assert.equal(rejected.materialDelivered, false)
     assert.ok(!rejected.canRematch)
+    assert.equal((await equipmentIn(host, wrong.sessionId)).workspaceComparison.canTryDeliveryReview, undefined)
     await invoke('rematch-comparison-options', { ...root, comparisonId: wrong.id }, 422)
   } finally {
     await host?.stop()

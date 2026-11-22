@@ -3283,7 +3283,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-roster-open', onClick: onClose }, t('关闭'))))
     }
 
-    function RematchEditor({ kind, comparisonId, arm, sourceSessionId, request, lesson, evidenceReplayHint, publicEvidenceReplayHint,
+    function RematchEditor({ kind, comparisonId, arm, sourceSessionId, request, lesson, evidenceReplayHint, publicEvidenceReplayHint, guidedReview,
       backLabel = '返回记录', onBack, onClose, onVisit }) {
       const language = useLanguage()
       const [loaded, setLoaded] = useState(null)
@@ -3313,6 +3313,7 @@ window.__ModuleLoader__.load({
       const equippedById = new Map(equipped.map(item => [item.id, item]))
       const additions = available.filter(item => !equippedById.has(item.id))
       const suggested = additions.find(item => item.id === options?.suggestedGearId)
+      const guidedGearReady = suggested?.id === 'review'
       const { addId: suggestedAddition, removeId: suggestedRemoval } = options?.personalSuggestedChange ?? emptyMap
       const originalChoices = options?.baseline?.choices ?? empty
       const addReview = !evidenceReplay && kind === 'personal' && suggestedAddition === 'review' && suggestedRemoval === undefined &&
@@ -3338,7 +3339,7 @@ window.__ModuleLoader__.load({
       const sources = (added?.sources ?? empty).filter(source => added.id !== removed?.id || source.id !== removed.sourceId)
       const selectedSource = sources.find(source => source.id === sourceId) ?? (sources.length === 1 ? sources[0] : undefined)
       const readyToReview = options && !reading && !loaded?.error && !working && !needsRefresh
-      const canReview = Boolean(readyToReview && (evidenceReplay ? options.evidenceReplay === true
+      const canReview = Boolean(readyToReview && (guidedReview ? guidedGearReady : evidenceReplay ? options.evidenceReplay === true
         : (operation === 'add' || removed) && (operation === 'remove' || added && (!sources.length || selectedSource))))
       const source = options?.baseline?.sessionId ?? sourceSessionId
       const baseline = preview?.baseline ?? options?.baseline
@@ -3365,12 +3366,12 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (preview) reviewHeading.current?.focus()
         else if (options) {
-          const suggestion = (evidenceReplay || returnToSuggestion.current) && suggestionButton.current
+          const suggestion = (evidenceReplay || guidedReview || returnToSuggestion.current) && suggestionButton.current
           const target = suggestion && !suggestion.disabled ? suggestion : modeField.current
           target?.focus()
           returnToSuggestion.current = false
         }
-      }, [preview, options, evidenceReplay])
+      }, [preview, options, evidenceReplay, guidedReview])
 
       function edit() {
         if (pending.current) return
@@ -3409,6 +3410,7 @@ window.__ModuleLoader__.load({
 
       function review() {
         if (!canReview) return
+        if (guidedReview) return previewChange({ addId: 'review' }, true)
         if (evidenceReplay) return previewChange({ removeId: 'evidence' }, true)
         return previewChange({ ...(removed && { removeId: removed.id }), ...(added && { addId: added.id }),
           ...(selectedSource && { sourceId: selectedSource.id }) })
@@ -3456,17 +3458,21 @@ window.__ModuleLoader__.load({
         if (!abort.signal.aborted && opened) onVisit(opened.sessionId, opened.task)
       }
 
-      const failed = !reading && loaded?.error || error
+      const failed = !reading && loaded?.error || error ||
+        (!reading && guidedReview && !guidedGearReady ? t('这局暂时无法加装交付前复核。') : '')
       const recoveryFocus = failed && kind === 'personal' && !evidenceReplay ? 'rebaseline' : undefined
       const returnStep = () => { if (working !== 'open') preview ? edit() : onBack(recoveryFocus) }
-      return h(InstallDialog, { title: t(publicEvidenceReplay ? lighthouseEvidenceReplayLabel : '换一件再试'), className: 'moba-lighthouse-comparison moba-rematch-editor',
+      return h(InstallDialog, { title: t(guidedReview ? '试试交付前复核' : publicEvidenceReplay ? lighthouseEvidenceReplayLabel : '换一件再试'),
+        className: 'moba-lighthouse-comparison moba-rematch-editor',
         busy: working === 'open', onCancel: returnStep, initialFocus: '.moba-rematch-back', onKeyDown: event => closeDialogOnEscape(event, returnStep) },
+        guidedReview && !preview && h('p', { className: 'moba-lighthouse-note' },
+          t('同一份材料、同一段任务，只加装交付前复核。试试确认交付或退回修改。')),
         options && h(Fragment, null,
           h(InstallFacts, { facts: [[t('原局'), baselineName], [t(publicEvidenceReplay ? '原局工作区' : '工作区'),
             options.workspaceTitle === 'default-workspace' ? t('默认工作区') : options.workspaceTitle],
             [t('材料文件相对路径'), options.material], [t('基准局的换装'), baselineChange]] }),
           publicEvidenceReplay && h('p', { className: 'moba-lighthouse-note' }, t('换装局在独立的练习工作区使用同一份内置灯塔样例，只卸下证据核验。')),
-          h('div', { className: 'moba-lighthouse-task' },
+          (!guidedReview || preview) && h('div', { className: 'moba-lighthouse-task' },
             h('label', null, t('两边共用的任务'), h('textarea', { readOnly: true, rows: 4, value: preview?.task ?? options.task }))),
           evidenceReplay && h('div', { className: 'moba-lighthouse-arm' },
             h(InstallFacts, { facts: [
@@ -3487,7 +3493,7 @@ window.__ModuleLoader__.load({
             h(RematchChangeFacts, { change: changeFacts }),
             h(SharedPlanCapabilities, { comparison: preview.comparison, title: '从原局到换装局的变化', showEmpty: true }),
             h('p', { className: 'moba-lighthouse-note' }, t('打开新会话后，由你检查并手动发送这段任务。')))
-            : !evidenceReplay && h('fieldset', { className: 'moba-rematch-fields', disabled: reading || Boolean(working) || Boolean(loaded?.error) },
+            : !evidenceReplay && !guidedReview && h('fieldset', { className: 'moba-rematch-fields', disabled: reading || Boolean(working) || Boolean(loaded?.error) },
               h('legend', null, t('只调整一个装备位')),
               h('label', null, t('调整方式'), h('select', { ref: modeField, value: operation, onChange: event => setMode(event.target.value) },
                 h('option', { value: 'add', disabled: !additions.length }, t('加装一件装备')),
@@ -3526,7 +3532,7 @@ window.__ModuleLoader__.load({
         (reading || working) && h('p', { className: 'moba-empty', role: 'status' }, t(working === 'open' ? '正在准备对局…'
           : working === 'review' ? '正在核对换装…' : '正在读取换装选项…')),
         failed && h(Fragment, null, h('p', { className: 'moba-alert', role: 'alert' }, failed),
-          h('p', { className: 'moba-lighthouse-note' }, t(publicEvidenceReplay
+          !guidedReview && h('p', { className: 'moba-lighthouse-note' }, t(publicEvidenceReplay
             ? '可以回到练习记录，另开一局缺证练习。'
             : evidenceReplay
             ? '如果原材料已变化，可恢复原文件后重试，或用当前文件开启新的证据核验任务。'
@@ -3536,15 +3542,16 @@ window.__ModuleLoader__.load({
               : '若材料已移动或修改，可恢复原文件后重试，也可用新材料建立新对照。'))),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
           h('button', { type: 'button', className: 'moba-roster-open moba-rematch-back', disabled: Boolean(working),
-            onClick: returnStep }, t(preview ? evidenceReplay ? '返回单件换装' : '返回修改换装' : backLabel)),
-          source && h('button', { type: 'button', className: 'moba-roster-open', disabled: working === 'open',
+            onClick: returnStep }, t(preview ? guidedReview ? '返回交付前复核' : evidenceReplay ? '返回单件换装' : '返回修改换装' : backLabel)),
+          source && !guidedReview && h('button', { type: 'button', className: 'moba-roster-open', disabled: working === 'open',
             onClick: () => onVisit(source) }, t('查看原会话')),
           failed && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(working) || reading,
             onClick: refresh }, t('重新读取换装选项')),
           preview ? h('button', { type: 'button', className: 'moba-start', disabled: !preview.token || Boolean(working) || needsRefresh || reading || Boolean(loaded?.error),
             onClick: open }, t('打开换装会话'), h(Glyph, { kind: 'arrow', size: 16 }))
-            : h('button', { type: 'button', ref: evidenceReplay ? suggestionButton : undefined, className: 'moba-start', disabled: !canReview,
-              onClick: review }, t(evidenceReplay ? '核对卸下证据核验' : '核对换装'), h(Glyph, { kind: 'arrow', size: 16 })),
+            : h('button', { type: 'button', ref: evidenceReplay || guidedReview ? suggestionButton : undefined, className: 'moba-start',
+              disabled: !canReview, onClick: review },
+            t(guidedReview ? '预览交付前复核' : evidenceReplay ? '核对卸下证据核验' : '核对换装'), h(Glyph, { kind: 'arrow', size: 16 })),
           preview && h('button', { type: 'button', className: 'moba-roster-open', disabled: working === 'open',
             onClick: () => onClose(recoveryFocus) }, t('关闭'))))
     }
@@ -3692,12 +3699,15 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = useState(false)
       const [lessonTaskSource, setLessonTaskSource] = useState(null)
       const [openEvidenceReplay, setOpenEvidenceReplay] = useState(false)
+      const [openDeliveryReview, setOpenDeliveryReview] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
       const trigger = useRef(null)
       const lessonTaskTrigger = useRef(null)
       const evidenceReplayTrigger = useRef(null)
+      const deliveryReviewTrigger = useRef(null)
       const availableLessonTask = evidence && member.lessonTaskSource
       const availableEvidenceReplay = evidence && member.canReplayLighthouseEvidence === true
+      const availableDeliveryReview = lesson && kind === 'workspace' && member.canTryDeliveryReview === true
       const evidenceReportCode = evidence && member.evidenceReportCode
       const taskPending = evidence && member.firstTaskPending && !hasTurn
       useEffect(() => {
@@ -3723,9 +3733,14 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (evidenceReplayTrigger.current ?? trigger.current)?.focus())
       }
 
+      function closeDeliveryReview() {
+        setOpenDeliveryReview(false)
+        requestAnimationFrame(() => (deliveryReviewTrigger.current ?? trigger.current)?.focus())
+      }
+
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor', 'data-evidence-result': availableEvidenceReplay || undefined,
-          'data-task-pending': taskPending || undefined },
+          'data-delivery-review-result': availableDeliveryReview || undefined, 'data-task-pending': taskPending || undefined },
           h('div', null, h('strong', null, t(title)),
             h('span', null, scenario ? t(scenario.name) : comparisonArmName(comparisonArmConfig(kind, member.arm, evidenceReplay), member))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
@@ -3735,6 +3750,8 @@ window.__ModuleLoader__.load({
               fieldLabel: '我的取舍码', copiedNotice: '战报码已复制。', manualNotice: '战报码已选中，可以手动复制。', backLabel: '返回练习会话' }),
             availableEvidenceReplay && h('button', { ref: evidenceReplayTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setOpenEvidenceReplay(true) }, t(lighthouseEvidenceReplayLabel)),
+            availableDeliveryReview && h('button', { ref: deliveryReviewTrigger, type: 'button', 'aria-haspopup': 'dialog',
+              className: 'moba-settlement-button', onClick: () => setOpenDeliveryReview(true) }, t('试试交付前复核')),
             availableLessonTask && h('button', { ref: lessonTaskTrigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setLessonTaskSource(availableLessonTask) }, t(lessonTaskLabel))),
           taskPending && h(ChallengeTaskDraft, { task: member.task, presetChanged: member.presetChanged,
@@ -3744,7 +3761,9 @@ window.__ModuleLoader__.load({
           evidence && !taskPending && !publicEvidenceReplay && !availableLessonTask && h('p', null, t(hasTurn
             ? '可以在取舍记录里回看本局的实际选择和交付。'
             : '手动发送练习任务。如果出现证据取舍卡，请在会话里选择。')),
-          lesson && kind === 'workspace' && h('p', null, t(hasTurn
+          lesson && kind === 'workspace' && h('p', null, t(availableDeliveryReview
+            ? '补给卡已直接交付。下一局试试确认交付或退回修改。'
+            : hasTurn
             ? '首局交付补给卡后，可在练习记录里换一件再试。'
             : '请手动发送补给卡任务。完成首局后，在练习记录里换一件再试。'))),
         lessonTaskSource && h(LessonLoadoutTask, { source: lessonTaskSource, workspaces, request, onBack: closeLessonTask,
@@ -3753,6 +3772,9 @@ window.__ModuleLoader__.load({
           lesson: true, evidenceReplayHint: true, publicEvidenceReplayHint: true, backLabel: '返回练习会话',
           onBack: closeEvidenceReplay, onClose: closeEvidenceReplay,
           onVisit: (next, task) => { if (next === sessionId) closeEvidenceReplay(); else { setOpenEvidenceReplay(false); onVisit(next, task) } } }),
+        openDeliveryReview && h(RematchEditor, { kind, comparisonId: member.id, arm: member.arm, sourceSessionId: sessionId, request,
+          lesson: true, guidedReview: true, backLabel: '返回练习会话', onBack: closeDeliveryReview, onClose: closeDeliveryReview,
+          onVisit: (next, task) => { if (next === sessionId) closeDeliveryReview(); else { setOpenDeliveryReview(false); onVisit(next, task) } } }),
         open && h(RunComparison, { kind, request, comparisonId: member.id, sessionId, onClose: close, workspaces, lessonHint: member.lesson,
           evidenceReplayHint: evidenceReplay, publicEvidenceReplayHint: publicEvidenceReplay,
           putTask: task => putTask(sessionId, task),
@@ -11143,6 +11165,10 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor .moba-lighthouse-anchor-actions { justify-content: flex-end; gap: 4px 7px; }
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) { grid-template-columns: minmax(0, 1fr); }
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
+      @media (max-width: 600px) {
+        .moba-lighthouse-anchor[data-delivery-review-result] { grid-template-columns: minmax(0, 1fr); }
+        .moba-lighthouse-anchor[data-delivery-review-result] .moba-lighthouse-anchor-actions { justify-content: flex-start; }
+      }
       .moba-lighthouse-anchor-actions .moba-settlement-button { white-space: normal; }
       .moba-lighthouse-anchor > div > span { color: #b8ded4; }
       .moba-lighthouse-anchor > p, .moba-task-pending > p { margin: 0; color: #ccdcd8; font-size: 11px; }
