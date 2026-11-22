@@ -2883,7 +2883,8 @@ window.__ModuleLoader__.load({
           : h('button', { type: 'button', className: 'moba-text', onClick: () => onBrowse(path) }, name)))))
     }
 
-    function WorkspaceMaterialPicker({ workspace, workspaceLabel, request, onCancel, onSelect, materialAction = 'workspace-materials' }) {
+    function WorkspaceMaterialPicker({ workspace, workspaceLabel, request, onCancel, onSelect, workspaceControls,
+      materialAction = 'workspace-materials' }) {
       const language = useLanguage()
       const [directory, setDirectory] = useState('')
       const [query, setQuery] = useState('')
@@ -2931,7 +2932,7 @@ window.__ModuleLoader__.load({
           if (event.key === 'Enter' && event.target === searchInput.current) event.preventDefault()
           closeDialogOnEscape(event, onCancel)
         } },
-        h('p', { className: 'moba-lighthouse-note' }, workspaceLabel),
+        workspaceControls || h('p', { className: 'moba-lighthouse-note' }, workspaceLabel),
         h(MaterialBreadcrumb, { directory: current?.directory ?? directory, onBrowse: browse }),
         h('label', { className: 'moba-search moba-material-search' }, h(Glyph, { kind: 'search', size: 17 }),
           h('input', { ref: searchInput, type: 'search', value: query, maxLength: 160,
@@ -3091,16 +3092,23 @@ window.__ModuleLoader__.load({
     function WorkspaceFileFields({ workspaces, workspaceId, setWorkspaceId, material, setMaterial, busy, workspaceField, materialField, request, materialAction,
       workspaceSetup, onWorkspaceAdded }) {
       const helpId = useId()
-      const [pickerFor, setPickerFor] = useState('')
+      const [picker, setPicker] = useState(null)
       const defaultMaterialField = useRef(null)
       const pathInput = materialField ?? defaultMaterialField
       const browseButton = useRef(null)
       const workspace = workspaces.find(item => item.workspaceId === workspaceId)
 
-      useEffect(() => { if (pickerFor && pickerFor !== workspace?.workspaceId) setPickerFor('') }, [pickerFor, workspace?.workspaceId])
+      useEffect(() => {
+        if (picker?.previousWorkspace !== undefined && picker.workspaceId === workspace?.workspaceId) {
+          if (picker.previousWorkspace !== picker.workspaceId) setMaterial('')
+          setPicker({ workspaceId: picker.workspaceId })
+        } else if (picker && picker.previousWorkspace === undefined && picker.workspaceId !== workspace?.workspaceId) {
+          setPicker(null)
+        }
+      }, [picker, workspace?.workspaceId, setMaterial])
 
       function closePicker(target) {
-        setPickerFor('')
+        setPicker(null)
         requestAnimationFrame(() => target.current?.focus())
       }
 
@@ -3110,23 +3118,44 @@ window.__ModuleLoader__.load({
         closePicker(pathInput)
       }
 
-      const workspaceSelect = h('label', null, t('工作区'), h('select', { ref: workspaceField, value: workspaceId, disabled: busy || !workspaces.length,
-          required: true, onChange: event => setWorkspaceId(event.target.value) },
-        h('option', { value: '' }, t(workspaces.length ? '选择材料所在的工作区' : '请先添加工作区')),
+      function chooseWorkspace(id, browsing) {
+        if (browsing && id !== workspaceId) {
+          pathInput.current?.setCustomValidity('')
+          setMaterial('')
+        }
+        setPicker(browsing ? { workspaceId: id } : null)
+        setWorkspaceId(id)
+      }
+
+      function addWorkspace(id, browsing) {
+        setPicker(browsing ? { workspaceId: id, previousWorkspace: workspaceId } : null)
+        onWorkspaceAdded(id)
+      }
+
+      const workspaceSelect = browsing => h('label', null, t('工作区'),
+        h('select', { ref: browsing ? undefined : workspaceField, value: workspaceId, disabled: busy || !workspaces.length,
+          required: !browsing, onChange: event => chooseWorkspace(event.target.value, browsing) },
+        !browsing && h('option', { value: '' }, t(workspaces.length ? '选择材料所在的工作区' : '请先添加工作区')),
         workspaces.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceFileLabel(item, workspaces)))))
+      const folderButton = browsing => workspaceSetup && h(AddMaterialsFolder, { setup: workspaceSetup, disabled: busy,
+        onAdded: id => addWorkspace(id, browsing) })
+      const label = workspace && workspaceFileLabel(workspace, workspaces)
+      const switchInPicker = materialAction === 'lesson-task-materials' && workspaces.length > 1
+      const workspaceControls = (workspaceSetup || switchInPicker) && h('div', { className: 'moba-material-input moba-material-workspace' },
+        switchInPicker ? workspaceSelect(true) : h('p', { className: 'moba-lighthouse-note' }, label),
+        folderButton(true))
       return h(Fragment, null,
-        workspaceSetup ? h('div', { className: 'moba-material-input' }, workspaceSelect,
-          h(AddMaterialsFolder, { setup: workspaceSetup, disabled: busy, onAdded: onWorkspaceAdded })) : workspaceSelect,
+        workspaceSetup ? h('div', { className: 'moba-material-input' }, workspaceSelect(false), folderButton(false)) : workspaceSelect(false),
         h('div', { className: 'moba-material-input' },
           h('label', null, t('材料文件相对路径'),
             h('input', { ref: pathInput, required: true, disabled: busy, 'aria-describedby': helpId, value: material, maxLength: 1024,
               placeholder: 'docs/brief.md', autoComplete: 'off', spellCheck: false,
               onChange: event => { event.target.setCustomValidity(''); setMaterial(event.target.value) } })),
           h('button', { ref: browseButton, type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
-            disabled: busy || !workspace, onClick: () => setPickerFor(workspace.workspaceId) }, t('浏览文件'))),
+            disabled: busy || !workspace, onClick: () => setPicker({ workspaceId: workspace.workspaceId }) }, t('浏览文件'))),
         h('p', { id: helpId, className: 'moba-lighthouse-note' }, t('填入一个相对于工作区根目录的文件路径，例如 docs/brief.md。')),
-        workspace && pickerFor === workspaceId && h(WorkspaceMaterialPicker, { workspace, workspaceLabel: workspaceFileLabel(workspace, workspaces),
-          request, materialAction, onCancel: () => closePicker(browseButton), onSelect: selectMaterial }))
+        workspace && picker?.workspaceId === workspaceId && h(WorkspaceMaterialPicker, { key: workspaceId, workspace, workspaceLabel: label,
+          request, materialAction, workspaceControls, onCancel: () => closePicker(browseButton), onSelect: selectMaterial }))
     }
 
     function workspaceMaterialIsRelative(path) {
@@ -12008,6 +12037,7 @@ window.__ModuleLoader__.load({
       .moba-workspace-comparison-form p { margin: 0 0 3px; }
       .moba-material-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 6px; }
       .moba-material-input button { min-height: 36px; }
+      .moba-material-workspace .moba-lighthouse-note { margin: 0; align-self: center; }
       .moba-material-dialog { width: min(570px, calc(100vw - 28px)); }
       .moba-material-crumbs ol { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px;
         margin: 8px 0; padding: 0; list-style: none; }
