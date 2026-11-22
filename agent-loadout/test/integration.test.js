@@ -1436,7 +1436,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
   }
 })
 
-test('stock heroes use the same Lighthouse card and show which delivery need each native session meets', { timeout: 120_000 }, async () => {
+test('stock heroes use the same Lighthouse card and show which delivery need each native session meets', { timeout: 150_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-stock-hero-trial-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')
@@ -1984,6 +1984,10 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(await nativeSessions(), beforeAlternates)
 
     const alternateSessions = []
+    const reviewedHeroPlans = new Map()
+    const reviewPair = (sessionId, pairSide, status) => invoke('lesson-task-result', { sessionId, review: true, pairSide }, status)
+    await reviewPair(own.sessionId, 'original', 422)
+    await invoke('lesson-task-result', { sessionId: own.sessionId, pairSide: 'original' }, 422)
     for (const [started, arm, readTool, priorTrace, targetTrace] of [
       [own, 'standard', 'read', ownNative, stockTrace],
       [standardOwn, 'minimal-present', 'bash', stockPersonal, nativeReplay],
@@ -2005,6 +2009,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       assert.equal(draft.inherited, 0)
       assert.ok(!draft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
       assert.equal((await invoke('lesson-task-result', { sessionId: opened.sessionId })).heroPair, undefined)
+      await reviewPair(opened.sessionId, 'original', 422)
       await send(opened)
       const completed = await history(opened.sessionId)
       assert.deepEqual(traceTools(completed).map(event => event.data.name), [readTool, 'present'])
@@ -2015,8 +2020,19 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       assert.equal(afterAlternate.alternateTask, undefined)
       assert.deepEqual(afterAlternate.heroPair, { material: ownMaterial,
         original: { sessionId: started.sessionId, arm: arm === 'standard' ? 'minimal-present' : 'standard',
-          tools: traceTools(priorTrace).map(event => event.data.name), originalAttached: true },
-        alternate: { sessionId: opened.sessionId, arm, tools: [readTool, 'present'], originalAttached: true } })
+          tools: traceTools(priorTrace).map(event => event.data.name), originalAttached: true, canReview: true },
+        alternate: { sessionId: opened.sessionId, arm, tools: [readTool, 'present'], originalAttached: true, canReview: true } })
+      await reviewPair(opened.sessionId, 'constructor', 422)
+      for (const side of ['original', 'alternate']) {
+        const run = afterAlternate.heroPair[side]
+        const reviewed = await reviewPair(opened.sessionId, side)
+        const minimal = run.arm === 'minimal-present'
+        assert.equal(reviewed.sessionId, run.sessionId, reviewed.reason)
+        assert.equal(reviewed.source.arm, run.arm)
+        assert.deepEqual(reviewed.draft?.equipmentIds, minimal ? ['present'] : [])
+        assert.equal(reviewed.draft?.presetId, minimal ? 'minimal' : 'standard')
+        reviewedHeroPlans.set(reviewed.draft.presetId, { reviewed, run })
+      }
       assert.deepEqual(await history(started.sessionId), priorTrace)
     }
     assert.deepEqual(await nativeSessions(), [...beforeAlternates, ...alternateSessions].sort())
@@ -2026,7 +2042,45 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       assert.equal(pair?.material, ownMaterial)
       assert.equal(pair?.alternate.originalAttached, true)
     }
+    assert.equal((await reviewPair(alternateSessions[0], 'original')).draft?.presetId, 'minimal')
     await writeFile(ownPath, ownContent)
+    await appendFile(replayCard, '\nThe equipped recipe evidence is no longer current.\n')
+    assert.equal((await reviewPair(alternateSessions[0], 'original')).draft, undefined)
+    assert.equal((await reviewPair(alternateSessions[0], 'alternate')).draft?.presetId, 'standard')
+    await writeFile(replayCard, materialBytes)
+
+    const newMaterial = ownFolder + '/补给 台账.md'
+    const newPath = join(ownWorkspace, newMaterial)
+    await writeFile(newPath, '# 夜班备用补给\n\n存放：东侧一号柜。\n')
+    const beforeNewTasks = await nativeSessions()
+    const savedIds = []
+    const savedPlans = []
+    for (const [preset, { reviewed, run }] of reviewedHeroPlans) {
+      const name = 'Verified same-task ' + preset
+      const saved = await invoke('plan-save', { name, draft: reviewed.draft })
+      assert.equal(saved.name, name)
+      assert.ok(!JSON.stringify(saved).includes(ownMaterial))
+      savedPlans.push(saved)
+      const fields = { id: saved.id, revision: saved.revision, workspaceId, material: newMaterial,
+        task: '清点备用物资，并把所选的新台账原件附在这个对话。' }
+      const preview = await invoke('plan-task-preview', fields)
+      assert.equal(preview.planName, name)
+      assert.ok(preview.task.includes(newMaterial) && preview.task.includes(fields.task))
+      assert.ok(!preview.task.includes(ownMaterial) && preview.task !== reviewed.task)
+      const opened = await invoke('plan-task-open', { ...fields, token: preview.token, launchId: launchId('b') })
+      savedIds.push(opened.sessionId)
+      const draft = await history(opened.sessionId)
+      assert.equal(draft.inherited, 0)
+      assert.ok(!draft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+      await send(opened)
+      const completed = await history(opened.sessionId)
+      assert.deepEqual(traceTools(completed).map(event => event.data.name), run.tools)
+      assert.deepEqual(traceFiles(completed).map(file => file.path), [await realpath(newPath)])
+    }
+    assert.deepEqual(await nativeSessions(), [...beforeNewTasks, ...savedIds].sort())
+    const listedPlans = (await host.request(endpoint)).value.plans
+    assert.deepEqual(new Set(listedPlans.map(plan => plan.id)), new Set([...before.plans, ...savedPlans].map(plan => plan.id)))
+    for (const { id, revision } of savedPlans) await invoke('plan-remove', { id, revision })
 
     const personalSource = stockResult.rematchSource
     assert.deepEqual(personalSource, { kind: 'personal', comparisonId: standardOwn.sessionId.slice('session-'.length), arm: 'task' })

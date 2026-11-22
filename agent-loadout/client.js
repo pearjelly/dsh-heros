@@ -9063,16 +9063,18 @@ window.__ModuleLoader__.load({
           h('span', null, '+' + award.xp + ' XP')))))
     }
 
-    function HeroPersonalPairResult({ pair, onOpenMatch }) {
+    const heroPersonalPairSides = {
+      original: { label: '原局', action: '查看原局会话' },
+      alternate: { label: '换装局', action: '查看换装局会话' },
+    }
+
+    function HeroPersonalPairResult({ pair, onOpenMatch, onKeep, keepButtons }) {
       const heading = useId()
-      const runs = [
-        { label: '原局', action: '查看原局会话', run: pair.original },
-        { label: '换装局', action: '查看换装局会话', run: pair.alternate },
-      ]
       return h('section', { className: 'moba-handoff-outcome', 'data-hero-personal-pair': true, 'aria-labelledby': heading },
         h('h4', { id: heading }, t('同一任务的两次实测')),
         h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t('材料文件')), ' · ', h('code', null, pair.material)),
-        h('div', { className: 'moba-lighthouse-arms moba-handoff-report-grid' }, runs.map(({ label, action, run }) => {
+        h('div', { className: 'moba-lighthouse-arms moba-handoff-report-grid' }, Object.entries(heroPersonalPairSides).map(([side, { label, action }]) => {
+          const run = pair[side]
           const equipped = run.arm === minimalDeliveryReplayArm.id
           const hero = equipped ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === run.arm)
           return h('article', { key: run.sessionId, className: 'moba-lighthouse-arm moba-handoff-report-side' },
@@ -9080,25 +9082,32 @@ window.__ModuleLoader__.load({
               h('h4', null, t(label), h('span', null, t(hero?.name ?? run.arm)))),
             h('p', { className: 'moba-lighthouse-note' }, t(run.originalAttached ? '已交付所选材料。' : '未核验所选材料的附件。')),
             run.tools?.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('实测工具调用'), ' · ', h('code', null, run.tools.join(' · '))),
-            h('footer', null, h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(run.sessionId) }, t(action))))
+            h('footer', null,
+              run.canReview === true && h('button', { type: 'button', className: 'moba-roster-open', ref: keepButtons[side],
+                'aria-label': t('保留这套出装') + ' · ' + t(label), onClick: () => onKeep(side) }, t('保留这套出装')),
+              h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(run.sessionId) }, t(action))))
         })))
     }
 
     function LessonTaskResult({ sessionId, version, request, onOpenMatch, onUse, onPersonalFlow, initialPersonalFocus }) {
       const language = useLanguage()
       const headingId = useId()
-      const [review, setReview] = useState(false)
+      const [review, setReview] = useState('')
       const [state, setState] = useState({})
       const [retry, setRetry] = useState(0)
       const reviewHeading = useRef(null)
       const reviewButton = useRef(null)
-      const returnFocus = useRef(false)
+      const originalReviewButton = useRef(null)
+      const alternateReviewButton = useRef(null)
+      const returnFocus = useRef('')
       const rematchButton = useRef(null)
       const rebaselineButton = useRef(null)
       const alternateButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
       const action = 'lesson-task-result'
-      const pane = review ? 'review' : 'result'
+      const keepButtons = { original: originalReviewButton, alternate: alternateReviewButton }
+      const pairSide = heroPersonalPairSides[review] ? review : undefined
+      const pane = review || 'result'
       const cached = state[pane]
       const current = cached && cached.version === version && cached.retry === retry && cached.language === language ? cached : null
       const result = current?.result
@@ -9115,7 +9124,8 @@ window.__ModuleLoader__.load({
         }
         async function load() {
           try {
-            const result = await request(action, { action, sessionId, ...(review && { review: true }) }, abort.signal, language)
+            const result = await request(action, { action, sessionId, ...(review && { review: true }),
+              ...(pairSide && { pairSide }) }, abort.signal, language)
             if (abort.signal.aborted) return
             remember(result ? { result } : { error: t('找不到本次任务的结果。') })
             if (!review && (result?.status === 'running' || result?.status === 'waiting-choice')) timer = setTimeout(load, 1500)
@@ -9125,12 +9135,12 @@ window.__ModuleLoader__.load({
         }
         load()
         return () => { abort.abort(); clearTimeout(timer) }
-      }, [request, sessionId, review, pane, version, retry, language])
+      }, [request, sessionId, review, pane, pairSide, version, retry, language])
       useEffect(() => { if (review) reviewHeading.current?.focus() }, [review])
       useEffect(() => {
         if (review || !returnFocus.current || !current) return
-        returnFocus.current = false
-        const target = reviewButton.current ?? reviewHeading.current
+        const target = (keepButtons[returnFocus.current] ?? reviewButton).current ?? reviewHeading.current
+        returnFocus.current = ''
         target?.focus()
       }, [review, current])
       useEffect(() => {
@@ -9143,21 +9153,27 @@ window.__ModuleLoader__.load({
       }, [review, current, initialPersonalFocus])
 
       function returnToResult() {
-        returnFocus.current = true
-        setReview(false)
+        returnFocus.current = review
+        setReview('')
+      }
+
+      function keepPairLoadout(side) {
+        setState(previous => ({ ...previous, [side]: undefined }))
+        setReview(side)
       }
 
       const issue = current?.error ?? result?.reason
       return h('section', { className: 'moba-lesson-result', 'aria-labelledby': headingId,
         onKeyDown: event => { if (review) closeDialogOnEscape(event, returnToResult) } },
-        h('h3', { id: headingId, ref: reviewHeading, tabIndex: -1 }, t(review ? '核对本次出装' : '本次任务结果')),
+        h('h3', { id: headingId, ref: reviewHeading, tabIndex: -1 }, t(pairSide ? '核对要保留的出装' : review ? '核对本次出装' : '本次任务结果')),
         issue && h('p', { className: 'moba-match-action-error', role: 'alert' },
           t(lessonTaskReasons[issue] ?? comparisonArmReasons[issue] ?? issue), current?.error && ' ',
           current?.error && h('button', { type: 'button', className: 'moba-text', onClick: () => setRetry(value => value + 1) }, t('重试'))),
         !current && h('p', { className: 'moba-match-action-note', role: 'status' }, t(review ? '正在核对本回合出装…' : '正在读取任务结果…')),
         result && h(Fragment, null,
-          !review && result.heroPair && h(HeroPersonalPairResult, { pair: result.heroPair, onOpenMatch }),
-          sourceLabel && h('p', { className: 'moba-match-action-note' }, t('练习出装') + ' · ' + sourceLabel),
+          !review && result.heroPair && h(HeroPersonalPairResult, { pair: result.heroPair, onOpenMatch, onKeep: keepPairLoadout, keepButtons }),
+          pairSide ? h('p', { className: 'moba-match-action-note' }, [t(heroPersonalPairSides[pairSide].label), result.hero?.name].filter(Boolean).join(' · '))
+            : sourceLabel && h('p', { className: 'moba-match-action-note' }, t('练习出装') + ' · ' + sourceLabel),
           review ? result.draft && h(Fragment, null,
             h(PlanEquipment, { items: result.gear ?? empty, removed: result.removed ?? empty }),
             h(SharedPlanCapabilities, { comparison: result.comparison }))
@@ -9185,7 +9201,7 @@ window.__ModuleLoader__.load({
                 onClick: () => onPersonalFlow({ mode: 'rebaseline', source: result.source, armoryDraft: result.armoryDraft,
                   rebaseline: result.rebaseline }) }, t(rebaselineTaskLabel)),
               result?.canReview && h('button', { ref: reviewButton, type: 'button', className: 'moba-match-move',
-                onClick: () => setReview(true) }, t('核对本次出装'), h(Glyph, { kind: 'arrow', size: 16 })),
+                onClick: () => setReview('current') }, t('核对本次出装'), h(Glyph, { kind: 'arrow', size: 16 })),
               result?.rematchSource && h('button', { ref: rematchButton, type: 'button', className: 'moba-match-move',
                 'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'rematch', source: result.rematchSource,
                   evidenceReplay: source?.lesson === lighthouseEvidenceLesson }) },
@@ -10887,6 +10903,9 @@ window.__ModuleLoader__.load({
       .moba-lesson-result .moba-settlement-footer button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
       .moba-lesson-result [data-hero-personal-pair] { --ink: #f3e9d2; --muted: #cdc4b7; --line: #564532; margin: 0; }
       .moba-lesson-result [data-hero-personal-pair] .moba-lighthouse-arm { gap: 5px; }
+      .moba-lesson-result [data-hero-personal-pair] footer:has(.moba-roster-open) { display: grid;
+        grid-template-columns: auto minmax(0, 1fr); align-items: center; justify-content: stretch; }
+      .moba-lesson-result [data-hero-personal-pair] footer .moba-text { white-space: normal; text-align: start; }
       .moba-lesson-result-files li > div { display: flex; flex-wrap: wrap; align-items: baseline; min-width: 0; gap: 3px 8px; }
       .moba-lesson-result-awards h4, .moba-session-settlement-title { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
       .moba-lesson-result-awards ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }

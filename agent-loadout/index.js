@@ -4212,11 +4212,17 @@ export async function apply(ctx) {
       source.arm !== oppositePersonalHeroArm(original.launch.source)) return
     const sameInput = ['workspaceId', 'cwd', 'digest', 'material', 'task'].every(key => original.target[key] === current.target[key])
     if (!sameInput) return
-    function side(id, result) {
+    return { material: current.target.material, original: { sessionId: alternateOf, result: original },
+      alternate: { sessionId, result: current } }
+  }
+
+  function personalHeroPairResult({ material, original, alternate }) {
+    function side({ sessionId, result }) {
       const tools = [...new Set(result.evidence.entries.filter(entry => entry.state === 'completed').map(entry => entry.name))]
-      return { sessionId: id, arm: result.launch.source.arm, tools, originalAttached: Boolean(result.presentBinding) }
+      const originalAttached = Boolean(result.presentBinding)
+      return { sessionId, arm: result.launch.source.arm, tools, originalAttached, ...(originalAttached && { canReview: true }) }
     }
-    return { material: current.target.material, original: side(alternateOf, original), alternate: side(sessionId, current) }
+    return { material, original: side(original), alternate: side(alternate) }
   }
 
   async function checkedPersonalRematchBaseline(selection, signal, original) {
@@ -4946,8 +4952,18 @@ export async function apply(ctx) {
     }
   }
 
-  async function readLessonTaskResult({ sessionId, review }, signal) {
-    const resultView = await observeLessonTask(sessionId, signal)
+  async function readLessonTaskResult({ sessionId, review, pairSide }, signal) {
+    const pairReview = pairSide !== undefined
+    const cannotReuse = '这局还没有可复用出装的实战记录。'
+    if (pairReview && (review !== true || (pairSide !== 'original' && pairSide !== 'alternate'))) throw new Error(cannotReuse)
+    let resultView = await observeLessonTask(sessionId, signal)
+    if (pairReview) {
+      const pair = resultView && await personalHeroPair(sessionId, resultView, signal)
+      const picked = pair?.[pairSide]
+      if (!picked?.result.presentBinding) throw new Error(cannotReuse)
+      sessionId = picked.sessionId
+      resultView = picked.result
+    }
     if (!resultView) return null
     const { launch, cwd, presetId, evidence: observed, target } = resultView
     const { windows = [], ...evidence } = observed
@@ -5006,7 +5022,7 @@ export async function apply(ctx) {
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
-      ...(heroPair && { heroPair }),
+      ...(heroPair && { heroPair: personalHeroPairResult(heroPair) }),
       ...(armoryDraft && { armoryDraft }), ...(armoryReason && { reason: armoryReason }) }
     if (review !== true || !canReview) return result
     try {
@@ -5022,8 +5038,13 @@ export async function apply(ctx) {
         heroName = native.name
       } else {
         checked = await verifiedLessonTaskSource(launch.source, signal)
-        if (checked.proof.presetId !== presetId || (isStockTrialSource(launch.source) &&
-          checked.proof.identity !== target?.identity)) throw new Error('本机配置已变化，无法核对这局的原出装。')
+        const pinned = pairReview || isStockTrialSource(launch.source)
+        const sourceChanged = pairReview && (checked.proof.sessionId !== launch.source.sessionId ||
+          !isDeepStrictEqual(resultView.presentBinding, checked.deliveryBinding ??
+            checked.stockBindings?.find(binding => binding.tool === 'present')))
+        if (checked.proof.presetId !== presetId || (pinned && checked.proof.identity !== target?.identity) || sourceChanged) {
+          throw new Error('本机配置已变化，无法核对这局的原出装。')
+        }
         heroName = checked.view.heroName
       }
       const { draft, candidate, ecosystem } = checked
@@ -5358,7 +5379,10 @@ export async function apply(ctx) {
       const meetsNeed = materialState === 'verified' && proof.materialRead && Boolean(proof.summary) &&
         (record.need === 'summary' || proof.originalAttached)
       const { originalFile, ...handoff } = proof
+      const deliveryBinding = includeBindings && arm === lighthouseHeroDelivery && meetsNeed &&
+        observedMaterialDelivery(source.events, result.turn, saved.cwd, material)
       return { ...details, ...handoff, meetsNeed,
+        ...(deliveryBinding && { deliveryBinding }),
         ...(arm === lighthouseHeroDelivery && meetsNeed && originalFile && { originalFile }) }
     } catch {
       signal?.throwIfAborted()
@@ -5385,7 +5409,7 @@ export async function apply(ctx) {
     const unavailable = '请从已经核验的灯塔练习开始。'
     if (!record) throw new Error(unavailable)
     const [original, replay, saved] = await Promise.all([
-      readHeroTrialArm(record, 'minimal', signal), readHeroTrialArm(record, lighthouseHeroDelivery, signal),
+      readHeroTrialArm(record, 'minimal', signal), readHeroTrialArm(record, lighthouseHeroDelivery, signal, true),
       heroTrials.readArm(record.id, lighthouseHeroDelivery),
     ])
     const source = heroDeliveryLessonSource(record, original, replay)
@@ -5394,7 +5418,7 @@ export async function apply(ctx) {
     if (token !== saved.token || candidate.id !== saved.presetId) throw new Error('本机配置已变化，无法核对这局的原出装。')
     const draft = recordedLoadoutDraft(candidate.record, 'minimal', ecosystem)
     const anchor = { ...source, sessionId: replay.sessionId, heroDeliveryTrial: true, gearSource: view.source }
-    return { draft, candidate, ecosystem, proof: { ...anchor, presetId: saved.presetId, identity },
+    return { draft, candidate, ecosystem, deliveryBinding: replay.deliveryBinding, proof: { ...anchor, presetId: saved.presetId, identity },
       view: { ...anchor, heroName: presetLabels.get('minimal')?.[0] ?? 'Minimal' } }
   }
 

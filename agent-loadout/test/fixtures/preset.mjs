@@ -135,7 +135,7 @@ export async function apply(ctx) {
       const latestText = lastUser?.content[0]?.text
       const comparisonMaterial = latestText?.match(/^(?:【工作区同题对照】|\[Workspace comparison\])\n(?:选定材料 |Selected material: )"(02-lighthouse\.md|materials\/workspace-fixture\.md)"\n/u)?.[1]
       const taskMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(materials\/reuse-fixture\.md|案件 材料\/交接 记录\.md|会签 文件\.md)"\n/u)?.[1]
-      const heroDeliveryMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(值班 材料\/设备 台账\.md)"\n/u)?.[1]
+      const heroDeliveryMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(值班 材料\/(?:设备|补给) 台账\.md)"\n/u)?.[1]
       const personalEvidence = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(证据 材料\/(?:设备|更新) 台账\.md)"\n/u)?.[1]
       const evidenceMaterial = personalEvidence ?? (comparisonMaterial === '02-lighthouse.md' ? comparisonMaterial : undefined)
       const supportedFact = personalEvidence ? 'two spare radios' : '2 cans of lamp oil'
@@ -173,7 +173,7 @@ export async function apply(ctx) {
         sequence = [read, ...(review ? ['ask_user_question'] : []), ...(canPresent && (!review || confirmed) ? ['present'] : [])]
         name = sequence[results.length]
         if (name === 'read') args = { file_path: heroDeliveryMaterial }
-        if (name === 'bash') args = { command: "cat -- '值班 材料/设备 台账.md'", description: 'Read the selected equipment ledger' }
+        if (name === 'bash') args = { command: "cat -- '" + heroDeliveryMaterial + "'", description: 'Read the selected equipment ledger' }
         if (name === 'ask_user_question') args = { questions: [{
           id: 'fixture-delivery-review',
           question: 'Deliver the equipment ledger or request changes?',
@@ -183,9 +183,13 @@ export async function apply(ctx) {
         if (!name) {
           sequence = undefined
           const ledger = results[0]?.content.map(block => block.text ?? '').join(' ') ?? ''
-          text = ['工作室东侧 3 号柜', '2 台备用对讲机', '1 根备用天线'].every(fact => ledger.includes(fact))
-            ? '夜班交接：到工作室东侧 3 号柜领取 2 台备用对讲机和 1 根备用天线。来源：值班 材料/设备 台账.md。'
-            : '需要重新核对台账。'
+          if (heroDeliveryMaterial.endsWith('/补给 台账.md') && ledger.includes('东侧一号柜')) {
+            text = '夜班备用补给存放在东侧一号柜。'
+          } else {
+            text = ['工作室东侧 3 号柜', '2 台备用对讲机', '1 根备用天线'].every(fact => ledger.includes(fact))
+              ? '夜班交接：到工作室东侧 3 号柜领取 2 台备用对讲机和 1 根备用天线。来源：值班 材料/设备 台账.md。'
+              : '需要重新核对台账。'
+          }
         }
       } else if (latestText?.startsWith('【英雄同题试玩】\n') || latestText?.startsWith('[Hero handoff trial]\n')) {
         const offered = new Set(tools?.map(tool => tool.name))
