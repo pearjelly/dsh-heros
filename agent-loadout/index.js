@@ -1383,6 +1383,7 @@ export async function apply(ctx) {
         ...(source && isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
         ...(target && { target }), ...(source && { source }), ...(armory && { armory }),
+        ...(checked.handoffAlternateOf && { handoffAlternateOf: checked.handoffAlternateOf }),
         ...(kind === 'alternate' && { alternateOf: input.alternateOf }) })
       updates.notify(sessionId)
       return reply
@@ -4269,11 +4270,13 @@ export async function apply(ctx) {
   }
 
   function requestedLessonTask(selection, english) {
-    const { kind, comparisonId, arm, workspaceId, handoffPairId } = selection
+    const { kind, comparisonId, arm, workspaceId, handoffPairId, handoffAlternateOf } = selection
     const source = { kind, comparisonId, arm, ...(handoffPairId !== undefined && { handoffPairId }) }
     if (!validLessonTaskReference(source)) throw new Error('请从已经核验的灯塔练习开始。')
+    if (handoffAlternateOf !== undefined && (!handoffPairId || typeof handoffAlternateOf !== 'string' ||
+      !heroAlternateSessionId.test(handoffAlternateOf))) throw new Error(handoffPairChanged)
     if (typeof workspaceId !== 'string' || !workspaceId || workspaceId.length > 512) throw new Error('请选择一个现有的工作区。')
-    const fields = { source, workspaceId, ...planTaskPrompt(selection, english) }
+    const fields = { source, workspaceId, ...planTaskPrompt(selection, english), ...(handoffAlternateOf && { handoffAlternateOf }) }
     const hash = createHash('sha256').update(JSON.stringify(fields)).digest('hex')
     return { ...fields, hash, english }
   }
@@ -4303,16 +4306,20 @@ export async function apply(ctx) {
     await verifyHandoffTaskPair(input.source, signal)
     const { workspace, digest } = await readPersonalTaskMaterial(workspaceId, material, signal)
     const cwd = workspace.path
+    const handoffAlternateOf = input.handoffAlternateOf &&
+      await sameHandoffOrigin(input.handoffAlternateOf, input.source, { workspaceId, material, task, cwd, digest }, signal)
     const lessonName = isStockTrialSource(source) ? presetLabels.get(source.arm)[0]
       : source.heroDeliveryTrial ? '极简模式 + 交付物预览'
       : source.publicEvidenceReplay ? '灯塔证据换装对照' : source.lesson === evidenceLesson ? '灯塔证据取舍' : '灯塔换装练习'
     const planName = english ? englishText(lessonName) : lessonName
     const { handoffPairId } = input.source
     const view = { workspaceId, workspaceTitle: workspace.title, material, planName, task,
-      source: { ...source, ...(handoffPairId && { handoffPairId }) } }
-    const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, proof])).digest('hex')
+      source: { ...source, ...(handoffPairId && { handoffPairId }) }, ...(handoffAlternateOf && { sameHandoffTask: true }) }
+    const token = createHash('sha256').update(JSON.stringify([
+      hash, cwd, digest, proof, ...(input.handoffAlternateOf ? [handoffAlternateOf ?? null] : []),
+    ])).digest('hex')
     signal?.throwIfAborted()
-    return { view, cwd, digest, draft, candidate, ecosystem, token, identity: proof.identity, stockBindings }
+    return { view, cwd, digest, draft, candidate, ecosystem, token, identity: proof.identity, stockBindings, handoffAlternateOf }
   }
 
   function personalTaskTarget(launch, header) {
@@ -5181,7 +5188,8 @@ export async function apply(ctx) {
     try {
       const { header, launch } = planTaskDetails(source)
       if (!launch || (launch.armory !== true && (!launch.source || !validLessonTaskReference(launch.source)))) return
-      const verifyEvidence = launch.armory === true || Boolean(launch.source?.handoffPairId) ||
+      const ownHandoff = Boolean(launch.source?.handoffPairId)
+      const verifyEvidence = launch.armory === true || ownHandoff ||
         isEvidenceLessonSource(launch.source) || isPublicEvidenceReplaySource(launch.source) ||
         isHeroTrialTaskSource(launch.source)
       const { cwd, agentPreset: presetId } = header
@@ -5189,7 +5197,7 @@ export async function apply(ctx) {
       if ((strict || verifyEvidence) && !target) return
       const evidence = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
         verifyMaterialProof: strict || verifyEvidence, verifyMaterialDelivery: true, exactMessages: true,
-        linkedChoicesOnly: verifyEvidence, includeWindows: !strict, includeFileCoordinates: launch.armory === true }, receipts)
+        linkedChoicesOnly: verifyEvidence, includeWindows: !strict, includeFileCoordinates: launch.armory === true || ownHandoff }, receipts)
       const textBinding = launch.source && isMinimalTrialSource(launch.source) && target.textBinding
       if (textBinding?.tool === 'bash' && evidence.status === 'complete' && !evidence.continuationReason &&
         !evidence.deliverables.length && observedTextHandoff(source.events, evidence.turn, textBinding) &&
@@ -5237,15 +5245,53 @@ export async function apply(ctx) {
     }
   }
 
-  async function personalHandoffAlternate({ launch, target, evidence }, rebaseline, signal) {
-    if (!launch.source?.handoffPairId || !target || !rebaseline || evidence.status !== 'complete' ||
-      evidence.materialState !== 'verified' || evidence.continuationReason) return
+  function completedPersonalHandoff(evidence, style) {
+    return evidence.status === 'complete' && evidence.materialState === 'verified' && !evidence.continuationReason &&
+      (style === 'direct' ? evidence.materialDelivered && completedPresentDelivery(evidence) : Boolean(singleReviewAnswer(evidence)))
+  }
+
+  async function personalHandoffAlternate(sessionId, { launch, target, evidence }, signal) {
+    if (!launch.source?.handoffPairId || !target ||
+      !ctx.get('workspaceRegistry')?.get(target.workspaceId)?.sessionIds.includes(sessionId)) return
+    const brief = personalTaskBrief(launch.task)
+    if (!brief || evidence.status !== 'complete') return
     const proof = await matchedHandoffTaskPair(launch.source, signal)
     if (!proof) return
-    const attached = evidence.materialDelivered && completedPresentDelivery(evidence)
-    const observed = proof.selected.style === 'direct' ? attached : singleReviewAnswer(evidence)
-    if (!observed || await personalTaskMaterialState(target, signal) !== 'verified') return
-    return { source: proof.alternate.lessonTaskSource, style: proof.alternate.style, rebaseline }
+    if (!completedPersonalHandoff(evidence, proof.selected.style) ||
+      await personalTaskMaterialState(target, signal) !== 'verified') return
+    return { source: proof.alternate.lessonTaskSource, style: proof.alternate.style,
+      rebaseline: { workspaceId: target.workspaceId, material: target.material, brief } }
+  }
+
+  function sameHandoffTask(left, right) {
+    return left && right && ['workspaceId', 'cwd', 'digest', 'material'].every(key => left[key] === right[key]) &&
+      personalTaskBrief(left.task) === personalTaskBrief(right.task)
+  }
+
+  function sameHandoffSource(left, right) {
+    return left && right && ['kind', 'comparisonId', 'arm', 'handoffPairId'].every(key => left[key] === right[key])
+  }
+
+  async function sameHandoffOrigin(sessionId, source, current, signal) {
+    const original = await observeLessonTask(sessionId, signal, true)
+    if (!sameHandoffTask(original?.target, current)) return
+    const alternate = await personalHandoffAlternate(sessionId, original, signal)
+    if (sameHandoffSource(alternate?.source, source)) return sessionId
+  }
+
+  async function personalHandoffPair(sessionId, { launch, target, evidence }, alternate, signal) {
+    const sourceId = launch.handoffAlternateOf
+    if (!alternate || typeof sourceId !== 'string' || !heroAlternateSessionId.test(sourceId) || sourceId === sessionId) return
+    const original = await observeLessonTask(sourceId, signal, true)
+    if (!sameHandoffTask(original?.target, target) || !sameHandoffSource(original.launch.source, alternate.source) ||
+      !completedPersonalHandoff(original.evidence, alternate.style)) return
+    const currentStyle = alternate.style === 'direct' ? 'review' : 'direct'
+    function side(id, style, result) {
+      const { materialDelivered, deliverables } = result
+      return { id: style, style, sessionId: id, materialDelivered, deliverables,
+        deliveredCount: deliverables.length, choices: comparisonChoices(result) }
+    }
+    return { material: target.material, arms: [side(sourceId, alternate.style, original.evidence), side(sessionId, currentStyle, evidence)] }
   }
 
   async function readLessonTaskResult({ sessionId, review, pairSide }, signal) {
@@ -5314,13 +5360,15 @@ export async function apply(ctx) {
         }
       }
     }
-    const handoffAlternate = canReview && review !== true && await personalHandoffAlternate(resultView, rebaseline, signal)
+    const handoffAlternate = canReview && review !== true && await personalHandoffAlternate(sessionId, resultView, signal)
+    const handoffPair = handoffAlternate && await personalHandoffPair(sessionId, resultView, handoffAlternate, signal)
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
       ...(handoffAlternate && { handoffAlternate }),
+      ...(handoffPair && { handoffPair }),
       ...(sourceTrial && { sourceTrial }),
       ...(heroPair && { heroPair: personalHeroPairResult(heroPair) }),
       ...(armoryDraft && { armoryDraft }), ...(armoryReason && { reason: armoryReason }) }

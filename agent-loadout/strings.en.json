@@ -1906,6 +1906,8 @@
   "用复核后交付再试": "Try again with Delivery Review",
   "用直接交付再试": "Try again with direct delivery",
   "尝试另一种交接打法": "Try the other handoff route",
+  "同一份个人材料，两种打法": "Two routes on your own file",
+  "这局通过核验后，可对照两局的实际交接。": "Once this run is verified, you can compare what each run actually handed off.",
   "已带入刚才的文件和任务说明。核对后打开新草稿，再手动发送。": "Your file and task brief are ready. Review the loadout, open the draft, and send it yourself.",
   "这两局的实测出装暂不可用，请返回交接对照重新核对。": "These handoff loadouts are unavailable. Return to the comparison to check them again.",
   "请先核对走直接交付路线的好友战报。": "Compare with a friend's direct delivery report first.",

@@ -2801,6 +2801,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
       if (review) await finishFriendReview(opened, 'Revise draft', inspect)
       else await send(opened)
       const proof = await inspect()
+      assert.equal(proof.handoffPair, undefined)
       assert.equal(proof.materialDelivered, !review)
       assert.deepEqual(proof.entries.map(item => item.name), review ? ['ask_user_question'] : ['present'])
       const events = (await history(opened.sessionId)).events
@@ -2821,12 +2822,47 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     for (const result of carriedResults) assert.equal((await result.inspect()).handoffAlternate, undefined)
     await writeFile(carryFile, carryText)
     const first = carriedResults[0]
-    const next = await invoke('lesson-task-open', { ...first.otherFields, token: first.otherPreview.token, launchId: 'c'.repeat(32) })
+    const sameFields = { ...first.otherFields, handoffAlternateOf: first.opened.sessionId }
+    await invoke('lesson-task-preview', { ...sameFields, handoffAlternateOf: '../' }, 422)
+    const changedFields = { ...sameFields, task: 'Deliver a different brief on these notes.' }
+    const changedPreview = await invoke('lesson-task-preview', changedFields)
+    assert.equal(changedPreview.sameHandoffTask, undefined)
+    const samePreview = await invoke('lesson-task-preview', sameFields)
+    assert.equal(samePreview.sameHandoffTask, true)
+    assert.equal(samePreview.task, first.opened.task)
+    const englishSamePreview = await host.requestRaw(endpoint, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+      body: JSON.stringify({ action: 'lesson-task-preview', ...sameFields }),
+    })
+    assert.equal(englishSamePreview.status, 200)
+    const { value: translated } = await englishSamePreview.json()
+    assert.equal(translated.sameHandoffTask, true)
+    assert.match(translated.task, /^\[Loadout task\]/)
+    assert.notEqual(samePreview.token, first.otherPreview.token)
+    await invoke('lesson-task-open', { ...changedFields, token: samePreview.token, launchId: 'c'.repeat(32) }, 422)
+    assert.deepEqual(new Set(await membership(carryWorkspace.workspaceId)), carried)
+    const next = await invoke('lesson-task-open', { ...sameFields, token: samePreview.token, launchId: 'c'.repeat(32) })
+    const inspectNext = () => invoke('lesson-task-result', { sessionId: next.sessionId })
     assert.equal(next.task, first.opened.task)
     assert.ok(noMessages(await history(next.sessionId)))
-    assert.equal((await invoke('lesson-task-result', { sessionId: next.sessionId })).handoffAlternate, undefined)
+    assert.equal((await inspectNext()).handoffAlternate, undefined)
+    assert.equal((await inspectNext()).handoffPair, undefined)
     await send(next)
-    assert.equal((await invoke('lesson-task-result', { sessionId: next.sessionId })).materialDelivered, true)
+    const nextProof = await inspectNext()
+    assert.equal(nextProof.materialDelivered, true)
+    assert.equal(nextProof.handoffPair.material, carryMaterial)
+    assert.deepEqual(nextProof.handoffPair.arms.map(({ style, sessionId, choices, materialDelivered }) =>
+      [style, sessionId, choices, materialDelivered]), [
+      ['review', first.opened.sessionId, ['Revise draft'], false],
+      ['direct', next.sessionId, [], true],
+    ])
+    assert.deepEqual(nextProof.handoffPair.arms[0].deliverables, [])
+    assert.deepEqual(nextProof.handoffPair.arms[1].deliverables, nextProof.deliverables)
+    assert.equal((await first.inspect()).handoffPair, undefined)
+    await appendFile(carryFile, '\nChanged after the replay.\n')
+    assert.equal((await inspectNext()).handoffPair, undefined)
+    await writeFile(carryFile, carryText)
+    assert.deepEqual((await inspectNext()).handoffPair, nextProof.handoffPair)
     assert.deepEqual((await read({ comparisonId: triedDirect.id })).ownReviewPair, triedBoard.ownReviewPair)
     assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, true)
     assert.equal((await read({ comparisonId: friendDirect.id })).ownReviewPair, undefined)
@@ -2842,6 +2878,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal((await read({ comparisonId: triedDirect.id })).ownReviewPair, undefined)
     assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, undefined)
     assert.equal((await first.inspect()).handoffAlternate, undefined)
+    assert.equal((await inspectNext()).handoffPair, undefined)
     const savedDraft = await friendOpen('review', '5'.repeat(32))
     const staleDraft = await friendOpen('direct', '6'.repeat(32))
     const staleReplay = await history(staleDraft.sessionId)

@@ -2590,7 +2590,7 @@ window.__ModuleLoader__.load({
       return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading, 'data-armory-handoff': armory || undefined },
         h('h3', { id: heading, tabIndex: onVisit ? -1 : undefined, 'data-public-review-outcome': onVisit && !armory && !ownReview ? true : undefined,
           'data-armory-handoff-outcome': armory || undefined, 'data-own-review-pair': ownReview || undefined },
-          t(ownReview ? '我的两局交接' : '两局实测结果')),
+          t(ownReview === 'personal' ? '同一份个人材料，两种打法' : ownReview ? '我的两局交接' : '两局实测结果')),
         h('div', { className: 'moba-lighthouse-arms' }, outcome.arms.map(arm => {
           const style = t(arm.style === 'review' ? '复核后交付' : '直接交付')
           const files = arm.deliverables ?? empty
@@ -5910,7 +5910,7 @@ window.__ModuleLoader__.load({
 
     const armoryTaskLabel = '用当前出装做任务'
 
-    function PersonalLoadoutTask({ source, armoryDraft, workspaces, initialWorkspaceId, rebaseline, handoffStyle, request, onBack, onVisit,
+    function PersonalLoadoutTask({ source, armoryDraft, workspaces, initialWorkspaceId, rebaseline, handoffStyle, handoffAlternateOf, request, onBack, onVisit,
       backLabel = rebaseline ? '返回任务结果' : '返回记录' }) {
       const language = useLanguage()
       const workspaceSetup = useContext(WorkspaceSetupContext)
@@ -5955,7 +5955,7 @@ window.__ModuleLoader__.load({
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t(alternateHandoff
           ? '已带入刚才的文件和任务说明。核对后打开新草稿，再手动发送。'
           : '用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
-        options ? h(LoadoutTaskForm, { lessonSource: options.source, armoryDraft, workspaces: allowed, request,
+        options ? h(LoadoutTaskForm, { lessonSource: options.source, armoryDraft, workspaces: allowed, request, handoffAlternateOf,
           initialWorkspaceId: rebaseline?.workspaceId ?? initialWorkspaceId, initialMaterial: rebaseline?.material, initialBrief: rebaseline?.brief, backLabel,
           workspaceSetup: setup, addedWorkspace: addedAllowed ? addedWorkspace : undefined,
           onWorkspaceAdded: id => { setAddedWorkspace({ id }); retry(value => value + 1) },
@@ -6043,6 +6043,7 @@ window.__ModuleLoader__.load({
     }
 
     function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, fixedPlanRevision, lessonSource, armoryDraft, workspaces, initialWorkspaceId,
+      handoffAlternateOf,
       initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange,
       workspaceSetup, addedWorkspace, onWorkspaceAdded, onWorkspaceApplied, workspaceStatus, workspaceError, retryWorkspaces }) {
       const language = useLanguage()
@@ -6146,7 +6147,8 @@ window.__ModuleLoader__.load({
           }
           const selector = armoryDraft ? { draft: armoryDraft.draft } : lessonSource
             ? { kind: lessonSource.kind, comparisonId: lessonSource.comparisonId, arm: lessonSource.arm,
-              ...(lessonSource.handoffPairId && { handoffPairId: lessonSource.handoffPairId }) }
+              ...(lessonSource.handoffPairId && { handoffPairId: lessonSource.handoffPairId }),
+              ...(handoffAlternateOf && { handoffAlternateOf }) }
             : { id: selected.id, revision: selected.revision }
           const input = { ...selector, workspaceId: workspace.workspaceId,
             material: material.trim(), task: brief.trim() }
@@ -6254,6 +6256,7 @@ window.__ModuleLoader__.load({
               [t('材料文件相对路径'), preview.material],
             ] }),
             origin && h(RematchChangeFacts, { change: origin.change }),
+            preview.sameHandoffTask && h('p', { className: 'moba-plan-note' }, t('这局通过核验后，可对照两局的实际交接。')),
             preview.planNote && h('p', { className: 'moba-plan-note' }, preview.planNote),
             (preview.gear?.length || preview.token) && h(PlanEquipment, {
               items: preview.gear ?? version?.items ?? empty, removed: preview.removed ?? version?.removed }),
@@ -9449,6 +9452,8 @@ window.__ModuleLoader__.load({
         !current && h('p', { className: 'moba-match-action-note', role: 'status' }, t(review ? '正在核对本回合出装…' : '正在读取任务结果…')),
         result && h(Fragment, null,
           !review && result.heroPair && h(HeroPersonalPairResult, { pair: result.heroPair, onOpenMatch, onKeep: keepPairLoadout, keepButtons }),
+          !review && result.handoffPair && h('div', { 'data-personal-handoff-pair': true },
+            h(HandoffOutcomeSummary, { outcome: result.handoffPair, ownReview: 'personal', onVisit: onOpenMatch })),
           pairSide ? h('p', { className: 'moba-match-action-note' }, [t(heroPersonalPairSides[pairSide].label), result.hero?.name].filter(Boolean).join(' · '))
             : sourceLabel && h('p', { className: 'moba-match-action-note' }, t('练习出装') + ' · ' + sourceLabel),
           review ? result.draft && h(Fragment, null,
@@ -9464,14 +9469,14 @@ window.__ModuleLoader__.load({
                 onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
               handoffAlternate && h('button', { ref: handoffAlternateButton, type: 'button', className: 'moba-match-move',
                 'aria-haspopup': 'dialog', 'data-personal-handoff-alternate': handoffAlternate.style,
-                onClick: () => onPersonalFlow({ mode: 'handoff-alternate', ...handoffAlternate }) },
+                onClick: () => onPersonalFlow({ mode: 'handoff-alternate', ...handoffAlternate, handoffAlternateOf: sessionId }) },
               t(handoffAlternate.style === 'review' ? '用复核后交付再试' : '用直接交付再试'), h(Glyph, { kind: 'arrow', size: 16 })),
               sourceTrial && h('button', { ref: sourceTrialButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'source-trial', source: sourceTrial }) },
                 t('在灯塔试玩标准模式'), h(Glyph, { kind: 'arrow', size: 16 })),
               result.textHandoff && h('p', { className: 'moba-match-action-note' }, t('已记录终端工具完成和助手文字回复。')),
               h(ObservedComparisonCalls, { entries: result.entries }),
-              h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
+              !result.handoffPair && h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
                 complete: result.status === 'complete', materialDelivered: result.materialDelivered }),
               h(LessonTaskAwards, { awards: result.awards }))),
         h('div', { className: 'moba-settlement-footer' },
@@ -10526,7 +10531,8 @@ window.__ModuleLoader__.load({
         personalFlow?.mode === 'alternate' && h(LessonTaskAlternate, { sessionId, request,
           onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'handoff-alternate' && h(PersonalBaselineTask, { source: personalFlow.source,
-          rebaseline: personalFlow.rebaseline, handoffStyle: personalFlow.style, workspaces, request,
+          rebaseline: personalFlow.rebaseline, handoffStyle: personalFlow.style,
+          handoffAlternateOf: personalFlow.handoffAlternateOf, workspaces, request,
           onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'source-trial' && h(PersonalTaskSourceTrial, { source: personalFlow.source, workspaces, sessionId, request,
           onClose: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
@@ -11202,6 +11208,7 @@ window.__ModuleLoader__.load({
       .moba-lesson-result .moba-lighthouse-results { margin: 0; }
       .moba-lesson-result .moba-settlement-footer button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
       .moba-lesson-result [data-hero-personal-pair] { --ink: #f3e9d2; --muted: #cdc4b7; --line: #564532; margin: 0; }
+      .moba-lesson-result [data-personal-handoff-pair] { --ink: #f3e9d2; --muted: #cdc4b7; --line: #564532; }
       .moba-lesson-result [data-hero-personal-pair] .moba-lighthouse-arm { gap: 5px; }
       .moba-lesson-result [data-hero-personal-pair] footer:has(.moba-roster-open) { display: grid;
         grid-template-columns: auto minmax(0, 1fr); align-items: center; justify-content: stretch; }
