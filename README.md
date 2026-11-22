@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.158.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.159.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -23,7 +23,7 @@ If this is your first Desktop installation, open DeepSeek Harness Desktop once t
 
 If you came from the community catalog, use the command above to install this release. The versioned address has its own pnpm cache entry, and `-w` lets the CLI install at the profile workspace root.
 
-Open **DSH-Heros** in the sidebar. It follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
+Open **DSH-Heros** from the sidebar, or choose **Open DSH-Heros** above the composer in a blank conversation. The plugin follows **Settings → General → Language**. Select 中文 to use **深度荣耀**. Third-party plugin text and your own labels remain in their original language when there is no translation.
 
 In the Armory, use **Choose a loadout** to jump to **Hero roster**. Select a hero, then equip tools or plugins from the gear list. Choose **Use this loadout on a task** beside the gear list. Pick your own material, write the task, and review the gear and any new decisions. Confirm to open a new DSH draft, then send it yourself. After Standard has handed off the verified original, choose **Try Delivery Review** in that conversation. Add just that gear and send the same task in the new draft. The top of the verified report shows both outcomes, including the real choice, files and links to both conversations. Review the loadout you want to keep. Once you save it as a named plan, choose **Start a task with this loadout** from the save confirmation to pick a new file and write a new task.
 

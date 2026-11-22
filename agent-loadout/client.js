@@ -9888,7 +9888,7 @@ window.__ModuleLoader__.load({
         }))
     }
 
-    function MatchEquipment({ sessionId, request, openLobby, openContinuation, openDraftSession,
+    function MatchEquipment({ sessionId, blankSession, request, openLobby, openContinuation, openDraftSession,
       consumeTaskDraft, putTaskDraft, draftStore, send, workspaces }) {
       const language = useLanguage()
       const id = useId()
@@ -10132,6 +10132,10 @@ window.__ModuleLoader__.load({
       const continuationStopped = continuation?.state === 'failed' || continuation?.state === 'interrupted'
       const continuationLabel = continuationReady ? t('进入续战')
         : continuationStopped ? t('查看续战结果') : t('查看排队续战')
+      const lobbyEntry = blankSession && snapshot?.active && !snapshot.running && !receipt && !openingQuest && !continuation &&
+        !snapshot.heroTrial && !snapshot.planTask && !snapshot.lighthouseComparison && !snapshot.workspaceComparison &&
+        !snapshot.planComparison && !snapshot.rematchComparison
+      const lobbyLabel = t(lobbyEntry ? '打开深度荣耀' : '回城换装')
       const states = { ...matchStates, ready: t('已注册') }
       function taskAction(task, fromGrowth = false) {
         if (!task) return
@@ -10323,7 +10327,7 @@ window.__ModuleLoader__.load({
                   'data-level': snapshot.gearRanks[item.id].level, 'aria-hidden': true }, h(Glyph, { kind: 'mastery', size: 11 })),
                 h('span', { className: 'moba-dock-state', 'aria-hidden': true }))
             })),
-          h('div', { className: 'moba-dock-controls' },
+          h('div', { className: 'moba-dock-controls', 'data-lobby-entry': lobbyEntry || undefined },
             continuation && h('button', { type: 'button', className: 'moba-match-trigger moba-dock-continuation',
               'data-state': continuation.state, title: continuationLabel, 'aria-label': continuationLabel,
               onClick: () => continuationReady ? openContinuation(continuation.sessionId)
@@ -10354,11 +10358,12 @@ window.__ModuleLoader__.load({
               'data-carry': shortcutCarry.length > 0, 'aria-description': shortcutCarry.length > 0 ? t('可核对原对局快捷槽') : undefined,
               onClick: event => show(event, null) },
               h(Glyph, { kind: 'crest', size: 17 }), h('span', null, t('对局装备'))),
-            h('button', { type: 'button', className: 'moba-dock-return', title: t('回城换装'), 'aria-label': t('回城换装'),
+            h('button', { type: 'button', className: 'moba-dock-return', 'data-lobby-entry': lobbyEntry || undefined,
+              title: lobbyLabel, 'aria-label': lobbyLabel,
               onClick: () => {
                 popover.current.hidePopover()
                 openLobby(sessionId, snapshot)
-              } }, h(Glyph, { kind: 'back', size: 15 }), h('span', null, t('回城')))))),
+              } }, h(Glyph, { kind: lobbyEntry ? 'crest' : 'back', size: 15 }), h('span', null, lobbyEntry ? lobbyLabel : t('回城')))))),
         h('section', {
           className: 'moba-match', popover: 'auto', id, ref: popover, 'aria-labelledby': id + '-title',
           style: { positionAnchor: anchor },
@@ -10664,6 +10669,7 @@ window.__ModuleLoader__.load({
       :is([data-availability="missing"], [data-availability="conflict"], [data-availability="disabled"]) > .moba-dock-state { background: #ed9988; }
       .moba-dock-controls { display: flex; gap: 4px; margin-inline-start: auto; flex: none; }
       .moba-match-trigger, .moba-dock-return { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 33px; min-height: 33px; padding: 0 6px; border: 1px solid #504533; border-radius: 3px; color: #f1d7a6; background: #20232e; white-space: nowrap; }
+      .moba-dock-return[data-lobby-entry] { border-color: #a7834c; background: #473322; color: #ffe1a4; }
       .moba-dock-continuation[data-state="ready"] { background: #4b3924; border-color: #c49b5f; color: #ffe1a6; }
       .moba-dock-swap { color: #f3d095; }
       .moba-dock-level { color: #ead0a3; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -10975,7 +10981,9 @@ window.__ModuleLoader__.load({
         .moba-settlement-ribbon .moba-settlement-commands[data-armory-review] { grid-column: 1 / -1; }
         .moba-dock-hero { max-width: 32%; }
         .moba-dock-avatar { width: 28px; height: 28px; }
-        .moba-dock-return span, .moba-match-trigger span { display: none; }
+        .moba-match-dock:has(> .moba-dock-controls[data-lobby-entry]) > .moba-dock-hero { flex-shrink: 0; }
+        .moba-dock-controls[data-lobby-entry] { min-width: 0; flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; }
+        .moba-dock-return:not([data-lobby-entry]) span, .moba-match-trigger span { display: none; }
       }
       .moba-lobby {
         --ink: #f3e9d2; --muted: #b6b4bc; --gold: #e6bc70; --line: #564532;
@@ -12084,8 +12092,9 @@ window.__ModuleLoader__.load({
           { name: 'conversation.input.dock', id: panelId, order: 5 },
           ({ sessionId, session }) => {
             const id = sessionId ?? session?.sessionId
+            const blankSession = session?.blank === true && !session.running && !session.promptAttempted
             return id ? h(WorkspaceSetupContext.Provider, { value: workspaceSetup },
-              h(MatchEquipment, { key: id, sessionId: id, request, openLobby, send, openDraftSession,
+              h(MatchEquipment, { key: id, sessionId: id, blankSession, request, openLobby, send, openDraftSession,
                 consumeTaskDraft, putTaskDraft, draftStore, workspaces: ctx.workspaces.list,
                 openContinuation: next => ctx.uiWorkspace.openSession(next) })) : null
           }))

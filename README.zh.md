@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.158.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.159.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -23,7 +23,7 @@ dsh web
 
 从插件社区过来时，用上方命令安装当前版本。带版本的地址使用独立的 pnpm 缓存条目，`-w` 允许 CLI 把插件装到 Profile 工作区根目录。
 
-从 DSH 侧栏打开 **深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
+从 DSH 侧栏打开 **深度荣耀**，也可在空白会话的输入框上方点 **打开深度荣耀**。插件跟随 **设置 → 通用设置 → 语言**，选 English 后显示 **DSH-Heros**。第三方插件或用户填写的内容没有译文时会保留原文。
 
 在大厅点 **去配装**，可直接跳到 **英雄阵容**。选好英雄，再从 **装备库** 选用工具和插件。点装备库旁的 **用当前出装做任务**，选择自己的材料并填写任务，核对装备和新增选择。确认后打开一份 DSH 草稿，由你手动发送。标准模式确认交付了所选原件后，从原会话点 **试试交付前复核**。只加这一件装备，在新会话手动发送原任务。对照通过核对后，战报顶部显示两局的实际选择、附件和原会话。可以核对并保留自己想用的出装。命名保存后，从保存提示点 **用这套出装开新任务**，就能为刚保存的方案选新文件并写新任务。
 
