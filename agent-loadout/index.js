@@ -1190,6 +1190,42 @@ export async function apply(ctx) {
     }
   }
 
+  function requestedArmoryTask(selection, english) {
+    const { workspaceId } = selection
+    const { presetId, equipmentIds, equipmentSources = {}, removedEquipmentIds = [] } = selection.draft ?? {}
+    if (typeof workspaceId !== 'string' || !workspaceId || workspaceId.length > 512) {
+      throw new Error('请选择一个现有的工作区。')
+    }
+    if (typeof presetId !== 'string' || !presetId || presetId.length > 512 || !validEquipmentIds(equipmentIds)
+      || !validEquipmentSources(equipmentSources, equipmentIds) || !validRemovedEquipment(removedEquipmentIds)) {
+      throw new Error('预设或插件选择无效。')
+    }
+    const draft = { presetId, equipmentIds, equipmentSources, removedEquipmentIds }
+    const fields = { draft, workspaceId, ...planTaskPrompt(selection, english) }
+    const hash = createHash('sha256').update(JSON.stringify(fields)).digest('hex')
+    return { ...fields, hash }
+  }
+
+  async function checkArmoryTask({ draft, workspaceId, material, task, hash }, signal) {
+    const { workspace, digest } = await readPersonalTaskMaterial(workspaceId, material, signal)
+    const ecosystem = await discover()
+    const hero = ecosystem.presets.find(preset => preset.id === draft.presetId)
+    if (!hero) throw new Error('请从基础预设开始搭配。')
+    const cwd = workspace.path
+    const view = { workspaceId, workspaceTitle: workspace.title, material,
+      planName: hero.name ?? presetLabels.get(hero.id)?.[0] ?? hero.id, task }
+    try {
+      const candidate = await plan(draft, ecosystem)
+      const identity = loadoutIdentity(draft, candidate, ecosystem)
+      const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, candidate.id, identity])).digest('hex')
+      signal?.throwIfAborted()
+      return { view, cwd, digest, draft, candidate, ecosystem, token }
+    } catch (error) {
+      signal?.throwIfAborted()
+      return { view, reason: error instanceof Error ? error.message : '无法核对当前出装的配置。' }
+    }
+  }
+
   async function previewReviewedTask(checked, signal) {
     const { view, reason, draft, candidate, ecosystem, token } = checked
     if (!token) return { ...view, reason }
@@ -1247,17 +1283,24 @@ export async function apply(ctx) {
     return { presetId }
   }
 
-  async function openReviewedTask(selection, english, signal, lesson = false) {
+  const reviewedTaskKinds = {
+    plan: { input: requestedPlanTask, check: checkPlanTask, unavailable: '当前 DSH 无法从出装方案开启新任务。' },
+    lesson: { input: requestedLessonTask, check: checkLessonTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
+    armory: { input: requestedArmoryTask, check: checkArmoryTask, unavailable: '当前 DSH 无法用当前出装开启任务。' },
+  }
+
+  async function openReviewedTask(selection, english, signal, kind = 'plan') {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     const { launchId, token } = selection
     if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
       throw new Error('请先核对新任务的材料和出装。')
     }
-    const input = lesson ? requestedLessonTask(selection, english) : requestedPlanTask(selection, english)
+    const { input: readInput, check, unavailable } = reviewedTaskKinds[kind]
+    const input = readInput(selection, english)
     const controller = ctx.get('sessionController')
     const registry = ctx.get('workspaceRegistry')
     if (!controller?.create || !ctx.get('sessionQuery') || !registry) {
-      throw new Error(lesson ? '当前 DSH 无法使用练习出装开启任务。' : '当前 DSH 无法从出装方案开启新任务。')
+      throw new Error(unavailable)
     }
     const sessionId = planTaskSessionPrefix + createHash('sha256').update(JSON.stringify([planTaskOwner, launchId, token, input.hash])).digest('hex').slice(0, 28)
     if (openingMatches.has(sessionId)) return openingMatches.get(sessionId)
@@ -1266,10 +1309,10 @@ export async function apply(ctx) {
     const open = async () => {
       const existing = await planTaskSession(sessionId, signal)
       if (existing?.launch?.token === token && existing.launch.request === input.hash) return reply
-      const checked = await (lesson ? checkLessonTask(input, signal) : checkPlanTask(input, signal))
+      const checked = await check(input, signal)
       if (checked.token !== token) throw new Error('材料、任务或出装已变化，请重新核对。')
       const { presetId, verifyLive: verify } = await prepare(checked.draft, checked.candidate)
-      if (lesson) {
+      if (kind !== 'plan') {
         const target = await readPersonalTaskMaterial(input.workspaceId, input.material, signal)
         if (target.digest !== checked.digest || target.workspace.path !== checked.cwd) {
           throw new Error('材料、任务或出装已变化，请重新核对。')
@@ -1302,7 +1345,7 @@ export async function apply(ctx) {
       const target = source && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
         ...(isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
-        ...(source && { source, target }) })
+        ...(source && { source, target }), ...(kind === 'armory' && { armory: true }) })
       updates.notify(sessionId)
       return reply
     }
@@ -6303,9 +6346,9 @@ export async function apply(ctx) {
         }
       }
       if (savedTask?.launch) {
-        const { planName, material, task, source } = savedTask.launch
+        const { planName, material, task, source, armory } = savedTask.launch
         if (!savedTask.started) value.planTask = { planName, material, task,
-          ...(source && { source }), ...(savedTask.presetChanged && { presetChanged: true }) }
+          ...(source && { source }), ...(armory === true && { armory }), ...(savedTask.presetChanged && { presetChanged: true }) }
         else if (source) value.lessonTaskResult = true
       }
       return Response.json({ ok: true, value: englishRequest(request) ? localizeDisplay(value) : value },
@@ -6596,7 +6639,13 @@ export async function apply(ctx) {
         } else if (selection?.action === 'lesson-task-preview') {
           value = await previewReviewedTask(await checkLessonTask(requestedLessonTask(selection, english), request.signal), request.signal)
         } else if (selection?.action === 'lesson-task-open') {
-          value = await openReviewedTask(selection, english, request.signal, true)
+          value = await openReviewedTask(selection, english, request.signal, 'lesson')
+        } else if (selection?.action === 'armory-task-options') {
+          value = { workspaceIds: await personalWorkspaceIds(request.signal) }
+        } else if (selection?.action === 'armory-task-preview') {
+          value = await previewReviewedTask(await checkArmoryTask(requestedArmoryTask(selection, english), request.signal), request.signal)
+        } else if (selection?.action === 'armory-task-open') {
+          value = await openReviewedTask(selection, english, request.signal, 'armory')
         } else if (selection?.action === 'lesson-task-result') {
           value = await readLessonTaskResult(selection, request.signal)
         } else if (selection?.action === 'plan-share-export') {

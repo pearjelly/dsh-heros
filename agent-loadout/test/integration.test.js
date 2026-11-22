@@ -4472,6 +4472,112 @@ test('workspace comparison uses the same material and records real review choice
   }
 })
 
+test('current Armory gear creates one reviewed native task without needing a saved plan', { timeout: 75_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-armory-task-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const workspacePath = join(directory, 'personal-workspace')
+  const material = '案件 材料/交接 记录.md'
+  const content = '# Personal handoff\n\nAn exact local attachment.\n'
+  const task = 'Check the selected material, then hand it off with the current setup.'
+  let host
+  try {
+    await mkdir(dirname(join(workspacePath, material)), { recursive: true })
+    await writeFile(join(workspacePath, material), content)
+    await symlink(join(workspacePath, material), join(workspacePath, 'shortcut.md'))
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+
+    const action = async (name, fields, status) => (await host.request(endpoint, { action: name, ...fields }, status)).value
+    const workspaceEndpoint = '/api/loadout-fixture-session'
+    const { sessionId: seed, workspaceId } = await host.request(workspaceEndpoint, { presetId: 'standard', workspacePath })
+    const members = async () => (await host.request(workspaceEndpoint, { inspectWorkspaceId: workspaceId })).sessionIds
+    const catalog = async () => (await host.request(endpoint)).value
+    const history = id => host.request('/api/loadout-fixture-history?sessionId=' + id)
+    const preview = (fields, status) => action('armory-task-preview', fields, status)
+    const open = (fields, token, launchId, status) => action('armory-task-open', { ...fields, token, launchId }, status)
+    const send = ({ sessionId, task }) => host.request(turnEndpoint, { sessionId, text: task })
+    const direct = { workspaceId, material, task, draft: { presetId: 'standard', equipmentIds: [] } }
+    const review = { ...direct, draft: { ...direct.draft, equipmentIds: ['review'] } }
+    const launchId = randomUUID().replaceAll('-', '')
+    const before = await catalog()
+
+    assert.deepEqual(before.plans, [])
+    assert.ok((await action('armory-task-options')).workspaceIds.includes(workspaceId))
+    assert.deepEqual((await action('lesson-task-materials', { workspaceId, query: '交接 记录' })).entries,
+      [{ name: '交接 记录.md', path: material, kind: 'file' }])
+    const [plain, equipped] = await Promise.all([preview(direct), preview(review)])
+    assert.ok(plain.token && equipped.token && plain.token !== equipped.token, [plain.reason, equipped.reason].join(' / '))
+    assert.equal(plain.task, equipped.task)
+    assert.equal(plain.comparison.after.id, 'standard')
+    assert.deepEqual(plain.gear, [])
+    assert.deepEqual(equipped.gear.map(item => item.id), ['review'])
+    assert.deepEqual(equipped.comparison.gained.find(item => item.id === 'review')?.decisions.map(([name]) => name),
+      ['确认交付', '退回修改'])
+    assert.ok(!JSON.stringify(equipped).includes(workspacePath))
+    for (const path of [join(workspacePath, material), '../outside.md', 'shortcut.md']) {
+      await preview({ ...direct, material: path }, 422)
+    }
+    await open(review, '0'.repeat(64), launchId, 422)
+    await open(review, plain.token, launchId, 422)
+    await appendFile(join(workspacePath, material), 'Changed after preview.')
+    await open(review, equipped.token, launchId, 422)
+    await writeFile(join(workspacePath, material), content)
+    assert.deepEqual(await members(), [seed])
+    const afterPreview = await catalog()
+    assert.deepEqual(afterPreview.plans, before.plans)
+    assert.deepEqual(afterPreview.saved, before.saved)
+
+    const [first, duplicate] = await Promise.all([open(direct, plain.token, launchId), open(direct, plain.token, launchId)])
+    assert.deepEqual(duplicate, first)
+    const second = await open(review, equipped.token, randomUUID().replaceAll('-', ''))
+    assert.equal(first.task, second.task)
+    for (const draft of [first, second]) {
+      const pending = await history(draft.sessionId)
+      assert.equal(pending.workspaceId, workspaceId)
+      assert.equal(pending.inherited, 0)
+      assert.ok(!pending.events.some(event => ['turn/start', 'user/message', 'tool/call'].includes(event.type)))
+      assert.deepEqual((await equipmentIn(host, draft.sessionId)).planTask,
+        { planName: plain.planName, material, task: draft.task, armory: true })
+    }
+    assert.equal((await history(first.sessionId)).presetId, 'standard')
+    assert.match((await history(second.sessionId)).presetId, /^loadout-/)
+    assert.deepEqual(new Set(await members()), new Set([seed, first.sessionId, second.sessionId]))
+
+    await send(first)
+    const delivered = await history(first.sessionId)
+    assert.deepEqual(delivered.events.filter(event => event.type === 'tool/call').map(event => event.data.name), ['present'])
+    assert.equal(delivered.events.find(event => event.type === 'deliverables/presented').data.files[0].path,
+      join(await realpath(workspacePath), material))
+    const turn = send(second)
+    turn.catch(() => {})
+    const questionPath = '/api/loadout-fixture-handoff-question'
+    let question
+    try {
+      for (let i = 0; i < 100 && !question; i++) {
+        question = (await host.request(questionPath, { sessionId: second.sessionId })).question
+        if (!question) await delay(40)
+      }
+      assert.deepEqual(question?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
+      assert.ok(!(await history(second.sessionId)).events.some(event => event.type === 'deliverables/presented'))
+    } finally {
+      if (question) await host.request(questionPath, { sessionId: second.sessionId, choice: 'Revise draft' })
+      await turn
+    }
+    const revised = await history(second.sessionId)
+    assert.deepEqual(revised.events.filter(event => event.type === 'tool/call').map(event => event.data.name), ['ask_user_question'])
+    assert.ok(!revised.events.some(event => event.type === 'deliverables/presented'))
+    assert.equal(await readFile(join(workspacePath, material), 'utf8'), content)
+    assert.deepEqual((await catalog()).plans, before.plans)
+    assert.deepEqual(await open(direct, plain.token, launchId), first)
+    assert.deepEqual(new Set(await members()), new Set([seed, first.sessionId, second.sessionId]))
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('saved Review loadout opens a manually submitted task on new workspace material', { timeout: 75_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-plan-task-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }

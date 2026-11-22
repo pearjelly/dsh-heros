@@ -2205,7 +2205,7 @@ window.__ModuleLoader__.load({
         sharing && h(LighthouseChallengeShare, { comparisonId: activeId, request, heroTrial: true,
           playedHero: verifiedHeroes.length === 1 ? verifiedHeroes[0].id : undefined, onBack: closeSharing }),
         handoffReport && h(LighthouseHandoffReport, { report: handoffReport, comparisonId: activeId, request, onBack: closeHandoffReport }),
-        personalSource && h(LessonLoadoutTask, { source: personalSource, workspaces, request, backLabel: '返回试玩对照',
+        personalSource && h(PersonalLoadoutTask, { source: personalSource, workspaces, request, backLabel: '返回试玩对照',
           onBack: closePersonalTask, onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }))
     }
 
@@ -2261,7 +2261,7 @@ window.__ModuleLoader__.load({
             : !hasTurn && !availablePersonalTask && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
         replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: member.id, onBack: closeReplay,
           backLabel: '返回试玩会话', onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
-        personalSource && h(LessonLoadoutTask, { source: personalSource, workspaces: items, request,
+        personalSource && h(PersonalLoadoutTask, { source: personalSource, workspaces: items, request,
           backLabel: '返回试玩会话', onBack: closePersonalTask,
           onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }),
         open && h(HeroTrial, { request, comparisonId: member.id, sessionId, onClose: close, workspaces: items,
@@ -3000,7 +3000,7 @@ window.__ModuleLoader__.load({
       if (rematch) return h(RematchEditor, { kind, comparisonId: rematch.id, arm: rematch.arm, sourceSessionId: rematch.sessionId, request,
         lesson, evidenceReplayHint: rematch.publicEvidenceReplay, publicEvidenceReplayHint: rematch.publicEvidenceReplay,
         onBack: () => { returnFocus.current = `[data-rematch-arm="${rematch.arm}"]`; setRematch(null) }, onVisit, onClose })
-      if (lessonTask) return h(LessonLoadoutTask, { source: lessonTask.lessonTaskSource, workspaces, initialWorkspaceId, request, onVisit,
+      if (lessonTask) return h(PersonalLoadoutTask, { source: lessonTask.lessonTaskSource, workspaces, initialWorkspaceId, request, onVisit,
         backLabel: lessonTask.fromSummary ? '返回两局实测结果' : undefined,
         onBack: () => { returnFocus.current = `[data-lesson-task-arm="${lessonTask.id}"], .moba-lighthouse-close`; setLessonTask(null) } })
       if (lessonLaunchOpen) return h(LighthouseLessonLaunch, { request, lesson: lessonMarker, onOpen: onVisit, onCancel: () => {
@@ -3231,7 +3231,7 @@ window.__ModuleLoader__.load({
 
       if (selection?.rematch) return h(RematchEditor, { kind: selection.kind, comparisonId: selection.id, arm: selection.arm,
         sourceSessionId: selection.sessionId, request, lesson: selection.lesson === lighthouseRematchLesson, onBack: back, onClose, onVisit })
-      if (selection?.lessonTaskSource) return h(LessonLoadoutTask, { source: selection.lessonTaskSource, workspaces,
+      if (selection?.lessonTaskSource) return h(PersonalLoadoutTask, { source: selection.lessonTaskSource, workspaces,
         initialWorkspaceId, request, onBack: back, onVisit })
       if (selection?.arm) return h(ComparisonLoadoutReview, { kind: selection.kind, comparisonId: selection.id,
         arm: selection.arm, request, onBack: back, onClose, onUse })
@@ -3833,7 +3833,7 @@ window.__ModuleLoader__.load({
             : hasTurn
             ? '首局交付补给卡后，可在练习记录里换一件再试。'
             : '请手动发送补给卡任务。完成首局后，在练习记录里换一件再试。'))),
-        lessonTaskSource && h(LessonLoadoutTask, { source: lessonTaskSource, workspaces, request, onBack: closeLessonTask,
+        lessonTaskSource && h(PersonalLoadoutTask, { source: lessonTaskSource, workspaces, request, onBack: closeLessonTask,
           backLabel: '返回练习会话', onVisit: (next, task) => { setLessonTaskSource(null); onVisit(next, task) } }),
         openEvidenceReplay && h(RematchEditor, { kind, comparisonId: member.id, arm: member.arm, sourceSessionId: sessionId, request,
           lesson: true, evidenceReplayHint: true, publicEvidenceReplayHint: true, backLabel: '返回练习会话',
@@ -3946,8 +3946,8 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { className: 'moba-lighthouse-anchor moba-plan-task-draft' },
-          h('div', null, h('strong', null, t(plan.source ? '练习出装新任务' : '出装方案新任务')), h('span', null, plan.planName),
-          plan.material && h('span', null, plan.material)),
+        h('div', null, h('strong', null, t(plan.armory ? '当前出装新任务' : plan.source ? '练习出装新任务' : '出装方案新任务')),
+          h('span', null, plan.armory ? t(plan.planName) : plan.planName), plan.material && h('span', null, plan.material)),
         h('div', null,
           presetChanged ? h('button', { type: 'button', className: 'moba-settlement-button', disabled: Boolean(restoring),
             onClick: restore }, t('恢复核对过的出装'))
@@ -4493,7 +4493,7 @@ window.__ModuleLoader__.load({
     function Shop({ items, roles, activeId, statuses, selected, heroNames, presets, onShowHero, onPreviewPairing, onFit, onPrepareTrial, onInspect, onToggle, onManage, onEnable, onRefresh,
       onOpenSource, onEditSaved, onAppearance, onActions, onCollection, equipmentSources, onSource,
       builtIn, removed, removalRoots, onBuiltIn, standingClaims, request, revision, disabled, saved, profileError, requestedItem,
-      onPracticeEvidence, onEvidenceHistory }) {
+      onPracticeEvidence, onEvidenceHistory, taskAction }) {
       const [category, setCategory] = useState('featured')
       const [role, setRole] = useState('')
       const [query, setQuery] = useState('')
@@ -4649,8 +4649,9 @@ window.__ModuleLoader__.load({
       }
 
       return h('section', { className: 'moba-shop', 'aria-labelledby': 'moba-shop-title' },
-        h('div', { className: 'moba-shop-title' },
+        h('div', { className: 'moba-shop-title', 'data-task': Boolean(taskAction) },
           h('h2', { id: 'moba-shop-title' }, saved ? t('已装配装备') : t('装备库')),
+          taskAction,
           saved && h('button', { className: 'moba-text', type: 'button', disabled: disabled || !onEditSaved, onClick: onEditSaved }, t('复制并调整')),
           !saved && h('div', { className: 'moba-shop-actions' },
             h('button', { className: 'moba-text', type: 'button', disabled, onClick: onRefresh }, t('刷新装备')),
@@ -4726,10 +4727,11 @@ window.__ModuleLoader__.load({
           onConfigureSource: (tool, deferred) => setDialog({ kind: 'custom', tool, deferred }) })))
     }
 
-    function CapabilityList({ heading, cards, emptyText, tone, showTiming, active, disclosure, onTrial, onDelivery }) {
+    function CapabilityList({ heading, cards, emptyText, tone, showTiming, active, disclosure, defaultOpen, onTrial, onDelivery }) {
       const kinds = { effect: t('工作流程'), plugin: t('会话插件'), tool: t('工具') }
       const timing = { startup: t('开局核验'), turn: t('按条件触发'), condition: t('按条件启用') }
-      return h(disclosure ? 'details' : 'div', { className: 'moba-delta', 'data-tone': tone, 'data-active': active },
+      return h(disclosure ? 'details' : 'div', { className: 'moba-delta', 'data-tone': tone, 'data-active': active,
+        open: disclosure && defaultOpen ? true : undefined },
         h(disclosure ? 'summary' : 'h3', null, heading, h('span', null, cards.length)),
         cards.length === 0
           ? h('p', { className: 'moba-empty' }, emptyText)
@@ -5341,12 +5343,12 @@ window.__ModuleLoader__.load({
           result?.code && h('button', { className: 'moba-start', type: 'button', onClick: copy }, t('复制分享码'))))
     }
 
-    function SharedPlanCapabilities({ comparison, title = '相比英雄基础出装的变化', showEmpty = false }) {
+    function SharedPlanCapabilities({ comparison, title = '相比英雄基础出装的变化', showEmpty = false, openGains = false }) {
       const groups = comparison ? capabilityChanges(comparison).filter(group => group.cards.length) : empty
       return comparison && (groups.length > 0 || showEmpty) && h('section', { className: 'moba-share-section moba-playbook-comparison' },
         h('h3', null, t(title)),
         !groups.length && h('p', { className: 'moba-lighthouse-note' }, t('已知能力、工具来源和就绪时机均一致。')),
-        groups.map(group => h(CapabilityList, { ...group, key: group.tone, disclosure: true,
+        groups.map(group => h(CapabilityList, { ...group, key: group.tone, disclosure: true, defaultOpen: openGains && group.tone === 'gain',
           heading: group.heading + ' · ' + group.cards.slice(0, 2).map(item => item.name).join(' / ') + ' ' })))
     }
 
@@ -5550,7 +5552,9 @@ window.__ModuleLoader__.load({
             adapted ? t('采用换装草稿') : t('采用分享出装'), h(Glyph, { kind: 'arrow', size: 17 }))))
     }
 
-    function LessonLoadoutTask({ source, workspaces, initialWorkspaceId, rebaseline, request, onBack, onVisit,
+    const armoryTaskLabel = '用当前出装做任务'
+
+    function PersonalLoadoutTask({ source, armoryDraft, workspaces, initialWorkspaceId, rebaseline, request, onBack, onVisit,
       backLabel = rebaseline ? '返回任务结果' : '返回记录' }) {
       const language = useLanguage()
       const workspaceSetup = useContext(WorkspaceSetupContext)
@@ -5558,8 +5562,9 @@ window.__ModuleLoader__.load({
       const [attempt, retry] = useState(0)
       const [opening, setOpening] = useState(false)
       const [addedWorkspace, setAddedWorkspace] = useState(null)
-      const { kind, comparisonId, arm } = source
-      const reference = JSON.stringify([kind, comparisonId, arm])
+      const { kind, comparisonId, arm } = source ?? emptyMap
+      const optionsAction = armoryDraft ? 'armory-task-options' : 'lesson-task-options'
+      const reference = JSON.stringify([optionsAction, kind, comparisonId, arm])
       const membership = JSON.stringify(workspaces.map(item => item.workspaceId).sort())
       const current = loaded?.reference === reference ? loaded : null
       const refreshed = current?.membership === membership && current?.attempt === attempt
@@ -5572,9 +5577,8 @@ window.__ModuleLoader__.load({
       const setup = workspaceSetup?.add && (workspaceSetup.pick || workspaceSetup.list) ? workspaceSetup : null
 
       useEffect(() => {
-        const action = 'lesson-task-options'
         const abort = new AbortController()
-        request(action, { action, kind, comparisonId, arm }, abort.signal, language)
+        request(optionsAction, { action: optionsAction, kind, comparisonId, arm }, abort.signal, language)
           .then(value => { if (!abort.signal.aborted) setLoaded({ value, reference, membership, attempt }) })
           .catch(reason => {
             if (!abort.signal.aborted) setLoaded(previous => ({
@@ -5583,14 +5587,14 @@ window.__ModuleLoader__.load({
             }))
           })
         return () => abort.abort()
-      }, [request, kind, comparisonId, arm, attempt, language, reference, membership])
+      }, [request, optionsAction, kind, comparisonId, arm, attempt, language, reference, membership])
 
       const stockTaskLabel = kind === 'hero-trial' && stockTrialTaskLabels[arm]
-      return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
+      return h(InstallDialog, { title: t(armoryDraft ? armoryTaskLabel : rebaseline ? rebaselineTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
         className: stockTaskLabel ? 'moba-lighthouse-comparison moba-stock-trial-task' : 'moba-lighthouse-comparison',
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t('用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
-        options ? h(LoadoutTaskForm, { lessonSource: options.source, workspaces: allowed, request,
+        options ? h(LoadoutTaskForm, { lessonSource: options.source, armoryDraft, workspaces: allowed, request,
           initialWorkspaceId: rebaseline?.workspaceId ?? initialWorkspaceId, initialMaterial: rebaseline?.material, initialBrief: rebaseline?.brief, backLabel,
           workspaceSetup: setup, addedWorkspace: addedAllowed ? addedWorkspace : undefined,
           onWorkspaceAdded: id => { setAddedWorkspace({ id }); retry(value => value + 1) },
@@ -5601,7 +5605,7 @@ window.__ModuleLoader__.load({
           onBack, onOpened: ({ sessionId, task }) => onVisit(sessionId, task), onOpeningChange: setOpening })
           : h(Fragment, null, refreshed && current?.error
             ? h('p', { className: 'moba-alert', role: 'alert' }, current.error)
-            : h('p', { className: 'moba-empty', role: 'status' }, t('正在核对练习出装…')),
+            : h('p', { className: 'moba-empty', role: 'status' }, t(armoryDraft ? '正在核对可用工作区…' : '正在核对练习出装…')),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t(backLabel)),
             refreshed && current?.error && h('button', { className: 'moba-roster-open', type: 'button',
@@ -5610,10 +5614,10 @@ window.__ModuleLoader__.load({
 
     function PersonalBaselineTask({ workspaces, ...props }) {
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
-      return h(LessonLoadoutTask, { ...props, workspaces: items })
+      return h(PersonalLoadoutTask, { ...props, workspaces: items })
     }
 
-    function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, lessonSource, workspaces, initialWorkspaceId,
+    function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, lessonSource, armoryDraft, workspaces, initialWorkspaceId,
       initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange,
       workspaceSetup, addedWorkspace, onWorkspaceAdded, onWorkspaceApplied, workspaceStatus, workspaceError, retryWorkspaces }) {
       const language = useLanguage()
@@ -5621,8 +5625,10 @@ window.__ModuleLoader__.load({
       const [selectedPlanId, setSelectedPlanId] = useState(plan?.id)
       const planGroup = useId()
       const version = choices.find(item => item.id === selectedPlanId)
+      const personal = Boolean(lessonSource || armoryDraft)
+      const canReview = personal || Boolean(version)
       const [chosenWorkspaceId, setWorkspace] = useState(() => {
-        if (!lessonSource || workspaces.some(item => item.workspaceId === initialWorkspaceId)) return initialWorkspaceId ?? ''
+        if (!personal || workspaces.some(item => item.workspaceId === initialWorkspaceId)) return initialWorkspaceId ?? ''
         return !initialMaterial && workspaces.length === 1 ? workspaces[0].workspaceId : ''
       })
       const [material, setMaterial] = useState(initialMaterial)
@@ -5649,7 +5655,7 @@ window.__ModuleLoader__.load({
       const gearSource = stockTrialHero
         ? origin.gearSources?.map(item => [item.tool, item.name, item.version].filter(Boolean).join(' · ')).join(' / ')
         : heroTrialOrigin && origin.gearSource && [origin.gearSource.name, origin.gearSource.version].filter(Boolean).join(' · ')
-      const actionPrefix = lessonSource ? 'lesson-task' : 'plan-task'
+      const actionPrefix = armoryDraft ? 'armory-task' : lessonSource ? 'lesson-task' : 'plan-task'
 
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => {
@@ -5685,13 +5691,13 @@ window.__ModuleLoader__.load({
       }
 
       async function review(refresh = false) {
-        if (!workspace || !brief.trim() || (!lessonSource && !version) || pending.current) return
+        if (!workspace || !brief.trim() || !canReview || pending.current) return
         const abort = pending.current = new AbortController()
         setWorking('review')
         setError('')
         try {
           let selected = version
-          if (refresh && !lessonSource) {
+          if (refresh && !personal) {
             const latest = await request('list', null, abort.signal, language)
             if (abort.signal.aborted) return
             const primary = latest.plans.find(item => item.id === plan.id && !item.broken)
@@ -5713,7 +5719,8 @@ window.__ModuleLoader__.load({
               return
             }
           }
-          const selector = lessonSource ? { kind: lessonSource.kind, comparisonId: lessonSource.comparisonId, arm: lessonSource.arm }
+          const selector = armoryDraft ? { draft: armoryDraft.draft } : lessonSource
+            ? { kind: lessonSource.kind, comparisonId: lessonSource.comparisonId, arm: lessonSource.arm }
             : { id: selected.id, revision: selected.revision }
           const input = { ...selector, workspaceId: workspace.workspaceId,
             material: material.trim(), task: brief.trim() }
@@ -5778,7 +5785,8 @@ window.__ModuleLoader__.load({
 
       return !preview ? h('form', { className: 'moba-plan-form moba-plan-task', onSubmit: submit },
         h('div', { className: 'moba-plan-fields' },
-          origin ? h(Fragment, null, h(InstallFacts, { facts: [[t('练习出装'), sourceLabel], [t('装备来源'), gearSource]] }),
+          armoryDraft ? h(InstallFacts, { facts: [[t('选定出装'), armoryDraft.heroName]] })
+            : origin ? h(Fragment, null, h(InstallFacts, { facts: [[t('练习出装'), sourceLabel], [t('装备来源'), gearSource]] }),
             stockTrialHero?.id === 'minimal' && h('p', { className: 'moba-lighthouse-note' }, t('这套出装适合在对话里交接文字。')),
             h(RematchChangeFacts, { change: origin.change }))
             : choices.length > 0 && (choices.length > 1 || !version) ? h('fieldset', {
@@ -5794,12 +5802,12 @@ window.__ModuleLoader__.load({
                   item.note && h('small', { className: 'moba-plan-note' }, item.note)))))
               : version && h('div', { className: 'moba-plan-save-preview' }, h('strong', null, version.name),
                 version.note && h('p', { className: 'moba-plan-note' }, version.note)),
-          lessonSource && !workspaces.length &&
+          personal && !workspaces.length &&
             h('p', { className: 'moba-plan-note', role: 'status' }, t(workspaceSetup
               ? '选择含有任务材料的文件夹，即可继续。' : '请先在 DeepSeek Harness 中添加自己的工作区。')),
           h(WorkspaceFileFields, { workspaces, workspaceId: workspace?.workspaceId ?? '', setWorkspaceId: setWorkspace,
             material, setMaterial, workspaceField, materialField, request, busy: Boolean(working),
-            materialAction: lessonSource ? 'lesson-task-materials' : undefined, workspaceSetup, onWorkspaceAdded }),
+            materialAction: personal ? 'lesson-task-materials' : undefined, workspaceSetup, onWorkspaceAdded }),
           workspaceStatus && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t(workspaceStatus)),
           workspaceError && h('p', { className: 'moba-alert', role: 'alert' }, t(workspaceError), ' ',
             h('button', { type: 'button', className: 'moba-text', onClick: retryWorkspaces }, t('重试'))),
@@ -5808,13 +5816,13 @@ window.__ModuleLoader__.load({
               onChange: event => { event.target.setCustomValidity(''); setBrief(event.target.value) } })), messages),
         h('footer', { className: 'moba-gallery-footer' },
           h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t(backLabel)),
-          h('button', { className: 'moba-start', type: 'submit', disabled: Boolean(working) || !workspace || (!lessonSource && !version) },
+          h('button', { className: 'moba-start', type: 'submit', disabled: Boolean(working) || !workspace || !canReview },
             t('核对材料和出装'), h(Glyph, { kind: 'arrow', size: 16 }))))
         : h('section', { className: 'moba-plan-form moba-plan-task', onKeyDown: event => closeDialogOnEscape(event, editTask) },
           h('div', { className: 'moba-plan-fields' },
             h('h3', { ref: reviewHeading, tabIndex: -1 }, t('核对材料和出装')),
             h(InstallFacts, { facts: [
-              [t(origin ? '练习出装' : '出装方案'), sourceLabel ?? preview.planName ?? version?.name],
+              [t(armoryDraft ? '选定出装' : origin ? '练习出装' : '出装方案'), armoryDraft?.heroName ?? sourceLabel ?? preview.planName ?? version?.name],
               [t('装备来源'), gearSource],
               [t('工作区'), workspace ? workspaceFileLabel(workspace, workspaces) : preview.workspaceTitle],
               [t('材料文件相对路径'), preview.material],
@@ -5823,7 +5831,7 @@ window.__ModuleLoader__.load({
             preview.planNote && h('p', { className: 'moba-plan-note' }, preview.planNote),
             (preview.gear?.length || preview.token) && h(PlanEquipment, {
               items: preview.gear ?? version?.items ?? empty, removed: preview.removed ?? version?.removed }),
-            h(SharedPlanCapabilities, { comparison: preview.comparison }),
+            h(SharedPlanCapabilities, { comparison: preview.comparison, openGains: Boolean(armoryDraft) }),
             preview.task && h('label', null, t('即将填入会话的任务'), h('textarea', { readOnly: true, rows: 5, value: preview.task })),
             h('p', { className: 'moba-plan-note' }, t('确认后打开新会话。检查输入栏的任务，再手动发送。')),
             preview.reason && h('p', { className: 'moba-alert', role: 'status' }, preview.reason), messages),
@@ -6952,6 +6960,8 @@ window.__ModuleLoader__.load({
       const [historicalHero, setHistoricalHero] = useState(proven?.draft.presetId ?? returning?.followUp?.heroId ?? '')
       const [journalOpen, setJournalOpen] = useState(false)
       const [planMode, setPlanMode] = useState(proven?.save ? 'create' : '')
+      const [armoryTask, setArmoryTask] = useState(null)
+      const armoryTaskButton = useRef(null)
       const [followUp, setFollowUp] = useState(returning?.followUp)
       const [trialTarget, setTrialTarget] = useState(null)
       const [deliveryTarget, setDeliveryTarget] = useState(null)
@@ -7799,6 +7809,14 @@ window.__ModuleLoader__.load({
             }),
             onClose: () => setPlanMode(''), onChanged: planChanged, onApply: applyPlan, onCompare: showPlanComparison,
             onImport: adoptSharedPlan }),
+          armoryTask && h(PersonalLoadoutTask, { armoryDraft: armoryTask, workspaces: comparableWorkspaces,
+            initialWorkspaceId: workspace?.workspaceId, request, backLabel: '返回配装', onBack: () => {
+              setArmoryTask(null)
+              requestAnimationFrame(() => armoryTaskButton.current?.focus())
+            }, onVisit: (sessionId, task) => {
+              setArmoryTask(null)
+              openDraftSession(sessionId, task)
+            } }),
           data && h('div', { className: 'moba-grid' },
             h(HeroStage, { preset: stagePreset, presets, selections, removed: removedIds, roles, rosterHeading,
               onInspect: item => {
@@ -7808,6 +7826,10 @@ window.__ModuleLoader__.load({
               onBrowse: () => setGalleryOpen({}), onActions: editActions, disabled: pending }),
             h(Shop, { key: saved ? saved.id : 'new', items: saved ? selections : items, roles,
               activeId: inspected, statuses: saved ? {} : preset?.tools,
+              taskAction: !saved && canOpenWithQuest && h('button', { type: 'button', className: 'moba-roster-open moba-armory-task-button',
+                ref: armoryTaskButton, 'aria-haspopup': 'dialog', disabled: pending || !canCompare,
+                onClick: () => setArmoryTask({ draft: JSON.parse(draftKey), heroName: stagePreset.name }) },
+                h(Glyph, { kind: 'report', size: 17 }), t(armoryTaskLabel)),
               presets, onShowHero: (heroId, equipmentId) => setGalleryOpen({ heroId, equipmentId }), onPreviewPairing: previewPairing,
               onFit: presets.some(hero => !hero.broken) ? fitEquipment : undefined,
               onPrepareTrial: !pending && canCompare ? prepareEquipmentTrial : undefined,
@@ -11031,6 +11053,10 @@ window.__ModuleLoader__.load({
       .moba-shop-title { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 7px; }
       .moba-shop-title h2 { flex-shrink: 0; white-space: nowrap; }
       .moba-shop-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; }
+      .moba-shop-title[data-task="true"] { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+      .moba-shop-title[data-task="true"] .moba-shop-actions { grid-column: 1 / -1; }
+      .moba-armory-task-button { justify-self: end; text-align: start; border-color: #8a754d; }
+      .moba-armory-task-button svg { flex: none; }
       .moba-text { padding: 4px; border: 0; color: var(--blue) !important; background: transparent; font-size: 12px !important; text-align: right; }
       .moba-text:hover { text-decoration: underline; text-underline-offset: 3px; }
       .moba-controls { display: grid; gap: 7px; margin-bottom: 9px; }
