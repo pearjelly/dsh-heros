@@ -62,14 +62,15 @@ export function lighthouseWorkspace(directory, registry) {
   return seedWorkspace(lighthouseDirectory(directory), registry, 'Lighthouse Supply Run · 灯塔补给行动')
 }
 
+export const lighthouseRematchTask = english => english
+  ? 'Read the North Shore Lighthouse supply card. Summarize where to collect the supplies and what to check. Hand off the original card in this conversation when it is ready.'
+  : '阅读北岸灯塔补给卡，简要说明领取地点和需要核对的事项。准备好后，在当前对话交付原始补给卡。'
+
 export async function lighthouseRematchLesson(directory, registry, launchId, english) {
   if (typeof launchId !== 'string' || !openingId.test(launchId)) throw new Error('开局请求无效，请重试。')
   const path = join(directory, rematchPrefix + launchId)
   const workspace = await seedWorkspace(path, registry, 'Lighthouse Rematch · 灯塔换装练习', true)
-  const task = english
-    ? 'Read the North Shore Lighthouse supply card. Summarize where to collect the supplies and what to check. Hand off the original card in this conversation when it is ready.'
-    : '阅读北岸灯塔补给卡，简要说明领取地点和需要核对的事项。准备好后，在当前对话交付原始补给卡。'
-  return { workspace, material: supplyCard, task }
+  return { workspace, material: supplyCard, task: lighthouseRematchTask(english) }
 }
 
 export function lighthouseEvidenceTask(english, scenario) {

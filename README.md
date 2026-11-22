@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.163.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.164.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -129,6 +129,8 @@ Plans saved from a verified evidence comparison in v0.95 or later link to the ru
 4. Choose **Replay review** after a verified choice. Send the same task yourself in the new conversation and make a fresh choice. The report can then show two different recorded choices made with the same gear, with each run’s actual files and source conversation.
 
 **Lighthouse Supply Run** also offers the original **Recon** and **Delivery** routes.
+
+After a verified Lighthouse handoff, choose **Invite a friend to the same handoff** and copy the invitation. Your friend pastes it into **Join a Lighthouse challenge**, checks the shared task, and chooses **Deliver directly** or **Review before delivery**. Both use the same public card and task language. Your friend sends the draft in DSH and can request changes before any attachment is delivered when using Review. The invitation contains the public sample and your route.
 
 ## Use the lesson loadout on your own task
 

@@ -10,7 +10,7 @@ import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, 
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
 import { openBuildPlans, planTaskPrompt } from './build-plans.js'
-import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, isLighthouseHeroChallenge, lighthouseChallengeName } from './build-sharing.js'
+import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, decodeLighthouseReviewChallenge, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, encodeLighthouseReviewChallenge, isLighthouseHeroChallenge, isLighthouseReviewChallenge, lighthouseChallengeName } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
 import { customActionStore } from './custom-actions.js'
@@ -18,7 +18,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceChoices, lighthouseEvidenceDecision, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseEvidenceTask, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroDelivery, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceChoices, lighthouseEvidenceDecision, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseEvidenceTask, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroDelivery, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseRematchTask, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -52,6 +52,8 @@ const planTaskSessionPrefix = 'session-a076'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
 const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).digest('hex')
+const reviewChallengeUnavailable = '请先完成并核验一局灯塔交付。'
+const reviewRoutesUnavailable = '本机暂时无法装配灯塔交接的出装。'
 const heroTrialUnavailable = '本机的标准模式与极简模式暂时无法进行这场试玩。'
 const heroDeliveryUnavailable = '请先用极简模式完成一局需要原件的试玩，并核对它留下的文字交接。'
 const heroDeliveryChanged = '样例或交付工具已变化，请重新核对。'
@@ -482,11 +484,13 @@ export async function apply(ctx) {
   const workspaceComparisons = await openMatchComparisons(directory, 'workspace-comparison', [...workspaceComparisonArms, 'evidence'], saveEntry,
     () => warnings.push('workspace-comparisons'),
     record => validWorkspaceComparison(record) && validEvidenceOpeningChoice(record.lesson, record.scenario, record.openingChoice) &&
+      (record.reviewChallengeArm === undefined || (record.lesson === lighthouseLesson &&
+        workspaceComparisonArms.includes(record.reviewChallengeArm) && lighthouseReviewLanguage(record))) &&
       (record.lesson === undefined || record.lesson === lighthouseLesson ||
         (record.lesson === evidenceLesson && lighthouseEvidenceScenarios.includes(record.scenario))),
     record => {
       if (record.lesson === evidenceLesson) return ['evidence']
-      if (record.lesson === lighthouseLesson) return ['direct']
+      if (record.lesson === lighthouseLesson) return [record.reviewChallengeArm ?? 'direct']
       return workspaceComparisonArms
     })
   const planComparisons = await openMatchComparisons(directory, 'plan-comparison', planComparisonArms, saveEntry,
@@ -1815,6 +1819,78 @@ export async function apply(ctx) {
     const record = await heroTrials.create('challenge:' + launchId, () => ({ need, task, challenge }))
     if (record.need !== need || record.task !== task || !isDeepStrictEqual(record.challenge, challenge)) throw new Error(challengeChanged)
     return openComparisonArm(heroTrials, { comparisonId: record.id, arm }, preview.sampleLanguage === 'en', signal)
+  }
+
+  function lighthouseReviewTask(language) {
+    const english = language === 'en'
+    return workspaceComparisonTask({ material: lighthouseHeroMaterial, task: lighthouseRematchTask(english) }, english).task
+  }
+
+  function lighthouseReviewLanguage(record) {
+    if (record?.lesson !== lighthouseLesson || record.material !== lighthouseHeroMaterial || record.digest !== heroTrialDigest) return
+    return ['en', 'zh'].find(language => record.task === lighthouseReviewTask(language))
+  }
+
+  async function verifiedReviewInvitation(comparisons, record, arm, signal, observed) {
+    const language = lighthouseReviewLanguage(record)
+    if (!language || ctx.get('workspaceRegistry')?.get(record.workspaceId)?.path !== record.cwd) return
+    const played = comparisons === workspaceComparisons && comparisons.armsFor(record).includes(arm) ? arm
+      : comparisons === rematchComparisons && arm === 'rematch' && isLighthouseReviewRematch(record, previousComparison(record)) ? 'review' : undefined
+    if (!played) return
+    let proved
+    if (comparisons === rematchComparisons) {
+      const { publicReviewOutcome } = await readComparisonArms(comparisons, record, signal)
+      const side = reviewedChoice(publicReviewOutcome)
+      proved = side?.choices.length === 1 && (side.materialDelivered || side.deliveredCount === 0)
+    } else {
+      observed ??= await readComparisonArm(comparisons, record, arm, signal, { verifyPersonalDelivery: true, linkedChoicesOnly: true })
+      proved = verifiedEvidenceArm(observed) && (played === 'direct'
+        ? observed.materialDelivered === true && completedPresentDelivery(observed)
+        : comparisonChoices(observed).length === 1 && (observed.materialDelivered || observed.deliverables.length === 0))
+    }
+    if (proved && await workspaceMaterialState(record, signal) === 'verified') return played
+  }
+
+  async function shareReviewChallenge({ kind, comparisonId, arm }, signal) {
+    const comparisons = kind === 'workspace' ? workspaceComparisons : kind === 'rematch' ? rematchComparisons : undefined
+    const record = comparisons?.read(comparisonId)
+    const played = await verifiedReviewInvitation(comparisons, record, arm, signal)
+    if (!played) throw new Error(reviewChallengeUnavailable)
+    return { code: encodeLighthouseReviewChallenge(lighthouseReviewLanguage(record), played) }
+  }
+
+  async function checkReviewChallenge(code, signal) {
+    const { sample, played, language: sampleLanguage } = decodeLighthouseReviewChallenge(code)
+    const ecosystem = await discover()
+    const routePresets = Object.fromEntries(await Promise.all(workspaceComparisonArms.map(async arm => {
+      try {
+        const draft = deliveryPlaybookDraft(ecosystem, arm)
+        const { candidate, choices } = await plannedGrowth(draft, { ecosystem })
+        const required = arm === 'review' ? ['read', 'present', 'ask_user_question'] : ['read', 'present']
+        if (required.every(name => choices.some(item => item.kind === 'tool' && item.name === name && !item.timing))) {
+          return [arm, candidate.id]
+        }
+      } catch {
+        signal?.throwIfAborted()
+      }
+      return [arm, null]
+    })))
+    signal?.throwIfAborted()
+    const routes = workspaceComparisonArms.filter(arm => routePresets[arm])
+    const view = { kind: 'delivery-review', sample, played, sampleLanguage, task: lighthouseReviewTask(sampleLanguage), routes }
+    if (!routes.length || routePresets.direct === routePresets.review) return { preview: { ...view, blocked: true, reason: reviewRoutesUnavailable } }
+    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, code.trim(), routePresets])).digest('hex')
+    return { preview: { ...view, token }, routePresets }
+  }
+
+  async function openReviewChallenge({ code, token, launchId, arm }, signal) {
+    if (!validOpeningId(launchId) || !workspaceComparisonArms.includes(arm) || typeof token !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(token)) throw new Error(challengeChanged)
+    const { preview, routePresets } = await checkReviewChallenge(code, signal)
+    if (preview.blocked || preview.token !== token || !routePresets[arm]) throw new Error(preview.reason ?? challengeChanged)
+    const id = createHash('sha256').update(JSON.stringify(['lighthouse-review-challenge-v1', code.trim(), launchId])).digest('hex').slice(0, 32)
+    return openLighthouseLesson({ launchId: id, reviewChallengeArm: arm }, preview.sampleLanguage === 'en',
+      signal, lighthouseLesson, routePresets[arm])
   }
 
   const invalidShareChoice = '换装选择无效，请重新核对分享码。'
@@ -4623,15 +4699,17 @@ export async function apply(ctx) {
         return { id: arm, ...labels, status: 'unopened' }
       }
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
-      const lessonBaseline = comparisons === workspaceComparisons && comparison.lesson === lighthouseLesson
+      const lesson = comparisons === workspaceComparisons && comparison.lesson === lighthouseLesson
+      const lessonBaseline = lesson && arm === 'direct'
+      const reviewChallenge = lesson && comparison.reviewChallengeArm !== undefined
       const evidencePractice = comparisons === workspaceComparisons && comparison.lesson === evidenceLesson
       const publicEvidenceReplay = comparison.baseline?.publicEvidenceReplay === true
       const evidenceReplay = Boolean(evidenceReplayView(comparison.baseline))
       const strictEvidence = evidenceReplay || comparison.evidenceRetest === true
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material,
-        verifyMaterialDelivery: lessonBaseline || verifyPersonalDelivery, includeFileCoordinates,
-        ...((verifyPersonalDelivery || evidencePractice || strictEvidence) && { exactMessages: true }),
-        linkedChoicesOnly: linkedChoicesOnly || strictEvidence || (evidencePractice && comparison.scenario === 'gap') }, receipts)
+        verifyMaterialDelivery: lesson || verifyPersonalDelivery, includeFileCoordinates,
+        ...((verifyPersonalDelivery || reviewChallenge || evidencePractice || strictEvidence) && { exactMessages: true }),
+        linkedChoicesOnly: linkedChoicesOnly || reviewChallenge || strictEvidence || (evidencePractice && comparison.scenario === 'gap') }, receipts)
       if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
         result.reason = '未交付本次练习的灯塔补给卡。请查看原会话或开始新的练习。'
       }
@@ -4645,7 +4723,7 @@ export async function apply(ctx) {
       const canTransfer = canReuse && saved?.opened && (comparison.lesson === lighthouseLesson ||
         (evidencePractice && !result.continuationReason))
       const lessonTaskSource = canTransfer
-        ? { kind: lessonBaseline || evidencePractice ? 'workspace' : 'rematch', comparisonId: comparison.id, arm } : undefined
+        ? { kind: lesson || evidencePractice ? 'workspace' : 'rematch', comparisonId: comparison.id, arm } : undefined
       return { id: arm, ...labels, sessionId, ...result, canReuse, ...(canRematch && { canRematch }),
         ...(lessonTaskSource && { lessonTaskSource }) }
     } catch {
@@ -5358,6 +5436,7 @@ export async function apply(ctx) {
     const reviewChoiceComparison = canRepeatLighthouseReview && await compareReviewChoices(record, currentReview, signal)
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
       ...(publicReviewOutcome && materialState === 'verified' && { publicReviewOutcome }),
+      ...(record.reviewChallengeArm && { reviewChallengeArm: record.reviewChallengeArm }),
       ...(armoryHandoffOutcome && materialState === 'verified' && { armoryHandoffOutcome }),
       ...(canRepeatLighthouseReview && { canRepeatLighthouseReview: true }),
       ...(reviewChoiceComparison && { reviewChoiceComparison }),
@@ -5388,7 +5467,7 @@ export async function apply(ctx) {
     return record
   }
 
-  async function openLighthouseLesson({ launchId, scenario = 'gap', openingChoice }, english, signal, lesson = lighthouseLesson, requiredPresetId) {
+  async function openLighthouseLesson({ launchId, scenario = 'gap', openingChoice, reviewChallengeArm }, english, signal, lesson = lighthouseLesson, requiredPresetId) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     if (!validOpeningId(launchId)) throw new Error('开局请求无效，请重试。')
     const evidence = lesson === evidenceLesson
@@ -5410,15 +5489,19 @@ export async function apply(ctx) {
         const digest = await digestWorkspaceMaterial(workspace.path, material, signal)
         signal?.throwIfAborted()
         return { ...fields, workspaceId: workspace.id, workspaceTitle: workspace.title, cwd: workspace.path, digest, lesson,
-          ...(evidence && { scenario }), ...(openingChoice && { openingChoice }) }
+          ...(evidence && { scenario }), ...(openingChoice && { openingChoice }),
+          ...(reviewChallengeArm && { reviewChallengeArm }) }
       }).finally(() => openingLighthouseLessons.delete(key))
       openingLighthouseLessons.set(key, work)
     }
     const record = await work
-    if (evidence && (record.scenario !== scenario || record.openingChoice !== openingChoice)) {
+    if ((evidence && (record.scenario !== scenario || record.openingChoice !== openingChoice)) ||
+      (reviewChallengeArm && (record.reviewChallengeArm !== reviewChallengeArm || lighthouseReviewLanguage(record) !== (english ? 'en' : 'zh')))) {
       throw new Error('本次对照请求与原任务不同，请重新开始。')
     }
-    return openComparisonArm(workspaceComparisons, { comparisonId: record.id, arm: evidence ? 'evidence' : 'direct' }, english, signal, requiredPresetId)
+    if (reviewChallengeArm && await workspaceMaterialState(record, signal) !== 'verified') throw new Error(challengeChanged)
+    const arm = evidence ? 'evidence' : reviewChallengeArm ?? 'direct'
+    return openComparisonArm(workspaceComparisons, { comparisonId: record.id, arm }, english, signal, requiredPresetId)
   }
 
   async function createHeroTrial({ launchId, need }, english, signal) {
@@ -6587,23 +6670,28 @@ export async function apply(ctx) {
       const workspaceComparison = workspaceComparisons.member(sessionId)
       if (workspaceComparison) {
         const record = workspaceComparisons.read(workspaceComparison.id)
-        const { lesson, scenario } = record
+        const { lesson, scenario, reviewChallengeArm } = record
         const evidence = lesson === evidenceLesson
         const deliveryLesson = lesson === lighthouseLesson && workspaceComparison.arm === 'direct'
-        const observed = (evidence || deliveryLesson) && !value.running &&
-          await readComparisonArm(workspaceComparisons, record, workspaceComparison.arm, request.signal)
+        const observed = (evidence || deliveryLesson || reviewChallengeArm) && !value.running &&
+          await readComparisonArm(workspaceComparisons, record, workspaceComparison.arm, request.signal,
+            deliveryLesson ? { verifyPersonalDelivery: true, linkedChoicesOnly: true } : undefined)
         const evidenceReplay = completedLighthouseChallenge(record, observed)
         const deliveryReview = deliveryLesson && observed?.canRematch === true && observed.materialDelivered === true
         const materialState = (evidenceReplay || deliveryReview) &&
           ctx.get('workspaceRegistry')?.get(record.workspaceId)?.path === record.cwd &&
           await workspaceMaterialState(record, request.signal)
         const report = observedLighthouseEvidenceReport(record, observed, materialState)
+        const played = observed?.status === 'complete' &&
+          await verifiedReviewInvitation(workspaceComparisons, record, workspaceComparison.arm, request.signal, observed)
         value.workspaceComparison = { ...workspaceComparison, ...(lesson && { lesson }), ...(evidence && { scenario }),
-          ...(evidence && observed?.status === 'waiting' && { firstTaskPending: true }),
-          ...(evidence && observed?.presetChanged && { presetChanged: true }),
+          ...(reviewChallengeArm && { reviewChallengeArm }),
+          ...((evidence || reviewChallengeArm) && observed?.status === 'waiting' && { firstTaskPending: true }),
+          ...((evidence || reviewChallengeArm) && observed?.presetChanged && { presetChanged: true }),
           ...(evidence && observed?.lessonTaskSource && { lessonTaskSource: observed.lessonTaskSource }),
           ...(evidenceReplay && materialState === 'verified' && { canReplayLighthouseEvidence: true }),
           ...(deliveryReview && materialState === 'verified' && { canTryDeliveryReview: true }),
+          ...(played && { reviewInvitation: played }),
           ...(report && { evidenceReportCode: encodeLighthouseEvidenceReport(report.choice, report.delivered) }) }
       }
       const planComparison = planComparisons.member(sessionId)
@@ -6612,8 +6700,12 @@ export async function apply(ctx) {
       }
       const rematch = rematchComparisons.member(sessionId)
       if (rematch) {
-        const { lesson, loadout, baseline } = rematchComparisons.read(rematch.id)
+        const record = rematchComparisons.read(rematch.id)
+        const { lesson, loadout, baseline } = record
+        const played = !value.running && lesson === lighthouseLesson &&
+          await verifiedReviewInvitation(rematchComparisons, record, rematch.arm, request.signal)
         value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }),
+          ...(played && { reviewInvitation: played }),
           ...evidenceReplayView(baseline) }
       }
       const heroMember = heroTrials.member(sessionId)
@@ -6851,14 +6943,17 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-evidence-report-compare') value = await evidenceHandoffReport(selection, request.signal, true)
         else if (selection?.action === 'lighthouse-evidence-repeat') value = await repeatLighthouseEvidence(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-repeat') value = await repeatLighthouseReview(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-review-challenge-share') value = await shareReviewChallenge(selection, request.signal)
         else if (selection?.action === 'hero-trial-challenge-share') value = await shareHeroChallenge(selection, request.signal)
         else if (selection?.action === 'hero-trial-handoff-report') value = await heroHandoffReport(selection, request.signal)
         else if (selection?.action === 'hero-trial-handoff-compare') value = await heroHandoffReport(selection, request.signal, true)
         else if (selection?.action === 'lighthouse-challenge-preview') {
           value = isLighthouseHeroChallenge(selection.code) ? await previewHeroChallenge(selection.code, request.signal)
+            : isLighthouseReviewChallenge(selection.code) ? (await checkReviewChallenge(selection.code, request.signal)).preview
             : (await checkLighthouseChallenge(selection.code, request.signal, selection.useLocal === true)).preview
         } else if (selection?.action === 'lighthouse-challenge-open') {
           value = isLighthouseHeroChallenge(selection.code) ? await openHeroChallenge(selection, request.signal)
+            : isLighthouseReviewChallenge(selection.code) ? await openReviewChallenge(selection, request.signal)
             : await openLighthouseChallenge(selection, english, request.signal)
         }
         else if (selection?.action === 'lighthouse-pending-runs') value = await pendingLighthouseRuns(selection, request.signal)

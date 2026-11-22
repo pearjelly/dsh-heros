@@ -2458,6 +2458,9 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.deepEqual(await invoke('workspace-comparison-open', { ...filter, arm: 'direct' }), baseline)
     const root = { ...filter, kind: 'workspace', arm: 'direct' }
     await invoke('rematch-comparison-options', root, 422)
+    const shareReview = (kind, comparisonId, arm, status) =>
+      invoke('lighthouse-review-challenge-share', { kind, comparisonId, arm }, status)
+    await shareReview('workspace', baseline.id, 'direct', 422)
 
     await send(baseline)
     const direct = (await read(filter)).arms[0]
@@ -2578,6 +2581,79 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.deepEqual(confirmedBoard.reviewChoiceComparison, { current: confirmedSide, other: revisedSide })
     assert.deepEqual(new Set(await membership(lesson.workspaceId)), new Set([baseline.sessionId, confirmed.sessionId, revised.sessionId]))
 
+    const directCode = (await shareReview('workspace', baseline.id, 'direct')).code
+    const reviewCode = (await shareReview('rematch', revised.id, 'rematch')).code
+    const invitationFields = code => {
+      assert.match(code, /^DSHC3\./)
+      return JSON.parse(Buffer.from(code.slice(6), 'base64url').toString('utf8'))
+    }
+    assert.deepEqual(invitationFields(directCode), { sample: 'lighthouse-delivery-review-1-zh', played: 'direct' })
+    assert.deepEqual(invitationFields(reviewCode), { sample: 'lighthouse-delivery-review-1-zh', played: 'review' })
+    assert.deepEqual(await shareReview('rematch', confirmed.id, 'rematch'), { code: reviewCode })
+    assert.equal((await equipmentIn(host, revised.sessionId)).rematchComparison.reviewInvitation, 'review')
+    await shareReview('workspace', baseline.id, 'review', 422)
+    const malformed = 'DSHC3.' + Buffer.from(JSON.stringify({ ...invitationFields(directCode), task: 'hidden' })).toString('base64url')
+    await invoke('lighthouse-challenge-preview', { code: malformed }, 422)
+    const check = await host.requestRaw(endpoint, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+      body: JSON.stringify({ action: 'lighthouse-challenge-preview', code: directCode }),
+    })
+    assert.equal(check.status, 200)
+    const { value: invitation } = await check.json()
+    assert.equal(invitation.kind, 'delivery-review')
+    assert.equal(invitation.sampleLanguage, 'zh')
+    assert.equal(invitation.task, baseline.task)
+    assert.deepEqual(invitation.routes, ['direct', 'review'])
+    const friendId = '8'.repeat(32)
+    const friendOpen = (arm, id, token = invitation.token, status) =>
+      invoke('lighthouse-challenge-open', { code: directCode, token, arm, launchId: id }, status)
+    await friendOpen('review', friendId, '0'.repeat(64), 422)
+    const [friend, again] = await Promise.all([friendOpen('review', friendId), friendOpen('review', friendId)])
+    assert.deepEqual(again, friend)
+    await friendOpen('direct', friendId, invitation.token, 422)
+    const friendDraft = await history(friend.sessionId)
+    assert.notEqual(friendDraft.workspaceId, lesson.workspaceId)
+    assert.equal(friend.task, baseline.task)
+    assert.ok(noMessages(friendDraft))
+    assert.deepEqual(await membership(friendDraft.workspaceId), [friend.sessionId])
+    assert.equal(await readFile(join(friendDraft.workspacePath, material), 'utf8'), contents[1])
+    const friendMember = (await equipmentIn(host, friend.sessionId)).workspaceComparison
+    assert.equal(friendMember.reviewChallengeArm, 'review')
+    assert.equal(friendMember.firstTaskPending, true)
+    assert.equal(friendMember.reviewInvitation, undefined)
+    const friendTurn = send(friend)
+    friendTurn.catch(() => {})
+    let friendQuestion
+    try {
+      for (let count = 0; count < 100 && !friendQuestion; count++) {
+        friendQuestion = (await host.request(questions, { sessionId: friend.sessionId })).question
+        if (!friendQuestion) await delay(40)
+      }
+      assert.deepEqual(friendQuestion?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
+      assert.equal((await read({ comparisonId: friend.id })).arms[0].status, 'waiting-choice')
+    } finally {
+      if (friendQuestion) await host.request(questions, { sessionId: friend.sessionId, choice: 'Revise draft' })
+      await friendTurn
+    }
+    const friendResult = (await read({ comparisonId: friend.id })).arms[0]
+    assert.equal(friendResult.status, 'complete')
+    assert.equal(friendResult.materialDelivered, false)
+    assert.deepEqual(friendResult.entries[0].choices, ['Revise draft'])
+    assert.deepEqual(friendResult.deliverables, [])
+    assert.deepEqual(await shareReview('workspace', friend.id, 'review'), { code: reviewCode })
+    const friendDirect = await friendOpen('direct', '9'.repeat(32))
+    assert.equal(friendDirect.task, friend.task)
+    const friendDirectHistory = await history(friendDirect.sessionId)
+    assert.notEqual(friendDirectHistory.workspaceId, friendDraft.workspaceId)
+    assert.ok(noMessages(friendDirectHistory))
+    await send(friendDirect)
+    assert.equal((await read({ comparisonId: friendDirect.id })).arms[0].materialDelivered, true)
+    assert.equal((await history(friendDirect.sessionId)).events.find(item => item.type === 'deliverables/presented').data.files[0].path,
+      join(friendDirectHistory.workspacePath, material))
+    await appendFile(join(friendDraft.workspacePath, material), '\nChanged recipient sample.\n')
+    await friendOpen('review', friendId, invitation.token, 422)
+    await shareReview('workspace', friend.id, 'review', 422)
+
     const personalPath = join(directory, 'personal')
     await mkdir(personalPath)
     await writeFile(join(personalPath, 'report.md'), '# Personal workspace material')
@@ -2588,6 +2664,8 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.notEqual(own.id, baseline.id)
     assert.equal((await read()).id, own.id)
     await appendFile(join(native.workspacePath, material), '\nModified old practice material.\n')
+    await shareReview('workspace', baseline.id, 'direct', 422)
+    await shareReview('rematch', confirmed.id, 'rematch', 422)
     assert.equal((await read(filter)).materialState, 'changed')
     assert.equal((await equipmentIn(host, baseline.sessionId)).workspaceComparison.canTryDeliveryReview, undefined)
     const staleComparison = await invoke('rematch-comparison', { comparisonId: confirmed.id })
@@ -2634,6 +2712,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     const rejected = (await read({ comparisonId: wrong.id })).arms[0]
     assert.equal(rejected.materialDelivered, false)
     assert.ok(!rejected.canRematch)
+    await shareReview('workspace', wrong.id, 'direct', 422)
     assert.equal((await equipmentIn(host, wrong.sessionId)).workspaceComparison.canTryDeliveryReview, undefined)
     await invoke('rematch-comparison-options', { ...root, comparisonId: wrong.id }, 422)
   } finally {

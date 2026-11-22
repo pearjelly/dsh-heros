@@ -1,4 +1,5 @@
 import { lighthouseEvidenceChoices, lighthouseHeroArms, lighthouseHeroDelivery, lighthouseHeroNeeds } from './lighthouse.js'
+import { workspaceComparisonArms } from './match-comparisons.js'
 
 const prefix = 'DSHH1.'
 const codeLimit = 16_384
@@ -211,6 +212,36 @@ export function decodeLighthouseHeroChallenge(value) {
     }
   } catch {
     // Only canonical recipes for bundled public tasks can be replayed.
+  }
+  throw new Error(invalidChallenge)
+}
+
+const reviewChallengePrefix = 'DSHC3.'
+const reviewChallengeSamples = { en: 'lighthouse-delivery-review-1-en', zh: 'lighthouse-delivery-review-1-zh' }
+
+export function isLighthouseReviewChallenge(value) {
+  return typeof value === 'string' && value.trim().startsWith(reviewChallengePrefix)
+}
+
+export function encodeLighthouseReviewChallenge(language, played) {
+  if (!Object.hasOwn(reviewChallengeSamples, language) || !workspaceComparisonArms.includes(played)) throw new Error(invalidChallenge)
+  return reviewChallengePrefix + Buffer.from(JSON.stringify({ sample: reviewChallengeSamples[language], played })).toString('base64url')
+}
+
+export function decodeLighthouseReviewChallenge(value) {
+  if (!isLighthouseReviewChallenge(value) || value.length > 128) throw new Error(invalidChallenge)
+  const code = value.trim()
+  const payload = code.slice(reviewChallengePrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidChallenge)
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (shape(data, ['sample', 'played'])) {
+      const { sample, played } = data
+      const language = Object.keys(reviewChallengeSamples).find(key => reviewChallengeSamples[key] === sample)
+      if (language && encodeLighthouseReviewChallenge(language, played) === code) return { sample, played, language }
+    }
+  } catch {
+    // The versioned invitation contains only a fixed public sample and the sender's route.
   }
   throw new Error(invalidChallenge)
 }
