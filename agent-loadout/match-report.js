@@ -390,13 +390,14 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
   }
   const events = source.events
   const start = events.findIndex(event => event.type === 'turn/start')
-  if (start < 0) return { status: 'waiting' }
+  const beforeTurn = start < 0 ? events : events.slice(0, start)
+  const initialPreset = beforeTurn.findLast(event => event.type === 'agent-preset/selected')
+  const presetChanged = (initialPreset?.data.agentPreset ?? source.header.agentPreset) !== presetId
+  if (start < 0) return { status: 'waiting', ...(presetChanged && { presetChanged: true }) }
   const turn = events[start].data.turn
   const end = events.findIndex((event, index) => index > start && event.type === 'turn/end')
   const body = events.slice(start + 1, end < 0 ? undefined : end)
-  const initialPreset = events.slice(0, start).findLast(event => event.type === 'agent-preset/selected')
-  if ((initialPreset?.data.agentPreset ?? source.header.agentPreset) !== presetId ||
-    body.some(event => event.type === 'agent-preset/selected' && event.data.agentPreset !== presetId)) {
+  if (presetChanged || body.some(event => event.type === 'agent-preset/selected' && event.data.agentPreset !== presetId)) {
     return unavailable('changed-loadout')
   }
   const messages = body.filter(event => event.type === 'user/message' && (event.surfaceOp === 'append' || exactMessages) &&

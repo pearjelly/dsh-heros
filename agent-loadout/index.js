@@ -853,6 +853,7 @@ export async function apply(ctx) {
       lighthouseWorkspaceId: sampleWorkspace?.id,
       heroTrialAvailable: await heroTrialAvailable(ecosystem),
       ...(lastHeroTrial && { lastHeroTrial: { id: lastHeroTrial.id, need: lastHeroTrial.need } }),
+      ...((lastHeroTrial || workspaceComparisons.latest(record => record.lesson === evidenceLesson)) && { hasLighthouseRuns: true }),
       equipment: [
         ...equipment.map(item => withRank({ ...publicEquipment(item), kind: 'featured', roles: classes.byId.get(item.id),
           art: art('gear', item.id) }, growth.gearRank(item.id))),
@@ -4518,6 +4519,55 @@ export async function apply(ctx) {
     return b.createdAt - a.createdAt || b.id.localeCompare(a.id) || b.kind.localeCompare(a.kind)
   }
 
+  async function pendingLighthouseRuns({ before }, signal) {
+    const order = (a, b) => b.createdAt - a.createdAt || b.sessionId.localeCompare(a.sessionId)
+    let previous
+    if (before !== undefined) {
+      const fields = typeof before === 'string' && /^(\d{1,16}):(session-[a-f0-9]{32})$/.exec(before)
+      if (!fields || !Number.isSafeInteger(Number(fields[1]))) throw new Error('找不到这页待发送的灯塔对局。')
+      previous = { createdAt: Number(fields[1]), sessionId: fields[2] }
+    }
+    const candidates = [
+      ...Array.from(workspaceComparisons.list()).filter(record => record.lesson === evidenceLesson).map(record => ({
+        record, store: workspaceComparisons, arm: 'evidence', kind: 'evidence',
+      })),
+      ...Array.from(heroTrials.list()).flatMap(record => lighthouseHeroArms.map(arm => ({
+        record, store: heroTrials, arm, kind: 'hero',
+      }))),
+    ].map(candidate => ({
+      ...candidate, createdAt: candidate.record.createdAt,
+      sessionId: candidate.store.identity(candidate.record.id, candidate.arm).sessionId,
+    })).filter(candidate => !previous || order(candidate, previous) > 0).sort(order)
+    const registry = ctx.get('workspaceRegistry')
+    async function pendingArm({ record, store, arm, kind, sessionId, createdAt }) {
+      try {
+        const saved = await store.readArm(record.id, arm)
+        const workspace = saved && registry?.get(saved.workspaceId)
+        if (!workspace || saved.opened !== true || workspace.path !== saved.cwd || !workspace.sessionIds.includes(sessionId)) return
+        if (kind === 'evidence' && (record.workspaceId !== saved.workspaceId || record.cwd !== saved.cwd)) return
+        const result = kind === 'evidence' ? await readComparisonArm(store, record, arm, signal)
+          : await readHeroTrialArm(record, arm, signal)
+        if (result.status === 'waiting') return { kind, sessionId, createdAt,
+          ...(kind === 'evidence' ? { scenario: record.scenario } : { arm, need: record.need }),
+          ...(result.presetChanged && { presetChanged: true }) }
+      } catch {
+        signal?.throwIfAborted()
+      }
+    }
+    const items = []
+    const pageSize = 12
+    let inspected = 0
+    while (inspected < candidates.length && items.length < pageSize) {
+      signal?.throwIfAborted()
+      const batch = candidates.slice(inspected, inspected + Math.min(6, pageSize - items.length))
+      const results = await Promise.all(batch.map(pendingArm))
+      items.push(...results.filter(Boolean))
+      inspected += batch.length
+    }
+    const last = candidates[inspected - 1]
+    return { items, ...(last && inspected < candidates.length && { before: `${last.createdAt}:${last.sessionId}` }) }
+  }
+
   async function comparisonHistory({ query = '', kind = 'all', outcome = 'all', before, scope, probe = false }, signal) {
     const evidenceReplays = scope === 'evidence-replays'
     if (typeof query !== 'string' || query.length > 200 || !['all', ...Object.keys(comparisonStores)].includes(kind) ||
@@ -6144,6 +6194,7 @@ export async function apply(ctx) {
         const report = observedLighthouseEvidenceReport(record, observed, materialState)
         value.workspaceComparison = { ...workspaceComparison, ...(lesson && { lesson }), ...(evidence && { scenario }),
           ...(observed?.status === 'waiting' && { firstTaskPending: true }),
+          ...(observed?.presetChanged && { presetChanged: true }),
           ...(observed?.lessonTaskSource && { lessonTaskSource: observed.lessonTaskSource }),
           ...(materialState === 'verified' && { canReplayLighthouseEvidence: true }),
           ...(report && { evidenceReportCode: encodeLighthouseEvidenceReport(report.choice, report.delivered) }) }
@@ -6168,12 +6219,13 @@ export async function apply(ctx) {
               readHeroTrialArm(record, 'minimal', request.signal), readHeroTrialArm(record, lighthouseHeroDelivery, request.signal),
             ])
             value.heroTrial = { ...heroTrial, ...(replay.status === 'waiting' && { firstTaskPending: true }),
+              ...(replay.presetChanged && { presetChanged: true }),
               ...(heroDeliveryLessonSource(record, original, replay) && { verifiedDeliveryReplay: true }) }
           } else {
             const stockTask = heroTrial.arm === 'standard' || record.need === 'summary'
             const observed = await readHeroTrialArm(record, heroTrial.arm, request.signal, stockTask)
             if (observed.status === 'waiting') {
-              value.heroTrial = { ...heroTrial, firstTaskPending: true }
+              value.heroTrial = { ...heroTrial, firstTaskPending: true, ...(observed.presetChanged && { presetChanged: true }) }
             } else if (stockTask) {
               const lessonTaskSource = await stockTrialTaskReference(record, observed, request.signal)
               if (lessonTaskSource) value.heroTrial = { ...heroTrial, lessonTaskSource }
@@ -6369,6 +6421,7 @@ export async function apply(ctx) {
           value = isLighthouseHeroChallenge(selection.code) ? await openHeroChallenge(selection, request.signal)
             : await openLighthouseChallenge(selection, english, request.signal)
         }
+        else if (selection?.action === 'lighthouse-pending-runs') value = await pendingLighthouseRuns(selection, request.signal)
         else if (selection?.action === 'lighthouse-comparison') value = await readComparison(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'lighthouse-comparison-open') value = await openComparisonArm(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'workspace-comparison') value = await readComparison(workspaceComparisons, selection, english, request.signal)

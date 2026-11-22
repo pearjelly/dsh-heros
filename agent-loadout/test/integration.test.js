@@ -1461,6 +1461,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     }
     const read = comparisonId => invoke('hero-trial', { comparisonId })
     const open = (comparisonId, arm, status) => invoke('hero-trial-open', { comparisonId, arm }, status)
+    const pendingTrials = () => invoke('lighthouse-pending-runs')
     const previewReplay = (comparisonId, status) => invoke('hero-trial-replay-preview', { comparisonId }, status)
     const openReplay = (comparisonId, token, status) => invoke('hero-trial-replay-open', { comparisonId, token }, status)
     const shareTrial = (comparisonId, status) => invoke('hero-trial-challenge-share', { comparisonId }, status)
@@ -1493,6 +1494,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const beforeSessions = await nativeSessions()
     assert.equal(before.heroTrialAvailable, true)
     assert.equal(before.lastHeroTrial, undefined)
+    assert.equal(before.hasLighthouseRuns, undefined)
+    assert.deepEqual(await pendingTrials(), { items: [] })
     assert.equal((await read()).id, undefined)
     await create('../', 'original', 422)
     await create(launchId('c'), 'both', 422)
@@ -1507,6 +1510,8 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(trial.arms.map(({ id, status }) => [id, status]), [['standard', 'unopened'], ['minimal', 'unopened']])
     assert.equal((await read()).id, trial.id)
     assert.deepEqual((await host.request(endpoint)).value.lastHeroTrial, { id: trial.id, need: 'original' })
+    assert.equal((await host.request(endpoint)).value.hasLighthouseRuns, true)
+    assert.deepEqual(await pendingTrials(), { items: [] })
     await create(launchId('a'), 'summary', 422)
     await open(trial.id, 'ptc', 422)
     await open(trial.id, 'minimal-present', 422)
@@ -1522,6 +1527,12 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.notEqual(standard.sessionId, minimal.sessionId)
     assert.notEqual(standard.workspaceId, minimal.workspaceId)
     assert.deepEqual(await nativeSessions(), [...beforeSessions, standard.sessionId, minimal.sessionId].sort())
+    const pending = await pendingTrials()
+    assert.equal(pending.before, undefined)
+    assert.deepEqual(pending.items.map(({ kind, sessionId, arm, need }) => [kind, sessionId, arm, need]).sort((a, b) => a[2].localeCompare(b[2])), [
+      ['hero', minimal.sessionId, 'minimal', 'original'], ['hero', standard.sessionId, 'standard', 'original'],
+    ])
+    assert.ok(pending.items.every(item => Number.isSafeInteger(item.createdAt) && item.createdAt > 0))
     const drafts = new Map()
     const waiting = await read(trial.id)
     const standardFields = { sample, need: 'original', arm: 'standard', originalAttached: true }
@@ -1550,6 +1561,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual((await host.request(endpoint)).value.plans, before.plans)
 
     await send(standard)
+    assert.deepEqual((await pendingTrials()).items.map(item => item.sessionId), [minimal.sessionId])
     const between = await read(trial.id)
     assert.equal(byHero(between, 'minimal').status, 'waiting')
     assert.deepEqual(byHero(between, 'standard').lessonTaskSource, standardTransfer)
@@ -1571,6 +1583,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     await shareHandoff(trial.id, 'minimal', 422)
     await shareHandoff(trial.id, 'ptc', 422)
     await send(minimal)
+    assert.deepEqual(await pendingTrials(), { items: [] })
     const result = await read(trial.id)
     for (const [hero, opened] of [['standard', standard], ['minimal', minimal]]) {
       const native = await history(opened.sessionId)
@@ -1618,6 +1631,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
       throw error
     })
     assert.deepEqual(await recipientSessions(), [])
+    assert.deepEqual(await receive('lighthouse-pending-runs'), { items: [] })
     assert.equal((await recipient.request(endpoint)).value.lastHeroTrial, undefined)
     await receive('hero-trial', { comparisonId: trial.id }, 422)
     const forged = data => 'DSHC2.' + Buffer.from(JSON.stringify(data)).toString('base64url')
@@ -1658,10 +1672,12 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const recipientTrial = () => receive('hero-trial', { comparisonId: joined.id })
     assert.deepEqual((await recipient.request(endpoint)).value.lastHeroTrial, { id: joined.id, need: 'original' })
     assert.deepEqual((await recipientTrial()).arms.map(({ id, status }) => [id, status]), [['standard', 'unopened'], ['minimal', 'waiting']])
+    assert.deepEqual((await receive('lighthouse-pending-runs')).items.map(item => [item.sessionId, item.arm]), [[joined.sessionId, 'minimal']])
     const recipientHandoff = (action, arm, fields, status) => receive(action, { comparisonId: joined.id, arm, ...fields }, status)
     await recipientHandoff('hero-trial-handoff-report', 'minimal', {}, 422)
     await recipientHandoff('hero-trial-handoff-compare', 'minimal', { code: senderHandoff.code }, 422)
     await recipient.request(turnEndpoint, { ...joined, text: joined.task })
+    assert.deepEqual(await receive('lighthouse-pending-runs'), { items: [] })
     const recipientRound = await recipientHistory()
     assert.equal(recipientRound.events.find(event => event.type === 'user/message' && event.data.source.kind === 'user')?.data.content[0].text, trial.task)
     assert.deepEqual(traceTools(recipientRound).map(event => event.data.name), ['bash'])
@@ -2375,6 +2391,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       return (await response.json()).value
     }
     const read = fields => invoke('workspace-comparison', fields)
+    const pendingEvidence = (before, status) => invoke('lighthouse-pending-runs', { before }, status)
     const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
     const plans = async () => (await host.request(endpoint)).value.plans
     const send = ({ sessionId, task, requestId }) => host.request(turnEndpoint, { sessionId, text: task, requestId })
@@ -2384,6 +2401,8 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const replayOptions = (comparisonId, status) => invoke('rematch-comparison-options', replayFrom(comparisonId), status)
 
     const normal = await plans()
+    assert.deepEqual(await pendingEvidence(), { items: [] })
+    await pendingEvidence('invalid', 422)
     await open('gap', '../', 422)
     await open('unsupported', 'a'.repeat(32), 422)
     const launchId = 'a'.repeat(32)
@@ -2416,6 +2435,13 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       { opened: confirmed, scenario: 'confirmed', calls: ['read', 'write', 'present'], file: 'verified-handoff.md' },
     ]
     assert.equal(new Set(cases.map(testCase => testCase.opened.sessionId)).size, cases.length)
+    const pending = await pendingEvidence()
+    assert.equal(pending.before, undefined)
+    assert.ok(pending.items.every(item => item.kind === 'evidence' && Number.isSafeInteger(item.createdAt)))
+    assert.deepEqual(pending.items.map(({ sessionId, scenario }) => sessionId + ':' + scenario).sort(),
+      cases.map(({ opened, scenario }) => opened.sessionId + ':' + scenario).sort())
+    const firstPending = pending.items[0]
+    assert.deepEqual((await pendingEvidence(firstPending.createdAt + ':' + firstPending.sessionId)).items, pending.items.slice(1))
     assert.equal((await read({})).id, undefined)
     const proved = []
     for (const { opened, scenario, options, decision, openingChoice, calls, file } of cases) {
@@ -2457,6 +2483,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
           assert.equal(pending.evidenceOpeningChoice, undefined)
           const [arm] = pending.arms
           assert.equal(arm.status, 'waiting-choice')
+          assert.ok(!(await pendingEvidence()).items.some(item => item.sessionId === opened.sessionId))
           assert.deepEqual(arm.pendingQuestions[0].options, options)
           assert.deepEqual(arm.deliverables, [])
           assert.equal(arm.canReplayLighthouseEvidence, undefined)
@@ -2505,6 +2532,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       proved.push({ filter, arm, openingResult })
     }
 
+    assert.deepEqual(await pendingEvidence(), { items: [] })
     const source = replayFrom(lower.id)
     const baseNative = await history(lower.sessionId)
     const baseFiles = (await readdir(baseNative.workspacePath)).sort()
@@ -2907,6 +2935,26 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.deepEqual((await readdir(blank.workspacePath)).sort(), sampleFiles)
     const receivedView = () => receive('workspace-comparison', { comparisonId: accepted.id })
     assert.equal((await receivedView()).canShareChallenge, undefined)
+    const pendingRecipient = async () => (await receive('lighthouse-pending-runs')).items.find(item => item.sessionId === accepted.sessionId)
+    const recipientMember = async () => (await equipmentIn(recipient, accepted.sessionId)).workspaceComparison
+    const selectRecipientPreset = async agentPreset => {
+      const method = 'agentPresets/select'
+      const rpcId = randomUUID()
+      const changed = await recipient.request('/api/' + method, {
+        type: 'client-request', rpcId, method, payload: { args: { agentId: accepted.sessionId, agentPreset } },
+      })
+      assert.equal(changed.rpcId, rpcId)
+      assert.deepEqual(changed.result, { ok: true, value: agentPreset })
+    }
+    assert.equal((await pendingRecipient()).presetChanged, undefined)
+    await selectRecipientPreset('standard')
+    assert.equal((await pendingRecipient()).presetChanged, true)
+    assert.equal((await recipientMember()).firstTaskPending, true)
+    assert.equal((await recipientMember()).presetChanged, true)
+    assert.ok(!(await nativeRecipient()).events.some(event => event.type === 'turn/start'))
+    await selectRecipientPreset(blank.presetId)
+    assert.equal((await pendingRecipient()).presetChanged, undefined)
+    assert.equal((await recipientMember()).presetChanged, undefined)
     const recipientReportSource = { comparisonId: accepted.id }
     const friendReport = { ...recipientReportSource, code: qualifiedReport.code }
     await receive('lighthouse-evidence-report-compare', friendReport, 422)

@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.132.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.133.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -84,6 +84,9 @@ After **Minimal + Deliverable Preview** delivers the original sample card and pa
 5. Choose **Play again with the same loadout** from the comparison to try another choice on the same sample. Open the new draft and manually send the same task, then make a fresh decision on the native question card.
 
 Before your first send in an evidence or hero trial, the conversation shows whether the original task is ready. If you clear the draft, choose **Fill original task**. If you edit it or add attachments, choose **Copy original task**, then restore the original text and remove any extra attachments yourself so the game can verify this run.
+
+After switching away from an unsent Lighthouse run, choose **Resume a Lighthouse draft** in the Armory. Choose an evidence exercise or the hero you opened, then choose **Open draft** to return to that conversation with its current draft.
+If its loadout changed, the run shows a warning. Restore the original loadout before sending to get a verified challenge result.
 
 ### Replay a public challenge with one gear change
 

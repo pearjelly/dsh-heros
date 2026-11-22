@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.132.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.133.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -84,6 +84,9 @@ dsh web
 5. 想亲自验证另一种取舍，可在对照点 **用同一出装再试一局**。在独立的原生会话手动发送原任务，再在 DSH 提问卡做一次选择。
 
 灯塔取舍和英雄试玩的原会话会在首次发送前提示原任务是否就绪。清空草稿后可点 **填入原任务**。改过文字或添加附件后，可点 **复制原任务**，手动恢复原文并移除多加的附件，这局才能按原题核验。
+
+切换会话后，可以从装备库点 **继续未发送的灯塔对局**。找到对应的灯塔取舍或已开局的英雄，点 **打开草稿** 回原会话继续编辑。
+出装变化时，列表和原会话会提示。先恢复原出装再发送，才能按原挑战核验。
 
 ### 卸下一件装备再试同一题
 

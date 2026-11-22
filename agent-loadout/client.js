@@ -2254,7 +2254,8 @@ window.__ModuleLoader__.load({
               t(stockTrialTaskLabels[member.arm] ?? lessonTaskLabel)),
             availableReplay && h('button', { ref: replayTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setReplayOpen(true) }, t(minimalDeliveryReplayLabel))),
-          taskPending ? h(ChallengeTaskDraft, { task: member.task, sessionId, draftStore, putTask, backLabel: '返回试玩会话' })
+          taskPending ? h(ChallengeTaskDraft, { task: member.task, presetChanged: member.presetChanged,
+            sessionId, draftStore, putTask, backLabel: '返回试玩会话' })
             : verifiedDeliveryReplay ? h('p', { role: 'status' }, t('加装后已附上补给卡原件，符合接班需求。'))
             : availableReplay ? h('p', { role: 'status' }, t('这局交接了文字，接班人还需要可打开的原件。'))
             : !hasTurn && !availablePersonalTask && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
@@ -3207,6 +3208,81 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-roster-open', onClick: onClose }, t('关闭'))))
     }
 
+    const lighthouseDraftsLabel = '继续未发送的灯塔对局'
+
+    function LighthousePendingRuns({ request, onClose, onOpen }) {
+      const language = useLanguage()
+      const [page, setPage] = useState({})
+      const [loaded, setLoaded] = useState(null)
+      const rows = loaded?.items ?? empty
+      const loading = loaded?.page !== page || loaded?.language !== language
+      const error = !loading && loaded.error
+      const invalidCursor = page.before && error === t('找不到这页待发送的灯塔对局。')
+      const before = loaded?.before
+      const canLoadOlder = Boolean(before && before !== page.before)
+      const listRef = useRef(null)
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'lighthouse-pending-runs'
+        request(action, { action, ...(page.before && { before: page.before }) }, abort.signal, language)
+          .then(value => {
+            if (abort.signal.aborted) return
+            setLoaded(previous => {
+              const existing = page.before ? previous?.items ?? empty : empty
+              const items = new Map([...existing, ...value.items].map(item => [item.sessionId, item]))
+              return { page, language, items: [...items.values()], before: value.before }
+            })
+          })
+          .catch(reason => {
+            if (!abort.signal.aborted) setLoaded(previous => ({
+              ...previous, page, language, error: reason.message || t('暂时无法读取灯塔草稿。'),
+            }))
+          })
+        return () => abort.abort()
+      }, [page, language, request])
+
+      function loadOlder() {
+        if (loading || error || !canLoadOlder) return
+        listRef.current?.focus()
+        setPage({ before })
+      }
+
+      return h(InstallDialog, { title: t(lighthouseDraftsLabel), className: 'moba-lighthouse-comparison',
+        onCancel: onClose, initialFocus: '.moba-pending-runs-list', onKeyDown: event => closeDialogOnEscape(event, onClose) },
+        h('div', { className: 'moba-pending-runs-list', tabIndex: -1, ref: listRef },
+          rows.length > 0 && h('ul', { className: 'moba-history-list' }, rows.map(item => {
+            const evidence = item.kind === 'evidence'
+            const hero = evidence ? undefined : heroTrialHeroes.find(option => option.id === item.arm)
+            const detail = evidence ? evidenceScenarios.find(option => option.id === item.scenario)
+              : heroTrialNeeds.find(option => option.id === item.need)
+            const title = evidence ? t('灯塔证据取舍') : [t(heroTrialTitle), hero && t(hero.name)].filter(Boolean).join(' · ')
+            const time = new Date(item.createdAt)
+            const timeLabel = Number.isFinite(time.getTime()) ? reportTime(time) : ''
+            const detailLabel = [detail && t(detail.name), item.presetChanged && t('原出装已变化')].filter(Boolean).join(' · ')
+            const openLabel = t('打开草稿')
+            return h('li', { className: 'moba-history-entry', key: item.sessionId },
+              h('header', null, h('div', null, h('h3', null, title), detailLabel && h('p', null, detailLabel)),
+                timeLabel && h('time', { dateTime: time.toISOString() }, timeLabel)),
+              h('div', { className: 'moba-history-card-actions' },
+                h('button', { type: 'button', className: 'moba-roster-open',
+                  'aria-label': [openLabel, title, detailLabel, timeLabel].filter(Boolean).join(' · '),
+                  onClick: () => onOpen(item.sessionId) }, openLabel)))
+          })),
+          loading ? h('p', { className: 'moba-empty', role: 'status' }, t('正在读取灯塔草稿…'))
+            : error ? h('p', { className: 'moba-alert', role: 'alert' }, error, ' ',
+              h('button', { type: 'button', className: 'moba-text', onClick: () => {
+                listRef.current?.focus()
+                setPage(invalidCursor ? {} : { ...page })
+              } }, t(invalidCursor ? '从第一页重新读取' : '重试')))
+              : !rows.length && h('p', { className: 'moba-empty', role: 'status' }, t(canLoadOlder
+                ? '这页没有匹配项，仍有更早的记录可查。' : '没有未发送的灯塔对局。'))),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          canLoadOlder && !error && h('button', { type: 'button', className: 'moba-roster-open', disabled: loading,
+            onClick: loadOlder }, t('加载更多记录')),
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: onClose }, t('关闭'))))
+    }
+
     function RematchEditor({ kind, comparisonId, arm, sourceSessionId, request, lesson, evidenceReplayHint, publicEvidenceReplayHint,
       backLabel = '返回记录', onBack, onClose, onVisit }) {
       const language = useLanguage()
@@ -3581,7 +3657,7 @@ window.__ModuleLoader__.load({
 
     const unavailableDraftStore = { subscribe: () => () => {}, getSnapshot: () => null }
 
-    function ChallengeTaskDraft({ task, sessionId, draftStore, putTask, backLabel }) {
+    function ChallengeTaskDraft({ task, sessionId, draftStore, putTask, backLabel, presetChanged }) {
       const store = useMemo(() => {
         const state = draftStore(sessionId)
         return state ? { subscribe: state.subscribe.bind(state), getSnapshot: state.getSnapshot.bind(state) } : unavailableDraftStore
@@ -3590,15 +3666,16 @@ window.__ModuleLoader__.load({
       const [fillBlocked, setFillBlocked] = useState(false)
       if (draft && ['adjudicating', 'submitting', 'sending'].includes(draft.phase)) return null
       const changed = draft && (draft.attachmentIds?.length || draft.occurrences?.length || draft.phase === 'claimed')
-      if (!changed && draft?.draft === task) return h('p', { role: 'status' }, t('原任务已就绪。请手动发送以记录本局。'))
+      const presetNotice = presetChanged && t('原出装已变化。这局无法按原挑战核验。')
+      if (!changed && draft?.draft === task) return h('p', { role: 'status' }, presetNotice || t('原任务已就绪。请手动发送以记录本局。'))
       if (!changed && draft?.draft === '' && !fillBlocked) return h('div', { className: 'moba-task-pending' },
-        h('p', { role: 'status' }, t('填入原任务后，再手动发送。')),
+        h('p', { role: 'status' }, t('填入原任务后，再手动发送。'), presetNotice && ' ' + presetNotice),
         h('button', { type: 'button', className: 'moba-settlement-button',
           onClick: () => setFillBlocked(putTask(sessionId, task) === 'blocked') }, t('填入原任务')))
       return h('div', { className: 'moba-task-pending' },
         h('p', { role: 'status' }, t(draft && (changed || draft.draft)
           ? '草稿已改动。请恢复原任务并移除额外附件，再手动发送。'
-          : '请复制原任务，粘贴后手动发送以记录本局。')),
+          : '请复制原任务，粘贴后手动发送以记录本局。'), presetNotice && ' ' + presetNotice),
         h(LocalCopyButton, { text: task, label: '复制原任务', fieldLabel: '原任务', copiedNotice: '已复制原任务。',
           manualNotice: '已选中任务文字，可以手动复制。', backLabel }))
     }
@@ -3660,7 +3737,8 @@ window.__ModuleLoader__.load({
               className: 'moba-settlement-button', onClick: () => setOpenEvidenceReplay(true) }, t(lighthouseEvidenceReplayLabel)),
             availableLessonTask && h('button', { ref: lessonTaskTrigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setLessonTaskSource(availableLessonTask) }, t(lessonTaskLabel))),
-          taskPending && h(ChallengeTaskDraft, { task: member.task, sessionId, draftStore, putTask, backLabel: '返回练习会话' }),
+          taskPending && h(ChallengeTaskDraft, { task: member.task, presetChanged: member.presetChanged,
+            sessionId, draftStore, putTask, backLabel: '返回练习会话' }),
           !taskPending && draftStatus && h('p', { role: 'status' }, t(draftNotices[draftStatus])),
           publicEvidenceReplay && !hasTurn && h('p', null, t('这局使用同一份内置样例和新的练习工作区。')),
           evidence && !taskPending && !publicEvidenceReplay && !availableLessonTask && h('p', null, t(hasTurn
@@ -6765,6 +6843,8 @@ window.__ModuleLoader__.load({
       const [challengeTrigger, setChallengeTrigger] = useState(null)
       const challengeButton = useRef(null)
       const starterChallengeButton = useRef(null)
+      const [pendingLighthouseOpen, setPendingLighthouseOpen] = useState(false)
+      const pendingLighthouseButton = useRef(null)
       const [lighthouseCompareOpen, setLighthouseCompareOpen] = useState(false)
       const lighthouseCompareButton = useRef(null)
       const [playbooksOpen, setPlaybooksOpen] = useState(false)
@@ -7455,6 +7535,10 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: challengeButton, 'aria-haspopup': 'dialog', onClick: () => setChallengeTrigger(challengeButton) },
               h(Glyph, { kind: 'arrow', size: 17 }), t('加入灯塔挑战')),
+              data.hasLighthouseRuns === true && h('button', {
+                type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
+                ref: pendingLighthouseButton, 'aria-haspopup': 'dialog', onClick: () => setPendingLighthouseOpen(true),
+              }, h(Glyph, { kind: 'back', size: 17 }), t(lighthouseDraftsLabel)),
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: lighthouseCompareButton, 'aria-haspopup': 'dialog', onClick: () => setLighthouseCompareOpen(true) },
               h(Glyph, { kind: 'swap', size: 17 }), t('同题对照')),
@@ -7497,6 +7581,13 @@ window.__ModuleLoader__.load({
             setChallengeTrigger(null)
             setStarterOpen(false)
             openDraftSession(sessionId, task)
+          } }),
+          pendingLighthouseOpen && h(LighthousePendingRuns, { request, onClose: () => {
+            setPendingLighthouseOpen(false)
+            requestAnimationFrame(() => (pendingLighthouseButton.current ?? challengeButton.current)?.focus())
+          }, onOpen: sessionId => {
+            setPendingLighthouseOpen(false)
+            openSource(sessionId)
           } }),
           lighthouseCompareOpen && h(RunComparison, { request, onUse: adoptComparisonLoadout,
             onHistory: () => showRunHistory('lighthouse'), onClose: () => {
