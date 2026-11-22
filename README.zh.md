@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.143.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.144.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -45,6 +45,8 @@ dsh web
 在已核验的英雄试玩点 **分享这局战报**，再点 **复制战报码**。码里只有公开样例标识、接班需求、所选一局和是否附上原件。回复和文件留在自己的 Profile。
 
 打开相同公开样例、题目语言和接班需求的已核验本机试玩，点 **对照好友战报**。页面分别显示 **本机核对的交接** 和 **好友分享的交接**，后一项来自好友提供的战报码。
+
+点对照结果里的 **复制我的战报码**，手动发给好友，复制时可以继续看两局交接。
 
 ### 用标准模式做自己的任务
 
