@@ -2416,6 +2416,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     const invoke = async (action, fields, status) => (await host.request(endpoint, { action, ...fields }, status)).value
     const open = (id, status) => invoke('lighthouse-rematch-open', { launchId: id }, status)
     const read = filter => invoke('workspace-comparison', filter)
+    const completedHandoffs = async () => (await invoke('lighthouse-handoff-history')).items
     const workspace = '/api/loadout-fixture-session'
     const history = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
     const membership = async workspaceId => (await host.request(workspace, { inspectWorkspaceId: workspaceId })).sessionIds
@@ -2427,6 +2428,9 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     const noMessages = replay => !replay.events.some(item => item.type === 'turn/start' || item.type === 'user/message')
     const before = await catalog()
     assert.deepEqual(before.plans, [])
+    assert.deepEqual(await completedHandoffs(), [])
+    assert.equal((await host.request(endpoint)).value.hasLighthouseHandoffs, undefined)
+    await invoke('lighthouse-handoff-history', { before: 'invalid' }, 422)
     const startReview = (fields, status) => invoke('lighthouse-review-start-open', fields, status)
     const ownPreview = await invoke('lighthouse-review-start-preview')
     assert.equal(ownPreview.sampleLanguage, 'zh')
@@ -2688,6 +2692,8 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal(friendMember.firstTaskPending, true)
     assert.equal(friendMember.reviewInvitation, undefined)
     assert.equal((await host.request(endpoint)).value.hasLighthouseRuns, true)
+    assert.equal((await host.request(endpoint)).value.hasLighthouseHandoffs, true)
+    assert.ok(!(await completedHandoffs()).some(item => item.sessionId === friend.sessionId))
     assert.deepEqual(await reviewDrafts(), [['delivery-review', friend.sessionId, 'review', 'zh']])
     async function finishFriendReview(attempt, choice, inspect = async () => (await read({ comparisonId: attempt.id })).arms[0]) {
       const turn = send(attempt)
@@ -2726,6 +2732,18 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal((await history(friendDirect.sessionId)).events.find(item => item.type === 'deliverables/presented').data.files[0].path,
       join(friendDirectHistory.workspacePath, material))
     const directSource = { kind: 'workspace', comparisonId: friendDirect.id, arm: 'direct' }
+    const historiesBeforeRead = await Promise.all([history(friend.sessionId), history(friendDirect.sessionId)])
+    const handoffs = await completedHandoffs()
+    const chosen = [friend, friendDirect].map(attempt => handoffs.find(item => item.sessionId === attempt.sessionId))
+    assert.deepEqual(chosen.map(({ sourceKind, comparisonId, arm, played, sampleLanguage, decision, originalAttached }) =>
+      [sourceKind, comparisonId, arm, played, sampleLanguage, decision, originalAttached]), [
+      ['workspace', friend.id, 'review', 'review', 'zh', 'revise', false],
+      ['workspace', friendDirect.id, 'direct', 'direct', 'zh', 'direct', true],
+    ])
+    const [firstHandoff] = handoffs
+    const olderHandoffs = await invoke('lighthouse-handoff-history', { before: firstHandoff.createdAt + ':' + firstHandoff.sessionId })
+    assert.deepEqual(olderHandoffs.items, handoffs.slice(1))
+    assert.deepEqual(await Promise.all([history(friend.sessionId), history(friendDirect.sessionId)]), historiesBeforeRead)
     const [directReport, reviewReport] = await Promise.all([
       invoke('lighthouse-review-report', directSource), invoke('lighthouse-review-report', reviewSource),
     ])
@@ -3015,6 +3033,9 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     }), directReport)
     assert.deepEqual(await invoke('lighthouse-review-report', reviewSource), reviewReport)
     await appendFile(join(friendDraft.workspacePath, material), '\nChanged recipient sample.\n')
+    const afterMaterialChange = await completedHandoffs()
+    assert.ok(!afterMaterialChange.some(item => item.sessionId === friend.sessionId))
+    assert.ok(afterMaterialChange.some(item => item.sessionId === friendDirect.sessionId))
     await friendOpen('review', friendId, invitation.token, 422)
     await shareReview('workspace', friend.id, 'review', 422)
     await compareReview(reviewSource, directReport.code, 422)

@@ -857,12 +857,15 @@ export async function apply(ctx) {
         ? item : { ...item, sourceName: item.sourceName + ' · ' + item.sourceId.slice(-6) })
     }
     const lastHeroTrial = heroTrials.latest()
+    const hasLighthouseHandoffs = Boolean(workspaceComparisons.latest(lighthouseReviewLanguage) ||
+      rematchComparisons.latest(lighthouseReviewLanguage))
     return {
       roles,
       standingClaims,
       lighthouseWorkspaceId: sampleWorkspace?.id,
       heroTrialAvailable: await heroTrialAvailable(ecosystem),
       ...(lastHeroTrial && { lastHeroTrial: { id: lastHeroTrial.id, need: lastHeroTrial.need } }),
+      ...(hasLighthouseHandoffs && { hasLighthouseHandoffs }),
       ...((lastHeroTrial || workspaceComparisons.latest(record => record.lesson === evidenceLesson || record.reviewChallengeArm)) &&
         { hasLighthouseRuns: true }),
       equipment: [
@@ -5107,15 +5110,21 @@ export async function apply(ctx) {
     return b.createdAt - a.createdAt || b.id.localeCompare(a.id) || b.kind.localeCompare(a.kind)
   }
 
-  async function pendingLighthouseRuns({ before }, signal) {
+  async function lighthouseRunList({ before }, signal, completed = false) {
     const order = (a, b) => b.createdAt - a.createdAt || b.sessionId.localeCompare(a.sessionId)
     let previous
     if (before !== undefined) {
       const fields = typeof before === 'string' && /^(\d{1,16}):(session-[a-f0-9]{32})$/.exec(before)
-      if (!fields || !Number.isSafeInteger(Number(fields[1]))) throw new Error('找不到这页待发送的灯塔对局。')
+      if (!fields || !Number.isSafeInteger(Number(fields[1]))) throw new Error(completed
+        ? '找不到这页灯塔交接战报。' : '找不到这页待发送的灯塔对局。')
       previous = { createdAt: Number(fields[1]), sessionId: fields[2] }
     }
-    const candidates = [
+    const handoffCandidates = (sourceKind, store, defaultArm) => Array.from(store.list()).filter(lighthouseReviewLanguage)
+      .map(record => ({ record, store, sourceKind, arm: record.reviewChallengeArm ?? defaultArm, kind: 'delivery-review' }))
+    const candidates = (completed ? [
+      ...handoffCandidates('workspace', workspaceComparisons, 'direct'),
+      ...handoffCandidates('rematch', rematchComparisons, 'rematch'),
+    ] : [
       ...Array.from(workspaceComparisons.list()).flatMap(record => {
         if (record.lesson === evidenceLesson) return [{ record, store: workspaceComparisons, arm: 'evidence', kind: 'evidence' }]
         if (record.reviewChallengeArm) return [{ record, store: workspaceComparisons, arm: record.reviewChallengeArm, kind: 'delivery-review' }]
@@ -5124,17 +5133,23 @@ export async function apply(ctx) {
       ...Array.from(heroTrials.list()).flatMap(record => lighthouseHeroArms.map(arm => ({
         record, store: heroTrials, arm, kind: 'hero',
       }))),
-    ].map(candidate => ({
+    ]).map(candidate => ({
       ...candidate, createdAt: candidate.record.createdAt,
       sessionId: candidate.store.identity(candidate.record.id, candidate.arm).sessionId,
     })).filter(candidate => !previous || order(candidate, previous) > 0).sort(order)
     const registry = ctx.get('workspaceRegistry')
-    async function pendingArm({ record, store, arm, kind, sessionId, createdAt }) {
+    async function readRun({ record, store, arm, kind, sourceKind, sessionId, createdAt }) {
       try {
         const saved = await store.readArm(record.id, arm)
         const workspace = saved && registry?.get(saved.workspaceId)
         if (!workspace || saved.opened !== true || workspace.path !== saved.cwd || !workspace.sessionIds.includes(sessionId)) return
         if (kind !== 'hero' && (record.workspaceId !== saved.workspaceId || record.cwd !== saved.cwd)) return
+        if (completed) {
+          const result = await verifiedReviewHandoff(store, record, arm, signal)
+          if (result) return { kind, sourceKind, comparisonId: record.id, arm, sessionId, createdAt,
+            played: result.played, sampleLanguage: result.language, decision: result.decision, originalAttached: result.originalAttached }
+          return
+        }
         if (kind === 'delivery-review' && await workspaceMaterialState(record, signal) !== 'verified') return
         const result = kind === 'hero' ? await readHeroTrialArm(record, arm, signal)
           : await readComparisonArm(store, record, arm, signal)
@@ -5148,11 +5163,12 @@ export async function apply(ctx) {
     }
     const items = []
     const pageSize = 12
+    const scanLimit = completed ? Math.min(candidates.length, 48) : candidates.length
     let inspected = 0
-    while (inspected < candidates.length && items.length < pageSize) {
+    while (inspected < scanLimit && items.length < pageSize) {
       signal?.throwIfAborted()
-      const batch = candidates.slice(inspected, inspected + Math.min(6, pageSize - items.length))
-      const results = await Promise.all(batch.map(pendingArm))
+      const batch = candidates.slice(inspected, inspected + Math.min(6, pageSize - items.length, scanLimit - inspected))
+      const results = await Promise.all(batch.map(readRun))
       items.push(...results.filter(Boolean))
       inspected += batch.length
     }
@@ -7304,7 +7320,8 @@ export async function apply(ctx) {
             : isLighthouseReviewChallenge(selection.code) ? await openReviewChallenge(selection, request.signal)
             : await openLighthouseChallenge(selection, english, request.signal)
         }
-        else if (selection?.action === 'lighthouse-pending-runs') value = await pendingLighthouseRuns(selection, request.signal)
+        else if (selection?.action === 'lighthouse-pending-runs') value = await lighthouseRunList(selection, request.signal)
+        else if (selection?.action === 'lighthouse-handoff-history') value = await lighthouseRunList(selection, request.signal, true)
         else if (selection?.action === 'lighthouse-comparison') value = await readComparison(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'lighthouse-comparison-open') value = await openComparisonArm(lighthouseComparisons, selection, english, request.signal)
         else if (selection?.action === 'workspace-comparison') value = await readComparison(workspaceComparisons, selection, english, request.signal)

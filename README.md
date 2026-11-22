@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.182.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.183.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -139,6 +139,8 @@ After a verified review, choose **Try direct delivery** in the original conversa
 You can also choose **Invite a friend to the same handoff** after the round is verified. Your friend pastes the invitation into **Join a Lighthouse challenge** and checks the code. The verified invitation shows the shared loadout and the extra Delivery Review gear before they pick a route. **Edit invitation** reopens the pasted text for a new check. Both use the same public card and task language. The invitation contains the public sample and your route.
 
 After your handoff is verified, choose **Copy report for a friend** in the practice conversation and send them the code. When they send theirs, choose **Compare a friend's report** and paste it to compare routes, recorded review decisions, and whether each handoff included the original card. Your files and session stay in your Profile.
+
+If the reply arrives later, choose **Find my handoff reports** in the lobby. Pick your round by route, choice, attachment and time. You can compare the reply from that card or reopen the exact practice conversation. Pasting a report code into **Join a Lighthouse challenge** also leads to your handoff reports and keeps the code ready to compare.
 
 If you delivered directly, choose **Add Delivery Review and replay** after checking a friend's report. The second draft keeps the same task and original reading and delivery tools. After you manually send it and make a verified choice, **Compare my two handoffs** shows both of your results and opens either original conversation.
 
