@@ -1914,14 +1914,13 @@ export async function apply(ctx) {
       throw new Error('请先核对走直接交付路线的好友战报。')
     }
     const tryReview = route === 'review' && local.played === 'direct'
-    const source = { kind, comparisonId, arm }
-    const presetId = tryReview ? (await checkLighthouseReviewSwap(source, route, signal)).candidate.id
+    const reviewReplaySource = tryDirect || tryReview ? { kind, comparisonId, arm } : undefined
+    const presetId = reviewReplaySource ? (await checkLighthouseReviewSwap(reviewReplaySource, route, signal)).candidate.id
       : (await reviewChallengeLoadouts({ sampleLanguage: friend.language }, ['replay'], signal)).routePresets?.[route]
     if (!presetId) throw new Error(reviewRoutesUnavailable)
     const namespace = tryDirect ? 'lighthouse-review-report-try-direct'
       : tryReview ? 'lighthouse-review-report-try-review' : 'lighthouse-review-report-replay'
     const id = createHash('sha256').update(JSON.stringify([namespace, kind, comparisonId, arm, code, launchId])).digest('hex').slice(0, 32)
-    const reviewReplaySource = tryDirect || tryReview ? source : undefined
     return openLighthouseLesson({ launchId: id, reviewChallengeArm: route, reviewReplaySource }, friend.language === 'en',
       signal, lighthouseLesson, presetId)
   }

@@ -2066,6 +2066,19 @@ window.__ModuleLoader__.load({
         setHeroOpenError('')
       }
 
+      function gearRematch(route) {
+        const addReview = route === 'review'
+        return h('button', { type: 'button', className: 'moba-roster-open moba-handoff-gear-change',
+          disabled: openingRound, 'aria-busy': openingRound || undefined,
+          'data-try-review-from-direct': addReview || undefined, 'data-try-friend-direct': !addReview || undefined,
+          onClick: () => openRepeat(route) },
+        h(ItemArt, { item: { id: 'review' } }),
+        h('span', null,
+          h('strong', null, t(addReview ? '加装交付前复核' : '卸下交付前复核')),
+          h('small', null, t(addReview ? '确认交付或退回修改' : '用同一任务试直接交付'))),
+        h(Glyph, { kind: addReview ? 'plus' : 'swap', size: 14 }))
+      }
+
       function renderSide(side, title, action, readingTool) {
         if (reviewKind) {
           const route = fieldPlaybooks.find(item => item.id === side.played)
@@ -2113,8 +2126,7 @@ window.__ModuleLoader__.load({
         comparison?.played === 'direct' && comparison.originalAttached === true
       const tryReviewFromDirect = reviewKind && result?.local.played === 'direct'
       const friendAction = tryFriendDirect ? h('div', { className: 'moba-detail-actions' },
-        h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, 'data-try-friend-direct': true,
-          onClick: () => openRepeat('direct') }, t('试试好友的直接交付'))) : tryHero && h(Fragment, null,
+        gearRematch('direct')) : tryHero && h(Fragment, null,
         h('button', { type: 'button', ref: tryHeroButton, className: 'moba-roster-open', disabled: openingRound,
           onClick: () => openRound(signal => onTryHero(tryHero.id, signal), setHeroOpenError) }, t(tryHero.trySameTask)),
         openingRound && h('p', { role: 'status', className: 'moba-lighthouse-note' }, t('正在打开试玩会话…')),
@@ -2153,11 +2165,9 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: copy },
                   t(evidence ? '复制我的取舍码' : '复制我的战报码')),
                 comparison && (evidence || reviewKind) && onOpenRepeat &&
-                h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound,
-                  'data-try-review-from-direct': tryReviewFromDirect || undefined, onClick: () => openRepeat() },
-                  tryReviewFromDirect && h(Glyph, { kind: 'plus', size: 14 }),
-                  t(openingRound ? '正在打开同题会话…' : tryReviewFromDirect ? '加装交付前复核再试一局'
-                    : reviewKind ? '再试一次交付前复核' : '用同一出装再试一局'))),
+                (tryReviewFromDirect ? gearRematch('review')
+                  : h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: () => openRepeat() },
+                    t(openingRound ? '正在打开同题会话…' : reviewKind ? '再试一次交付前复核' : '用同一出装再试一局')))),
               replyCodeVisible && result.code && h('label', null, t(evidence ? '我的取舍码' : '我的战报码'),
                 h('textarea', { ref: replyField, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                   spellCheck: false, onFocus: event => event.currentTarget.select() })),
@@ -12163,6 +12173,12 @@ window.__ModuleLoader__.load({
       .moba-handoff-report-side header span:not(.moba-starter-hero) { display: block; color: var(--muted); font-weight: 500; }
       .moba-handoff-report-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; margin: 0; }
       .moba-handoff-report-facts dd { margin: 0; overflow-wrap: anywhere; }
+      .moba-lighthouse-comparison .moba-handoff-gear-change { max-width: 100%; min-height: 46px; gap: 7px; text-align: start;
+        border-color: #a7834c; background: #312a25; }
+      .moba-handoff-gear-change .moba-item-art { flex: none; width: 28px; }
+      .moba-handoff-gear-change svg { flex: none; color: var(--gold); }
+      .moba-handoff-gear-change strong, .moba-handoff-gear-change small { display: block; line-height: 1.25; }
+      .moba-handoff-gear-change small { margin-top: 2px; color: #e5d1a6; white-space: normal; }
       .moba-handoff-report-side[data-met="true"] dd:last-child { color: #afddc0; }
       .moba-handoff-report-side[data-met="false"] dd:last-child { color: #efc3a4; }
       .moba-lighthouse-comparison > .moba-market-actions { position: sticky; inset-block-end: 0; background: #171c27; padding-block: 4px; }
