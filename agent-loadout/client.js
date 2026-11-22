@@ -1344,13 +1344,14 @@ window.__ModuleLoader__.load({
       }
 
       const error = openError || state?.error || preview?.reason
-      return h(InstallDialog, { title: t('发起灯塔同题挑战'), className: 'moba-starter-dialog',
+      return h(InstallDialog, { title: t('灯塔交接试玩'), className: 'moba-starter-dialog',
         busy: opening, onCancel, initialFocus: '[data-review-start-intro]',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onCancel() }) },
         h('p', { className: 'moba-lighthouse-note', tabIndex: -1, 'data-review-start-intro': true },
-          t('先打一局灯塔交接。完成后，把同一道题发给好友。')),
-        preview && h(LighthouseReviewRoutes, { preview, sampleLanguage, disabled: !preview.token || opening || Boolean(openError), onChoose: start }),
-        !state && h('p', { role: 'status' }, t('正在核对挑战要求…')),
+          t('选一种打法单人开局。完成后也可以邀请好友试同一道题。')),
+        preview && h(LighthouseReviewRoutes, { preview, sampleLanguage, practice: true,
+          disabled: !preview.token || opening || Boolean(openError), onChoose: start }),
+        !state && h('p', { role: 'status' }, t('正在核对试玩出装…')),
         error && h('p', { className: 'moba-alert', role: 'alert' }, t(error)),
         preview?.token && h('p', { className: 'moba-starter-note', role: opening ? 'status' : undefined },
           t(opening ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。')),
@@ -1577,7 +1578,7 @@ window.__ModuleLoader__.load({
       { id: 'direct', icon: 'report', name: '直接交付', gear: '交付物预览', note: '把生成的文件放进对话，打开即可查看。' },
       { id: 'review', icon: 'lock', name: '复核后交付', gear: '交付物预览 + 交付前复核', note: '有明确的交接事项时，提示助手先用 DSH 确认卡请你确认交付或退回修改。' },
     ]
-    function LighthouseReviewRoutes({ preview, sampleLanguage, disabled, onChoose }) {
+    function LighthouseReviewRoutes({ preview, sampleLanguage, disabled, onChoose, practice }) {
       const descriptions = {
         direct: '准备好就把补给卡原件附到对话。',
         review: '交付前由你确认，或者退回修改。',
@@ -1596,9 +1597,9 @@ window.__ModuleLoader__.load({
                 t(available ? descriptions[route.id] : '本机暂时无法装配这套出装。'))))
           })),
         h('details', { className: 'moba-minimal-replay-detail' },
-          h('summary', null, t('查看两边共用的任务')),
-          h(InstallFacts, { facts: [[t('挑战样例'), t('北岸灯塔补给卡')], [t('任务语言'), t(sampleLanguage)]] }),
-          h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
+          h('summary', null, t(practice ? '查看试玩任务' : '查看两边共用的任务')),
+          h(InstallFacts, { facts: [[t(practice ? '试玩样例' : '挑战样例'), t('北岸灯塔补给卡')], [t('任务语言'), t(sampleLanguage)]] }),
+          h('label', { className: 'moba-lighthouse-task' }, t(practice ? '试玩任务' : '两边共用的任务'),
             h('textarea', { readOnly: true, rows: 4, value: preview.task }))))
     }
     const comparisonKinds = {
@@ -8134,7 +8135,7 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'moba-roster-open moba-review-start-button', disabled: pending,
                 ref: reviewStartButton, 'aria-haspopup': 'dialog', 'data-review-challenge-start': true,
                 onClick: () => setReviewStartOpen(true) },
-              h(Glyph, { kind: 'team', size: 17 }), h('span', null, t('打一局，邀请好友'))),
+              h(Glyph, { kind: 'flag', size: 17 }), h('span', null, t('试玩灯塔交接'))),
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: challengeButton, 'aria-haspopup': 'dialog', onClick: () => setChallengeTrigger(challengeButton) },
               h(Glyph, { kind: 'arrow', size: 17 }), h('span', null, t('加入灯塔挑战')))),
