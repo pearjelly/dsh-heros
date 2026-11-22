@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5，以及 0.2.2-rc.1 至 0.2.2-rc.5。
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.135.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.136.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -111,7 +111,7 @@ dsh web
 
 ## 把练习出装用到自己的任务
 
-1. 在灯塔换装练习的结果里选一局已核验的出装，可以是直接交付的原局，也可以是装了交付前复核的复赛。从练习或 **实战记录** 点 **用这套出装做自己的任务**，无需先保存为方案。
+1. 在已核验的灯塔复赛打开 **两局实测结果**，从直接交付或复核后交付的一侧点 **用这套出装**。已核验的退回修改局也可以带走复核出装。也可以从 **实战记录** 打开出装，无需先保存为方案。
 2. 选一个已有的个人工作区，点 **浏览文件** 选择自己的材料，再填写 **新任务说明**。点 **核对材料和出装** 检查英雄、装备来源和待发任务，然后点 **确认并打开会话**。
 3. 在 DSH 输入框里检查任务并手动发送。使用交付前复核时，在新会话的提问卡上确认交付或退回修改。完成交付后，可打开本次任务的实际附件。
 

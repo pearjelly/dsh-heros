@@ -4504,8 +4504,8 @@ export async function apply(ctx) {
     const review = publicReview && arms.every(verifiedEvidenceArm) && arms[0].materialDelivered &&
       observedHandoffOutcome(record.material, arms, ['direct', 'review'])
     const publicReviewOutcome = review && { ...review, arms: review.arms.map((item, index) => {
-      const { sessionId, deliverables } = arms[index]
-      return { ...item, sessionId, deliverables }
+      const { sessionId, deliverables, lessonTaskSource } = arms[index]
+      return { ...item, sessionId, deliverables, ...(lessonTaskSource && { lessonTaskSource }) }
     }) }
     const publicTaskSources = evidenceReplay?.publicEvidenceReplay && previous?.original && {
       baseline: { kind: 'workspace', comparisonId: previous.original.id, arm: 'evidence' },

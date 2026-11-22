@@ -2302,7 +2302,7 @@ window.__ModuleLoader__.load({
         h(ObservedChoiceSummary, { choices: outcome.actualChoices ?? empty }))
     }
 
-    function HandoffOutcomeSummary({ outcome, onPreserve, onVisit, busy }) {
+    function HandoffOutcomeSummary({ outcome, onPreserve, onVisit, onLessonTask, busy }) {
       const heading = useId()
       return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading },
         h('h3', { id: heading, tabIndex: onVisit ? -1 : undefined, 'data-public-review-outcome': Boolean(onVisit) || undefined },
@@ -2310,8 +2310,9 @@ window.__ModuleLoader__.load({
         h('div', { className: 'moba-lighthouse-arms' }, outcome.arms.map(arm => {
           const style = t(arm.style === 'review' ? '复核后交付' : '直接交付')
           const files = arm.deliverables ?? empty
+          const useLabel = t('用这套出装')
           return h('section', { key: arm.id, className: 'moba-lighthouse-arm', 'aria-label': style },
-            h('div', null, h('h4', null, style), h('small', { className: 'moba-lighthouse-arm-hero' },
+            h('div', null, h('h4', null, style), !onVisit && h('small', { className: 'moba-lighthouse-arm-hero' },
               t(arm.id === 'baseline' ? '原局' : '换装复赛'))),
             h(ObservedChoiceSummary, { choices: arm.choices }),
             onVisit && files.length > 0
@@ -2320,8 +2321,12 @@ window.__ModuleLoader__.load({
               : h('p', { className: 'moba-lighthouse-note' }, arm.materialDelivered
                 ? h(Fragment, null, t('所选材料已交付') + ' · ', h('strong', null, outcome.material))
                 : arm.deliveredCount > 0 ? t('其他交付文件') + ' · ' + arm.deliveredCount : t('本局没有交付文件。')),
-            onVisit && h('footer', null, h('button', { type: 'button', className: 'moba-text', disabled: busy,
-              'aria-label': t('查看原会话') + ' · ' + style, onClick: () => onVisit(arm.sessionId) }, t('查看原会话'))),
+            onVisit && h('footer', null,
+              h('button', { type: 'button', className: 'moba-text', disabled: busy,
+                'aria-label': t('查看原会话') + ' · ' + style, onClick: () => onVisit(arm.sessionId) }, t('查看原会话')),
+              arm.lessonTaskSource && onLessonTask && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
+                'aria-label': useLabel + ' · ' + style, 'aria-haspopup': 'dialog',
+                'data-lesson-task-arm': arm.id, onClick: () => onLessonTask(arm) }, useLabel)),
             arm.canPreserve && onPreserve && h('footer', null,
               h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, 'data-handoff-preserve': arm.id,
                 'aria-label': t('保留这套出装') + ' · ' + style, onClick: () => onPreserve(arm.id) }, t('保留这套出装'))))
@@ -2838,11 +2843,11 @@ window.__ModuleLoader__.load({
       const publicEvidenceReplay = kind === 'rematch' && (value?.publicEvidenceReplay ?? publicEvidenceReplayHint) === true
       const evidenceReplay = publicEvidenceReplay || kind === 'rematch' && (value?.evidenceReplay ?? evidenceReplayHint)
       const handoff = kind === 'rematch' && !evidenceReplay ? value?.handoffOutcome : undefined
-      const publicReviewOutcome = kind === 'rematch' && value?.publicReviewOutcome
+      const publicReviewOutcome = kind === 'rematch' ? value?.publicReviewOutcome : undefined
       const evidenceOutcome = evidenceReplay && !testedSourceArm ? value?.evidenceOutcome : undefined
       const evidenceSummary = evidenceOutcome && h(EvidenceOutcomeSummary, { outcome: evidenceOutcome, publicReplay: publicEvidenceReplay,
         busy: Boolean(launch), onVisit, onLessonTask: publicEvidenceReplay ? arm => setLessonTask({ id: arm.id,
-          lessonTaskSource: arm.lessonTaskSource, publicReplay: true }) : undefined,
+          lessonTaskSource: arm.lessonTaskSource, fromSummary: true }) : undefined,
         onPreserve: publicEvidenceReplay ? undefined : arm => setReuse({ id: value.id, arm, evidence: true }) })
       const retestOutcome = kind === 'plans' ? value?.evidenceRetestOutcome : undefined
       const task = value?.task
@@ -2953,7 +2958,7 @@ window.__ModuleLoader__.load({
         lesson, evidenceReplayHint: rematch.publicEvidenceReplay, publicEvidenceReplayHint: rematch.publicEvidenceReplay,
         onBack: () => { returnFocus.current = `[data-rematch-arm="${rematch.arm}"]`; setRematch(null) }, onVisit, onClose })
       if (lessonTask) return h(LessonLoadoutTask, { source: lessonTask.lessonTaskSource, workspaces, initialWorkspaceId, request, onVisit,
-        backLabel: lessonTask.publicReplay ? '返回两局实测结果' : undefined,
+        backLabel: lessonTask.fromSummary ? '返回两局实测结果' : undefined,
         onBack: () => { returnFocus.current = `[data-lesson-task-arm="${lessonTask.id}"], .moba-lighthouse-close`; setLessonTask(null) } })
       if (lessonLaunchOpen) return h(LighthouseLessonLaunch, { request, lesson: lessonMarker, onOpen: onVisit, onCancel: () => {
         returnFocus.current = '.moba-new-lesson'
@@ -2996,7 +3001,8 @@ window.__ModuleLoader__.load({
             ...(evidence && scenario ? [['证据场景', t(scenario.name)]] : []),
           ].map(([label, text]) => [t(label), text]) }),
           kind === 'rematch' && h(RematchChangeFacts, { change: value.change }),
-          publicReviewOutcome && h(HandoffOutcomeSummary, { outcome: publicReviewOutcome, onVisit, busy: Boolean(launch) }),
+          publicReviewOutcome && h(HandoffOutcomeSummary, { outcome: publicReviewOutcome, onVisit, busy: Boolean(launch),
+            onLessonTask: arm => setLessonTask({ id: arm.id, lessonTaskSource: arm.lessonTaskSource, fromSummary: true }) }),
           previous && h(PreviousComparisonLink, { reference: previous, onOpen: onPrevious, disabled: Boolean(launch) }),
           personal && value.materialState === 'verified' && h('p', { className: 'moba-lighthouse-note' }, t('材料与本组记录的版本一致。')),
           materialWarning && h('p', { className: 'moba-alert', role: 'status' }, t(materialWarning), ' ',
@@ -3027,7 +3033,8 @@ window.__ModuleLoader__.load({
               onStart: directLesson || evidence || kind === 'rematch' ? undefined : start, onVisit, putTask,
               onReuse: onUse && !publicEvidenceReplay && value.id && !evidenceOutcome?.arms.some(item => item.id === arm.id && item.canPreserve)
                 ? arm => setReuse({ id: value.id, arm }) : undefined,
-              onLessonTask: practice && !publicEvidenceReplay ? setLessonTask : undefined,
+              onLessonTask: practice && !publicEvidenceReplay && !publicReviewOutcome?.arms.some(item => item.id === arm.id && item.lessonTaskSource)
+                ? setLessonTask : undefined,
               onLighthouseEvidenceReplay: kind === 'workspace' && evidence && scenario?.id === 'gap' && value.id &&
                 arm.id === evidenceArm.id && arm.status === 'complete' && arm.canReplayLighthouseEvidence === true
                 ? () => setRematch({ id: value.id, arm: arm.id, sessionId: arm.sessionId, publicEvidenceReplay: true }) : undefined,

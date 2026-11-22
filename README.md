@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.135.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.136.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -111,7 +111,7 @@ Plans saved from a verified evidence comparison in v0.95 or later link to the ru
 
 ## Use the lesson loadout on your own task
 
-1. Choose a verified run from the Lighthouse lesson. You can use the original direct delivery loadout or a rematch with Delivery Review. Choose **Use this loadout on my task** from the lesson or **Run history**. Saving a plan is optional.
+1. Open **Observed handoff results** in a verified Lighthouse rematch. Choose **Use this loadout** on the direct delivery or Delivery Review side. A verified request to revise can also provide the review loadout. You can reach loadouts from **Run history**. Saving a plan is optional.
 2. Choose one of your existing workspaces, use **Browse files** to pick your own material, and fill in **New task brief**. Choose **Review file and loadout** to check the preset, equipment sources, and prepared task, then choose **Confirm and open session**.
 3. Check the task in the DSH input box and send it yourself. With Delivery Review, answer the new session's question card to confirm delivery or request changes, then open any file actually delivered for this task.
 

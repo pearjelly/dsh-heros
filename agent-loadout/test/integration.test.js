@@ -2305,6 +2305,10 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
       assert.deepEqual(outcome.arms.map(({ id, style, choices, sessionId }) => [id, style, choices, sessionId]), [
         ['baseline', 'direct', [], baseline.sessionId], ['rematch', 'review', [answer], attempt.sessionId],
       ])
+      assert.deepEqual(outcome.arms.map(side => side.lessonTaskSource), [
+        { kind: 'workspace', comparisonId: baseline.id, arm: 'direct' },
+        { kind: 'rematch', comparisonId: attempt.id, arm: 'rematch' },
+      ])
       assert.equal(outcome.arms[0].materialDelivered, true)
       assert.equal(outcome.arms[0].deliveredCount, 1)
       assert.deepEqual(outcome.arms[0].deliverables, [{ name: material, turn: 1, seq: directFile.seq, index: 0 }])
@@ -3827,7 +3831,10 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     const reviewProof = await reviewView()
     assert.deepEqual(armOf(reviewProof, 'rematch').lessonTaskSource, reviewSource)
     assert.deepEqual(armOf(reviewProof, 'rematch').entries[0].choices, ['Revise draft'])
-    const baseOptions = await options(reviewSource)
+    const [directCarry, reviewCarry] = reviewProof.publicReviewOutcome.arms.map(side => side.lessonTaskSource)
+    assert.deepEqual(directCarry, root)
+    assert.deepEqual(reviewCarry, reviewSource)
+    const baseOptions = await options(reviewCarry)
     assert.equal(baseOptions.source.sessionId, review.sessionId)
     assert.equal(baseOptions.source.change.added.id, 'review')
     assert.ok(!baseOptions.workspaceIds.includes(directNative.workspaceId))
@@ -3846,7 +3853,7 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     const starter = await invoke('growth-starter-open', { route: 'recon', launchId: 'c'.repeat(32) })
     const comparison = await invoke('lighthouse-comparison-open', { arm: 'delivery', launchId: 'd'.repeat(32) })
     const legacyPractice = await Promise.all([history(starter.sessionId), history(comparison.sessionId)])
-    const personalOptions = await options(reviewSource)
+    const personalOptions = await options(reviewCarry)
     assert.deepEqual(new Set(personalOptions.workspaceIds),
       new Set([...baseOptions.workspaceIds, user.workspaceId, ancestor.workspaceId, near.workspaceId]))
     for (const notPersonal of [directNative, descendant, ...legacyPractice]) assert.ok(!personalOptions.workspaceIds.includes(notPersonal.workspaceId))
@@ -3863,7 +3870,7 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     await list({ workspaceId: directNative.workspaceId }, 422)
     await list({ workspaceId: ancestor.workspaceId, directory: practiceFolder }, 422)
     await list({ directory: 'linked-folder' }, 422)
-    const fields = { ...reviewSource, workspaceId: user.workspaceId, material: found.entries[0].path, task }
+    const fields = { ...reviewCarry, workspaceId: user.workspaceId, material: found.entries[0].path, task }
     const preview = (override = {}, status) => invoke('lesson-task-preview', { ...fields, ...override }, status)
     for (const value of [join(personal, material), '../escape.md', 'linked.md', 'linked-folder/' + file]) {
       await preview({ material: value }, 422)
@@ -3987,11 +3994,19 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     const baseReview = await invoke('comparison-loadout-preview', { kind: 'rematch', comparisonId: replay.id, arm: 'baseline' })
     assert.deepEqual(new Set(baseReview.draft.equipmentIds), new Set(['present', 'review']))
 
-    const directFields = { ...root, workspaceId: user.workspaceId, material, task }
+    const directFields = { ...directCarry, workspaceId: user.workspaceId, material, task }
     const directLoadout = await invoke('lesson-task-preview', directFields)
+    assert.equal(directLoadout.source.sessionId, direct.sessionId)
+    assert.deepEqual(directLoadout.gear.map(item => item.id), ['present'])
     const directPersonal = await invoke('lesson-task-open', { ...directFields, token: directLoadout.token, launchId: '4'.repeat(32) })
+    const directDraft = await history(directPersonal.sessionId)
+    assert.equal(directDraft.presetId, directNative.presetId)
+    assert.equal(directDraft.inherited, 0)
+    assert.ok(!directDraft.events.some(item => item.type === 'turn/start' || item.type === 'user/message'))
     await send(directPersonal)
     const directPlayed = await history(directPersonal.sessionId)
+    assert.deepEqual(directPlayed.events.filter(item => item.type === 'tool/call').map(item => item.data.name), ['present'])
+    assert.equal(directPlayed.events.find(item => item.type === 'deliverables/presented').data.files[0].path, join(await realpath(personal), material))
     const nextMove = (await result(directPersonal.sessionId)).rematchSource
     const eligible = await invoke('rematch-comparison-options', nextMove)
     assert.deepEqual(eligible.personalSuggestedChange, { addId: 'review' })
