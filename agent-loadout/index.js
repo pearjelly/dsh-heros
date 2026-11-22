@@ -1781,6 +1781,7 @@ export async function apply(ctx) {
       code: encodeLighthouseHeroReport(language, need, arm, local.originalAttached)
     }
     if (friend) {
+      result.local.readingTool = local.readingTool
       result.friend = { arm: friend.arm, originalAttached: friend.originalAttached,
         meetsNeed: need === 'summary' || friend.originalAttached }
     }

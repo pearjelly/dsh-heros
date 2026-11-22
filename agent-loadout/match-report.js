@@ -538,12 +538,13 @@ export function observedHeroHandoff(events, turn, cwd, material, contents, bindi
     name: basename(material), seq: original.seq,
     index: original.data.files.findIndex(file => typeof file.path === 'string' && resolve(cwd, file.path) === resolve(cwd, material)),
   }
-  const result = { materialRead: Boolean(read), originalAttached: Boolean(original), originalFile, ...(summary && { summary }) }
-  if (!bindingArm || !read) return result
-  const readCall = calls.get(read.data.message.toolCallId)
+  const readCall = read && calls.get(read.data.message.toolCallId)
+  const result = { materialRead: Boolean(read), originalAttached: Boolean(original), originalFile,
+    ...(readCall && { readingTool: readCall.data.name }), ...(summary && { summary }) }
+  if (!bindingArm || !readCall) return result
   const presentCall = original && calls.get(original.data.callId)
-  const stockCalls = bindingArm === 'standard' && readCall?.data.name === 'read' && presentCall ? [readCall, presentCall]
-    : bindingArm === 'minimal' && readCall?.data.name === 'bash' && !original ? [readCall] : undefined
+  const stockCalls = bindingArm === 'standard' && readCall.data.name === 'read' && presentCall ? [readCall, presentCall]
+    : bindingArm === 'minimal' && readCall.data.name === 'bash' && !original ? [readCall] : undefined
   if (!stockCalls) return result
   // Tool attribution is written as a separate record without a turn field.
   const bindings = stockCalls.map(call => recordedHandoffTool(events, call))

@@ -1870,19 +1870,21 @@ window.__ModuleLoader__.load({
         setHeroOpenError('')
       }
 
-      function renderSide(side, title, action) {
+      function renderSide(side, title, action, readingTool) {
         if (evidence) return h('article', { className: 'moba-lighthouse-arm moba-handoff-report-side' },
           h('header', null, h(ItemArt, { item: { id: 'evidence' } }), h('h4', null, t(title))),
           h('dl', { className: 'moba-handoff-report-facts' },
             h('dt', null, t('提问卡选择')), h('dd', null, t(evidenceOpeningChoices[side.choice])),
             h('dt', null, t('交付文件')), h('dd', null, t(side.delivered ? '有交付记录' : '没有交付记录'))))
         const hero = side.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === side.arm)
+        const readingLabel = readingTool === 'read' ? '原生文件读取' : readingTool === 'bash' ? '终端 Bash' : undefined
         return h('article', { className: 'moba-lighthouse-arm moba-handoff-report-side', 'data-met': side.meetsNeed },
           h('header', null, h(HeroArt, { id: side.arm === minimalDeliveryReplayArm.id ? 'minimal' : side.arm, art: hero.art,
             className: 'moba-starter-hero' }), h('h4', null, t(title), h('span', null, t(hero.name)))),
           h('dl', { className: 'moba-handoff-report-facts' },
             h('dt', null, t('补给卡原件')), h('dd', null, t(side.originalAttached ? '已附上' : '未附上')),
-            h('dt', null, t('接班需求')), h('dd', null, t(side.meetsNeed ? '符合' : '未满足'))),
+            h('dt', null, t('接班需求')), h('dd', null, t(side.meetsNeed ? '符合' : '未满足')),
+            readingLabel && h(Fragment, null, h('dt', null, t('读取工具')), h('dd', null, t(readingLabel)))),
           action)
       }
 
@@ -1939,7 +1941,8 @@ window.__ModuleLoader__.load({
                 h('textarea', { ref: replyField, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                   spellCheck: false, onFocus: event => event.currentTarget.select() })),
               h('div', { className: 'moba-lighthouse-arms moba-handoff-report-grid' },
-                renderSide(result.local, evidence ? '本机核对的取舍' : '本机核对的交接', localAction),
+                renderSide(result.local, evidence ? '本机核对的取舍' : '本机核对的交接', localAction,
+                  comparison ? result.local.readingTool : undefined),
                 comparison && renderSide(comparison, evidence ? '好友分享的取舍' : '好友分享的交接', friendAction)),
               comparison && h('p', { className: 'moba-lighthouse-note' }, t('可以打开自己的原会话核对细节。好友的交接来自对方提供的战报码。'))),
             notice && h('p', { role: 'status', className: 'moba-empty' }, notice)),

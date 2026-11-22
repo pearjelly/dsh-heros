@@ -1704,9 +1704,9 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(friendHandoff, { need: 'original', local: minimalOutcome, code: reportCode(friendFields) })
     assert.deepEqual(JSON.parse(Buffer.from(friendHandoff.code.slice('DSHR1.'.length), 'base64url').toString('utf8')), friendFields)
     assert.deepEqual(await compareHandoff(trial.id, 'standard', friendHandoff.code),
-      { need: 'original', local: standardOutcome, friend: minimalOutcome, code: senderHandoff.code })
+      { need: 'original', local: { ...standardOutcome, readingTool: 'read' }, friend: minimalOutcome, code: senderHandoff.code })
     assert.deepEqual(await recipientHandoff('hero-trial-handoff-compare', 'minimal', { code: senderHandoff.code }),
-      { need: 'original', local: minimalOutcome, friend: standardOutcome, code: friendHandoff.code })
+      { need: 'original', local: { ...minimalOutcome, readingTool: 'bash' }, friend: standardOutcome, code: friendHandoff.code })
     for (const changes of [{ sample: 'lighthouse-hero-handoff-1-en' }, { need: 'summary' }, { arm: 'ptc' },
       { originalAttached: 'yes' }, { status: 'complete' }, { sessionId: joined.sessionId }]) {
       await compareHandoff(trial.id, 'standard', reportCode({ ...friendFields, ...changes }), 422)
@@ -1811,8 +1811,10 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(replayMember.verifiedDeliveryReplay, true)
     assert.equal(replayMember.canCopyHeroReport, true)
     const equippedOutcome = { arm: 'minimal-present', originalAttached: true, meetsNeed: true }
-    assert.deepEqual(await shareHandoff(trial.id, 'minimal-present'), { need: 'original', local: equippedOutcome,
-      code: reportCode({ ...standardFields, arm: 'minimal-present' }) })
+    const equippedCode = reportCode({ ...standardFields, arm: 'minimal-present' })
+    assert.deepEqual(await shareHandoff(trial.id, 'minimal-present'), { need: 'original', local: equippedOutcome, code: equippedCode })
+    assert.deepEqual(await compareHandoff(trial.id, 'minimal-present', senderHandoff.code),
+      { need: 'original', local: { ...equippedOutcome, readingTool: 'bash' }, friend: standardOutcome, code: equippedCode })
     await open(trial.id, 'minimal-present', 422)
 
     const ownWorkspace = join(directory, 'personal-ledger')
