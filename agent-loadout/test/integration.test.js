@@ -2744,10 +2744,23 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.ok(noMessages(triedHistory))
     assert.deepEqual(await membership(triedHistory.workspaceId), [triedDirect.sessionId])
     assert.deepEqual(await reviewDrafts(), [['delivery-review', triedDirect.sessionId, 'direct', 'zh']])
+    assert.equal((await read({ comparisonId: triedDirect.id })).ownReviewPair, undefined)
+    assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, undefined)
     await send(triedDirect)
-    const triedResult = (await read({ comparisonId: triedDirect.id })).arms[0]
+    const triedBoard = await read({ comparisonId: triedDirect.id })
+    const triedResult = triedBoard.arms[0]
     assert.equal(triedResult.materialDelivered, true)
     assert.deepEqual(triedResult.entries.map(item => item.name), ['present'])
+    assert.equal(triedBoard.ownReviewPair.material, material)
+    assert.deepEqual(triedBoard.ownReviewPair.arms.map(({ id, sessionId, choices, materialDelivered }) =>
+      [id, sessionId, choices, materialDelivered]), [
+      ['review', friend.sessionId, ['Revise draft'], false],
+      ['direct', triedDirect.sessionId, [], true],
+    ])
+    assert.deepEqual(triedBoard.ownReviewPair.arms[0].deliverables, [])
+    assert.deepEqual(triedBoard.ownReviewPair.arms[1].deliverables, triedResult.deliverables)
+    assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, true)
+    assert.equal((await read({ comparisonId: friendDirect.id })).ownReviewPair, undefined)
     assert.deepEqual(await invoke('lighthouse-review-report', {
       ...directSource, comparisonId: triedDirect.id,
     }), directReport)
@@ -2757,6 +2770,8 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     await shareReview('workspace', friend.id, 'review', 422)
     await compareReview(reviewSource, directReport.code, 422)
     await tryDirectReport(directReport.code, reviewSource, 422)
+    assert.equal((await read({ comparisonId: triedDirect.id })).ownReviewPair, undefined)
+    assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, undefined)
     const savedDraft = await friendOpen('review', '5'.repeat(32))
     const staleDraft = await friendOpen('direct', '6'.repeat(32))
     const staleReplay = await history(staleDraft.sessionId)

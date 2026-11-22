@@ -2585,12 +2585,12 @@ window.__ModuleLoader__.load({
         h(ObservedChoiceSummary, { choices: outcome.actualChoices ?? empty }))
     }
 
-    function HandoffOutcomeSummary({ outcome, onPreserve, onVisit, onLessonTask, busy, armory }) {
+    function HandoffOutcomeSummary({ outcome, onPreserve, onVisit, onLessonTask, busy, armory, ownReview }) {
       const heading = useId()
       return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading, 'data-armory-handoff': armory || undefined },
-        h('h3', { id: heading, tabIndex: onVisit ? -1 : undefined, 'data-public-review-outcome': onVisit && !armory ? true : undefined,
-          'data-armory-handoff-outcome': armory || undefined },
-          t('两局实测结果')),
+        h('h3', { id: heading, tabIndex: onVisit ? -1 : undefined, 'data-public-review-outcome': onVisit && !armory && !ownReview ? true : undefined,
+          'data-armory-handoff-outcome': armory || undefined, 'data-own-review-pair': ownReview || undefined },
+          t(ownReview ? '我的两局交接' : '两局实测结果')),
         h('div', { className: 'moba-lighthouse-arms' }, outcome.arms.map(arm => {
           const style = t(arm.style === 'review' ? '复核后交付' : '直接交付')
           const files = arm.deliverables ?? empty
@@ -3148,6 +3148,7 @@ window.__ModuleLoader__.load({
       const evidenceReplay = publicEvidenceReplay || kind === 'rematch' && (value?.evidenceReplay ?? evidenceReplayHint)
       const handoff = kind === 'rematch' && !evidenceReplay ? value?.handoffOutcome : undefined
       const publicReviewOutcome = kind === 'rematch' ? value?.publicReviewOutcome : undefined
+      const ownReviewPair = kind === 'workspace' ? value?.ownReviewPair : undefined
       const armoryHandoffOutcome = kind === 'rematch' ? value?.armoryHandoffOutcome : undefined
       const canRepeatLighthouseReview = kind === 'rematch' && value?.canRepeatLighthouseReview === true
       const reviewChoiceComparison = kind === 'rematch' && value?.reviewChoiceComparison
@@ -3172,6 +3173,7 @@ window.__ModuleLoader__.load({
       const previous = kind === 'rematch' && canViewPrevious(value?.previous) ? value.previous : null
       const retestSource = retestOutcome && canViewPrevious(retestOutcome.source) ? retestOutcome.source : undefined
       const focusSelector = focusPrevious && (previous || retestSource) ? '[data-comparison-previous]'
+        : ownReviewPair ? '[data-own-review-pair]'
         : armoryHandoffOutcome ? '[data-armory-handoff-outcome]'
           : value?.arms.some(arm => arm.id === focusArm) ? `[data-comparison-arm="${focusArm}"]`
           : publicEvidenceReplay && evidenceOutcome ? '[data-public-evidence-outcome]'
@@ -3320,12 +3322,12 @@ window.__ModuleLoader__.load({
         h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制任务')),
         notice && h('p', { className: 'moba-lighthouse-note', role: 'status' }, notice))
       const preserveHandoff = onUse && value?.id ? arm => setReuse({ id: value.id, arm, handoff: true }) : undefined
-      return h(InstallDialog, { title: t(joinedReview ? '灯塔同题交接' : comparisonTitle(kind, lessonMarker, evidenceReplay, publicEvidenceReplay)),
+      return h(InstallDialog, { title: t(joinedReview || ownReviewPair ? '灯塔同题交接' : comparisonTitle(kind, lessonMarker, evidenceReplay, publicEvidenceReplay)),
         className: 'moba-lighthouse-comparison' + (publicEvidenceReplay || canShareEvidenceReport ? ' moba-public-evidence-comparison' : ''),
         busy: Boolean(launch),
         onCancel: onBack ?? onClose, initialFocus: returnFocus.current || focusSelector || '.moba-lighthouse-close',
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!starting.current) (onBack ?? onClose)() }) },
-        !publicReviewOutcome && !armoryHandoffOutcome && h('p', { className: 'moba-lighthouse-note' }, t(publicEvidenceReplay
+        !publicReviewOutcome && !armoryHandoffOutcome && !ownReviewPair && h('p', { className: 'moba-lighthouse-note' }, t(publicEvidenceReplay
           ? '换装局在独立的练习工作区使用同一份内置灯塔样例，只卸下证据核验。'
           : evidence
           ? '如果出现证据取舍卡，请回原会话做出选择。这里会显示实际选择和交付文件。'
@@ -3343,6 +3345,7 @@ window.__ModuleLoader__.load({
         value && h(Fragment, null,
           setup && h(WorkspaceComparisonForm, { form: workspaceForm, workspaces, workspaceId, setWorkspaceId, request,
             material, setMaterial, brief, defaultBrief, setBrief, busy: Boolean(launch) }),
+          ownReviewPair && h(HandoffOutcomeSummary, { outcome: ownReviewPair, ownReview: true, onVisit, busy: Boolean(launch) }),
           armoryHandoffOutcome ? h(Fragment, null,
             h(HandoffOutcomeSummary, { outcome: armoryHandoffOutcome, armory: true, onVisit, onPreserve: preserveHandoff, busy: Boolean(launch) }),
             h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看任务和出装')), workspaceFacts, gearChange, sharedTask))
@@ -4101,6 +4104,7 @@ window.__ModuleLoader__.load({
       const availableEvidenceReplay = evidence && member.canReplayLighthouseEvidence === true
       const availableDeliveryReview = lesson && kind === 'workspace' && member.canTryDeliveryReview === true
       const reviewInvitation = member?.reviewInvitation
+      const canCompareOwnReview = member?.canCompareOwnReview === true
       const evidenceReportCode = evidence && member.evidenceReportCode
       const taskPending = (evidence || reviewChallengeArm) && member.firstTaskPending && !hasTurn
       useEffect(() => {
@@ -4149,7 +4153,9 @@ window.__ModuleLoader__.load({
             h('span', null, scenario ? t(scenario.name) : comparisonArmName(comparisonArmConfig(kind, member.arm, evidenceReplay), member))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
-              onClick: () => setOpen(true) }, t(evidenceReplay ? title : evidence ? '查看取舍记录' : lesson ? '查看练习记录' : config.entry)),
+              'data-open-own-review-pair': canCompareOwnReview || undefined, onClick: () => setOpen(true) },
+            t(canCompareOwnReview ? '对照我打过的两局'
+              : evidenceReplay ? title : evidence ? '查看取舍记录' : lesson ? '查看练习记录' : config.entry)),
             evidenceReportCode && h(LocalCopyButton, { key: evidenceReportCode, text: evidenceReportCode, label: '复制取舍码回给好友',
               fieldLabel: '我的取舍码', copiedNotice: '战报码已复制。', manualNotice: '战报码已选中，可以手动复制。', backLabel: '返回练习会话' }),
             availableEvidenceReplay && h('button', { ref: evidenceReplayTrigger, type: 'button', 'aria-haspopup': 'dialog',
@@ -4172,7 +4178,7 @@ window.__ModuleLoader__.load({
             ? '可以在取舍记录里回看本局的实际选择和交付。'
             : '手动发送练习任务。如果出现证据取舍卡，请在会话里选择。')),
           reviewChallengeArm === 'review' && !taskPending && !hasTurn && h('p', null, t('交付前由你确认，或者退回修改。')),
-          lesson && kind === 'workspace' && reviewChallengeArm !== 'review' && !taskPending && h('p', null, t(availableDeliveryReview
+          lesson && kind === 'workspace' && reviewChallengeArm !== 'review' && !taskPending && !canCompareOwnReview && h('p', null, t(availableDeliveryReview
             ? '补给卡已直接交付。下一局试试确认交付或退回修改。'
             : hasTurn
             ? '首局交付补给卡后，可在练习记录里换一件再试。'
