@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.150.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.151.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -67,6 +67,8 @@ dsh web
 ### 给极简模式加一件装备
 
 如果接班人需要 **可打开的原件**，而极简模式实际读取补给卡后只交付了文字，可以在这局 DSH 原会话或试玩对照点 **给极简模式装上交付物预览**。确认页先展示这一件装备和它能带来的交接结果。展开 **查看工具和来源** 可核对原生 `present` 工具。点 **打开加装会话**，用补给卡的新副本手动发送原任务。附件核验后，点 **查看换装战报**，对照加装前后的交付并打开补给卡原件。
+
+在已核验的换装战报点 **对照好友战报**，可以用本次加装后的实测结果和好友分享的战报对照。
 
 **极简模式 + 交付物预览** 实际交付样例原件并通过核验后，在换装战报顶部点 **用这套出装做自己的任务**。选择工作区，或点 **添加材料文件夹**，选好自己的文件并写下新任务说明。点 **核对材料和出装**，核对极简模式和实测装备来源，再在 DSH 新会话手动发送。原来的标准模式、极简模式和加装复赛仍可从试玩对照回看。
 

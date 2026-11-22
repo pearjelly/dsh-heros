@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.150.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.151.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -65,6 +65,8 @@ When the next shift needed a **Verifiable text summary** and stock Minimal read 
 ### Give Minimal one more tool
 
 If the next shift needed an **Openable original** and Minimal’s verified round read the card and handed off text, choose **Add Deliverable Preview to Minimal** in the original DSH conversation or on the trial board. The preview shows the single piece of gear and what it lets the next shift do. Expand **View tools and sources** to inspect the native `present` tool. Choose **Open the equipped session** and manually send the same task against a new copy of the supply card. Once the replay verifies the original attachment, choose **View gear replay report** to compare both results and open the card.
+
+In the verified gear replay report, choose **Compare a friend's report** to compare that equipped run with the report your friend shared.
 
 After **Minimal + Deliverable Preview** delivers the original sample card and passes verification, choose **Use this loadout on my task** at the top of the gear replay report. Select a workspace or **Add a materials folder**, choose your own file, and write a new brief. In **Review file and loadout**, check Minimal and the equipment sources from the trial. Confirm and manually send the new task in DSH. The original Standard, Minimal, and equipped runs remain available in the trial comparison.
 

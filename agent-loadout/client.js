@@ -1710,7 +1710,7 @@ window.__ModuleLoader__.load({
           h('p', { className: 'moba-lighthouse-note', style: { whiteSpace: 'pre-wrap' } }, arm.summary)))
     }
 
-    function HeroDeliveryReplayResult({ outcome: { sessionId, originalFile }, onVisit, onPersonalTask, busy }) {
+    function HeroDeliveryReplayResult({ outcome: { sessionId, originalFile }, onVisit, onCompareReport, onPersonalTask, busy }) {
       const heading = useId()
       const { hostAvailable, opening, failed, openFile } = usePresentedFileOpener(
         Boolean(originalFile && presentedFileHasCoordinates(originalFile)))
@@ -1726,6 +1726,8 @@ window.__ModuleLoader__.load({
           t(opening ? '正在打开文件…' : '打开补给卡原件')),
           (!hostAvailable || failed) && h('button', { type: 'button', className: 'moba-roster-open',
             onClick: () => onVisit(sessionId) }, t('去会话看补给卡原件')),
+          onCompareReport && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
+            onClick: event => onCompareReport(event.currentTarget) }, t('对照好友战报')),
           onPersonalTask && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
             onClick: event => onPersonalTask(event.currentTarget) }, t(lessonTaskLabel))),
         failed && h('p', { className: 'moba-match-action-error', role: 'alert' }, t('暂时无法打开这份交付文件。可在原会话查看。')))
@@ -2037,6 +2039,7 @@ window.__ModuleLoader__.load({
       const minimalReplay = value?.minimalReplay
       const deliveryReplay = value?.deliveryReplay
       const recapPersonalSource = deliveryReplay && minimalReplay?.lessonTaskSource
+      const recapReportable = deliveryReplay && minimalReplay?.id === minimalDeliveryReplayArm.id && canReportHeroHandoff(minimalReplay)
       const canReplayMinimal = value?.canReplayMinimalDelivery && !minimalReplay
 
       useEffect(() => {
@@ -2166,6 +2169,10 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (shareButton.current ?? heading.current)?.focus())
       }
 
+      function openHandoffReport(mode, arm, opener) {
+        setHandoffReport({ mode, arm, opener })
+      }
+
       function closeHandoffReport() {
         setHandoffReport(null)
         requestAnimationFrame(() => {
@@ -2186,9 +2193,9 @@ window.__ModuleLoader__.load({
           onNotice: status => setNotice(t(comparisonDraftNotices[status])), result: h(Fragment, null, h(HeroTrialResult, { arm }), extraResult,
             reportable && h('div', { className: 'moba-comparison-previous' },
               h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
-                onClick: event => setHandoffReport({ mode: 'share', arm: arm.id, opener: event.currentTarget }) }, t('分享这局战报')),
-              h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
-                onClick: event => setHandoffReport({ mode: 'compare', arm: arm.id, opener: event.currentTarget }) }, t('对照好友战报')))) })
+                onClick: event => openHandoffReport('share', arm.id, event.currentTarget) }, t('分享这局战报')),
+              !(equipped && recapReportable) && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog', disabled: busy,
+                onClick: event => openHandoffReport('compare', arm.id, event.currentTarget) }, t('对照好友战报')))) })
       }
 
       const finished = value?.arms.length > 0 && value.arms.every(arm => arm.status === 'complete')
@@ -2220,6 +2227,7 @@ window.__ModuleLoader__.load({
               h('p', { ref: heading, tabIndex: -1, 'data-hero-trial-results': true }, h('strong', null, t('接班人需要什么？')), ' ',
                 t(heroTrialNeeds.find(item => item.id === value.need)?.name ?? value.need)),
               deliveryReplay ? h(HeroDeliveryReplayResult, { outcome: deliveryReplay, onVisit, busy,
+                onCompareReport: recapReportable ? opener => openHandoffReport('compare', minimalReplay.id, opener) : undefined,
                 onPersonalTask: recapPersonalSource ? opener => openPersonalTask(recapPersonalSource, opener) : undefined }) :
                 h('p', { className: 'moba-lighthouse-note' }, t(finished
                   ? '交付是否符合需求依据工具、回复和附件记录。摘要内容可打开原会话核对。'
