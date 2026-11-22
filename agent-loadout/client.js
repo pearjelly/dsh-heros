@@ -2101,6 +2101,7 @@ window.__ModuleLoader__.load({
           disabled: openingRound, onClick: event => onReplayMinimal(event.currentTarget) }, t(minimalDeliveryReplayLabel))
       const tryFriendDirect = reviewKind && onOpenRepeat && result?.local.played === 'review' &&
         comparison?.played === 'direct' && comparison.originalAttached === true
+      const tryReviewFromDirect = reviewKind && result?.local.played === 'direct'
       const friendAction = tryFriendDirect ? h('div', { className: 'moba-detail-actions' },
         h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, 'data-try-friend-direct': true,
           onClick: () => openRepeat('direct') }, t('试试好友的直接交付'))) : tryHero && h(Fragment, null,
@@ -2142,8 +2143,11 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: copy },
                   t(evidence ? '复制我的取舍码' : '复制我的战报码')),
                 comparison && (evidence || reviewKind) && onOpenRepeat &&
-                h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: () => openRepeat() },
-                  t(openingRound ? '正在打开同题会话…' : reviewKind ? '再试一次交付前复核' : '用同一出装再试一局'))),
+                h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound,
+                  'data-try-review-from-direct': tryReviewFromDirect || undefined, onClick: () => openRepeat() },
+                  tryReviewFromDirect && h(Glyph, { kind: 'plus', size: 14 }),
+                  t(openingRound ? '正在打开同题会话…' : tryReviewFromDirect ? '加装交付前复核再试一局'
+                    : reviewKind ? '再试一次交付前复核' : '用同一出装再试一局'))),
               replyCodeVisible && result.code && h('label', null, t(evidence ? '我的取舍码' : '我的战报码'),
                 h('textarea', { ref: replyField, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                   spellCheck: false, onFocus: event => event.currentTarget.select() })),

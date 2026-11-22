@@ -2756,11 +2756,55 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
       invoke('lighthouse-review-report-replay', { ...reviewSource, code, launchId: '7'.repeat(32) }, status)
     const tryDirectReport = (code, source = reviewSource, status) =>
       invoke('lighthouse-review-report-replay', { ...source, code, route: 'direct', launchId: '7'.repeat(32) }, status)
+    const tryReviewFromDirect = (code, launchId = '3'.repeat(32), status) =>
+      invoke('lighthouse-review-report-replay', { ...directSource, code, launchId }, status)
     await repeatReport(differentLanguage, 422)
     await tryDirectReport(differentLanguage, reviewSource, 422)
     await tryDirectReport(reviewReport.code, reviewSource, 422)
     await tryDirectReport(directReport.code, directSource, 422)
+    await tryReviewFromDirect(differentLanguage, '3'.repeat(32), 422)
     assert.deepEqual(await reviewDrafts(), [])
+    const reciprocal = []
+    for (const [choice, launchDigit, attached] of [['Revise draft', '3', false], ['Confirm handoff', '4', true]]) {
+      const openReview = () => tryReviewFromDirect(reviewReport.code, launchDigit.repeat(32))
+      const [opened, duplicate] = await Promise.all([openReview(), openReview()])
+      assert.deepEqual(opened, duplicate)
+      assert.equal(opened.task, friendDirect.task)
+      const draft = await history(opened.sessionId)
+      assert.notEqual(draft.workspaceId, friendDirectHistory.workspaceId)
+      assert.equal(draft.presetId, friendDraft.presetId)
+      assert.ok(noMessages(draft))
+      assert.equal(await readFile(join(draft.workspacePath, material), 'utf8'), contents[1])
+      assert.deepEqual(await membership(draft.workspaceId), [opened.sessionId])
+      const readPair = () => read({ comparisonId: opened.id })
+      assert.equal((await readPair()).ownReviewPair, undefined)
+      assert.equal((await equipmentIn(host, opened.sessionId)).workspaceComparison.canCompareOwnReview, undefined)
+      const result = await finishFriendReview(opened, choice)
+      const board = await readPair()
+      assert.deepEqual(board.ownReviewPair.arms.map(({ id, sessionId, choices, materialDelivered, deliveredCount }) =>
+        [id, sessionId, choices, materialDelivered, deliveredCount]), [
+        ['review', opened.sessionId, [choice], attached, Number(attached)],
+        ['direct', friendDirect.sessionId, [], true, 1],
+      ])
+      assert.deepEqual(board.ownReviewPair.arms[0].deliverables, result.deliverables)
+      const pairSources = board.ownReviewPair.arms.map(side => side.lessonTaskSource)
+      assert.deepEqual(pairSources, [
+        { ...reviewSource, comparisonId: opened.id, handoffPairId: opened.id },
+        { ...directSource, handoffPairId: opened.id },
+      ])
+      assert.equal((await equipmentIn(host, opened.sessionId)).workspaceComparison.canCompareOwnReview, true)
+      assert.equal(board.directRematchArm, undefined)
+      assert.equal((await equipmentIn(host, opened.sessionId)).workspaceComparison.canTryDirectDelivery, undefined)
+      assert.deepEqual(await Promise.all(pairSources.map(async source =>
+        (await invoke('lesson-task-options', source)).source.sessionId)), [opened.sessionId, friendDirect.sessionId])
+      reciprocal.push({ readPair, pair: board.ownReviewPair })
+    }
+    const directMaterial = join(friendDirectHistory.workspacePath, material)
+    await appendFile(directMaterial, '\nChanged original direct sample.\n')
+    await tryReviewFromDirect(reviewReport.code, '3'.repeat(32), 422)
+    for (const { readPair } of reciprocal) assert.equal((await readPair()).ownReviewPair, undefined)
+    await writeFile(directMaterial, contents[1])
+    for (const { readPair, pair } of reciprocal) assert.deepEqual((await readPair()).ownReviewPair, pair)
     const [reviewAgain, sameAgain] = await Promise.all([repeatReport(directReport.code), repeatReport(directReport.code)])
     assert.deepEqual(sameAgain, reviewAgain)
     assert.equal(reviewAgain.task, friend.task)
@@ -2975,6 +3019,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     await shareReview('workspace', friend.id, 'review', 422)
     await compareReview(reviewSource, directReport.code, 422)
     await tryDirectReport(directReport.code, reviewSource, 422)
+    for (const { readPair, pair } of reciprocal) assert.deepEqual((await readPair()).ownReviewPair, pair)
     assert.equal((await read({ comparisonId: triedDirect.id })).ownReviewPair, undefined)
     assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, undefined)
     assert.equal((await first.inspect()).handoffAlternate, undefined)

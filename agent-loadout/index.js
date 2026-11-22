@@ -55,8 +55,10 @@ const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).dige
 const reviewChallengeUnavailable = '请先完成并核验一局灯塔交付。'
 const reviewRoutesUnavailable = '本机暂时无法装配灯塔交接的出装。'
 const handoffPairChanged = '这两局的实测出装暂不可用，请返回交接对照重新核对。'
-const validReviewReplaySource = source => comparisonIdValid(source?.comparisonId) &&
-  ((source.kind === 'workspace' && source.arm === 'review') || (source.kind === 'rematch' && source.arm === 'rematch'))
+const validReviewReplaySource = (source, next) => comparisonIdValid(source?.comparisonId) &&
+  (next === 'review' ? source.kind === 'workspace' && source.arm === 'direct'
+    : next === 'direct' && ((source.kind === 'workspace' && source.arm === 'review') ||
+      (source.kind === 'rematch' && source.arm === 'rematch')))
 const heroTrialUnavailable = '本机的标准模式与极简模式暂时无法进行这场试玩。'
 const heroDeliveryUnavailable = '请先用极简模式完成一局需要原件的试玩，并核对它留下的文字交接。'
 const heroDeliveryChanged = '样例或交付工具已变化，请重新核对。'
@@ -489,7 +491,7 @@ export async function apply(ctx) {
     record => validWorkspaceComparison(record) && validEvidenceOpeningChoice(record.lesson, record.scenario, record.openingChoice) &&
       (record.reviewChallengeArm === undefined || (record.lesson === lighthouseLesson &&
         workspaceComparisonArms.includes(record.reviewChallengeArm) && lighthouseReviewLanguage(record))) &&
-      (record.reviewReplaySource === undefined || (record.reviewChallengeArm === 'direct' && validReviewReplaySource(record.reviewReplaySource))) &&
+      (record.reviewReplaySource === undefined || validReviewReplaySource(record.reviewReplaySource, record.reviewChallengeArm)) &&
       (record.lesson === undefined || record.lesson === lighthouseLesson ||
         (record.lesson === evidenceLesson && lighthouseEvidenceScenarios.includes(record.scenario))),
     record => {
@@ -1908,33 +1910,38 @@ export async function apply(ctx) {
     if (route !== 'review' && (!tryDirect || local.played !== 'review' || friend.played !== 'direct' || !friend.originalAttached)) {
       throw new Error('请先核对走直接交付路线的好友战报。')
     }
-    const { routePresets } = await reviewChallengeLoadouts({ sampleLanguage: friend.language }, ['replay'], signal)
-    if (!routePresets?.[route]) throw new Error(reviewRoutesUnavailable)
-    const namespace = tryDirect ? 'lighthouse-review-report-try-direct' : 'lighthouse-review-report-replay'
+    const tryReview = route === 'review' && local.played === 'direct'
+    const source = { kind, comparisonId, arm }
+    const presetId = tryReview ? (await checkLighthouseReviewSwap(source, route, signal)).candidate.id
+      : (await reviewChallengeLoadouts({ sampleLanguage: friend.language }, ['replay'], signal)).routePresets?.[route]
+    if (!presetId) throw new Error(reviewRoutesUnavailable)
+    const namespace = tryDirect ? 'lighthouse-review-report-try-direct'
+      : tryReview ? 'lighthouse-review-report-try-review' : 'lighthouse-review-report-replay'
     const id = createHash('sha256').update(JSON.stringify([namespace, kind, comparisonId, arm, code, launchId])).digest('hex').slice(0, 32)
-    const reviewReplaySource = tryDirect ? { kind, comparisonId, arm } : undefined
+    const reviewReplaySource = tryDirect || tryReview ? source : undefined
     return openLighthouseLesson({ launchId: id, reviewChallengeArm: route, reviewReplaySource }, friend.language === 'en',
-      signal, lighthouseLesson, routePresets[route])
+      signal, lighthouseLesson, presetId)
   }
 
-  async function ownReviewPair(record, direct, materialState, signal) {
-    const { reviewReplaySource: source } = record
-    if (!source || materialState !== 'verified' || !direct || !verifiedEvidenceArm(direct) ||
-      !direct.materialDelivered || !completedPresentDelivery(direct)) return
+  async function ownReviewPair(record, signal, observed) {
+    const { reviewReplaySource: source, reviewChallengeArm: arm } = record
+    if (!source || (observed && !verifiedEvidenceArm(observed))) return
     const comparisons = source.kind === 'workspace' ? workspaceComparisons : rematchComparisons
     const prior = comparisons.read(source.comparisonId)
     if (!prior || prior.material !== record.material || prior.task !== record.task || prior.digest !== record.digest ||
       prior.workspaceId === record.workspaceId) return
-    const review = await verifiedReviewHandoff(comparisons, prior, source.arm, signal, { includeSide: true })
-    if (review?.played !== 'review' || review.side.sessionId === direct.sessionId) return
-    const arms = [
-      { id: 'review', style: 'review', choices: [review.choiceLabel], materialDelivered: review.originalAttached,
-        deliveredCount: review.side.deliverables.length, ...review.side },
-      { id: 'direct', style: 'direct', choices: [], materialDelivered: true,
-        deliveredCount: direct.deliverables.length, sessionId: direct.sessionId, deliverables: direct.deliverables,
-        ...(direct.lessonTaskSource && { lessonTaskSource: direct.lessonTaskSource }) },
-    ].map(side => side.lessonTaskSource
-      ? { ...side, lessonTaskSource: { ...side.lessonTaskSource, handoffPairId: record.id } } : side)
+    const [current, original] = await Promise.all([
+      verifiedReviewHandoff(workspaceComparisons, record, arm, signal, { observed, includeSide: true }),
+      verifiedReviewHandoff(comparisons, prior, source.arm, signal, { includeSide: true }),
+    ])
+    if (!current || !original || current.played === original.played || current.side.sessionId === original.side.sessionId) return
+    const byRoute = { [current.played]: current, [original.played]: original }
+    const arms = ['review', 'direct'].map(style => {
+      const { choiceLabel, originalAttached, side: { sessionId, deliverables, lessonTaskSource } } = byRoute[style]
+      return { id: style, style, choices: choiceLabel ? [choiceLabel] : [], materialDelivered: originalAttached,
+        deliveredCount: deliverables.length, sessionId, deliverables,
+        ...(lessonTaskSource && { lessonTaskSource: { ...lessonTaskSource, handoffPairId: record.id } }) }
+    })
     return { material: record.material, arms }
   }
 
@@ -1947,11 +1954,7 @@ export async function apply(ctx) {
       if (record.lesson !== lighthouseLesson || await workspaceMaterialState(record, signal) !== 'verified') return
       return (await readComparisonArms(rematchComparisons, record, signal)).publicReviewOutcome
     }
-    const [direct, materialState] = await Promise.all([
-      readComparisonArm(workspaceComparisons, record, 'direct', signal),
-      workspaceMaterialState(record, signal),
-    ])
-    return ownReviewPair(record, direct, materialState, signal)
+    return ownReviewPair(record, signal)
   }
 
   async function matchedHandoffTaskPair({ handoffPairId, kind, comparisonId, arm }, signal) {
@@ -4780,20 +4783,27 @@ export async function apply(ctx) {
     return { ...view, comparison }
   }
 
-  async function checkLighthouseDirectRematch({ kind, comparisonId, arm }, signal) {
-    const source = { kind, comparisonId, arm }
-    if (!validReviewReplaySource(source)) throw new Error(reviewChallengeUnavailable)
-    const review = await requireReviewHandoff(source, signal)
-    if (review.played !== 'review') throw new Error(reviewChallengeUnavailable)
+  async function checkLighthouseReviewSwap(source, next, signal) {
+    if (!validReviewReplaySource(source, next)) throw new Error(reviewChallengeUnavailable)
     const checked = await checkedRematchBaseline(source, signal)
-    const input = requestedRematch({ ...source, change: { removeId: 'review' } })
+    const addReview = next === 'review'
+    const input = requestedRematch({ ...source, change: addReview ? { addId: 'review' } : { removeId: 'review' } })
     const change = await checkRematch(input, signal, checked)
-    const [reviewPreset, directPreset] = await Promise.all(['review', 'direct']
+    const [before, after] = await Promise.all([addReview ? 'direct' : 'review', next]
       .map(style => plan(deliveryPlaybookDraft(checked.ecosystem, style), checked.ecosystem)))
-    if (reviewPreset.id !== change.before.id || directPreset.id !== change.candidate.id ||
+    if (before.id !== change.before.id || after.id !== change.candidate.id ||
       !['read', 'present'].every(tool => retainedRematchTool(checked, change.candidate, tool))) {
       throw new Error(reviewRoutesUnavailable)
     }
+    return change
+  }
+
+  async function checkLighthouseDirectRematch({ kind, comparisonId, arm }, signal) {
+    const source = { kind, comparisonId, arm }
+    if (!validReviewReplaySource(source, 'direct')) throw new Error(reviewChallengeUnavailable)
+    const review = await requireReviewHandoff(source, signal)
+    if (review.played !== 'review') throw new Error(reviewChallengeUnavailable)
+    const change = await checkLighthouseReviewSwap(source, 'direct', signal)
     const token = createHash('sha256').update(JSON.stringify([planTaskOwner, 'solo-direct-rematch', change.view.token,
       review.language, review.choiceLabel, review.originalAttached])).digest('hex')
     const view = { ...change.view, token, baseline: { ...change.view.baseline, choice: review.choiceLabel,
@@ -5749,15 +5759,15 @@ export async function apply(ctx) {
       directRematchArm = 'review'
     }
     const reviewChoiceComparison = canRepeatLighthouseReview && await compareReviewChoices(record, currentReview, signal)
-    const ownPair = record.reviewReplaySource &&
-      await ownReviewPair(record, rounds.arms.find(arm => arm.id === 'direct'), materialState, signal)
+    const ownPair = record.reviewReplaySource && materialState === 'verified' &&
+      await ownReviewPair(record, signal, rounds.arms.find(arm => arm.id === record.reviewChallengeArm))
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
       ...(publicReviewOutcome && materialState === 'verified' && { publicReviewOutcome }),
       ...(record.reviewChallengeArm && { reviewChallengeArm: record.reviewChallengeArm }),
       ...(ownPair && { ownReviewPair: ownPair }),
       ...(armoryHandoffOutcome && materialState === 'verified' && { armoryHandoffOutcome }),
       ...(canRepeatLighthouseReview && { canRepeatLighthouseReview: true }),
-      ...(directRematchArm && { directRematchArm }),
+      ...(directRematchArm && !ownPair && { directRematchArm }),
       ...(reviewChoiceComparison && { reviewChoiceComparison }),
       ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),
       ...(record.lesson === evidenceLesson && { scenario: record.scenario }), ...(record.evidenceRetest && { evidenceRetest: true }),
@@ -6994,8 +7004,10 @@ export async function apply(ctx) {
         const evidence = lesson === evidenceLesson
         const deliveryLesson = lesson === lighthouseLesson && workspaceComparison.arm === 'direct'
         const observed = (evidence || deliveryLesson || reviewChallengeArm) && !value.running &&
-          await readComparisonArm(workspaceComparisons, record, workspaceComparison.arm, request.signal,
-            deliveryLesson ? { verifyPersonalDelivery: true, linkedChoicesOnly: true } : undefined)
+          await readComparisonArm(workspaceComparisons, record, workspaceComparison.arm, request.signal, {
+            verifyPersonalDelivery: deliveryLesson, linkedChoicesOnly: deliveryLesson,
+            includeFileCoordinates: Boolean(record.reviewReplaySource),
+          })
         const evidenceReplay = completedLighthouseChallenge(record, observed)
         const deliveryReview = deliveryLesson && observed?.canRematch === true && observed.materialDelivered === true
         const materialState = (evidenceReplay || deliveryReview) &&
@@ -7004,8 +7016,8 @@ export async function apply(ctx) {
         const report = observedLighthouseEvidenceReport(record, observed, materialState)
         const reviewResult = observed?.status === 'complete' &&
           await verifiedReviewHandoff(workspaceComparisons, record, workspaceComparison.arm, request.signal, { observed })
-        const canCompareOwnReview = record.reviewReplaySource &&
-          Boolean(await ownReviewPair(record, observed, materialState, request.signal))
+        const canCompareOwnReview = record.reviewReplaySource && reviewResult &&
+          Boolean(await ownReviewPair(record, request.signal, observed))
         value.workspaceComparison = { ...workspaceComparison, ...(lesson && { lesson }), ...(evidence && { scenario }),
           ...(reviewChallengeArm && { reviewChallengeArm }),
           ...((evidence || reviewChallengeArm) && observed?.status === 'waiting' && { firstTaskPending: true }),
@@ -7014,7 +7026,7 @@ export async function apply(ctx) {
           ...(evidenceReplay && materialState === 'verified' && { canReplayLighthouseEvidence: true }),
           ...(deliveryReview && materialState === 'verified' && { canTryDeliveryReview: true }),
           ...(reviewResult && { reviewInvitation: reviewResult.played }),
-          ...(reviewResult?.played === 'review' && { canTryDirectDelivery: true }),
+          ...(reviewResult?.played === 'review' && !canCompareOwnReview && { canTryDirectDelivery: true }),
           ...(canCompareOwnReview && { canCompareOwnReview: true }),
           ...(report && { evidenceReportCode: encodeLighthouseEvidenceReport(report.choice, report.delivered) }) }
       }
