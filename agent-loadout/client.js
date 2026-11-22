@@ -3543,6 +3543,40 @@ window.__ModuleLoader__.load({
           evidenceSave: { comparisonId, arm }, onChanged: evidenceSaved, onClose: closeNaming }))
     }
 
+    function EvidenceReply({ code }) {
+      const [copied, setCopied] = useState(false)
+      const [showCode, setShowCode] = useState(false)
+      const trigger = useRef(null)
+
+      async function copy() {
+        try {
+          await navigator.clipboard.writeText(code)
+          setCopied(true)
+        } catch {
+          setCopied(false)
+          setShowCode(true)
+        }
+      }
+
+      function close() {
+        setShowCode(false)
+        requestAnimationFrame(() => trigger.current?.focus())
+      }
+
+      return h(Fragment, null,
+        h('button', { ref: trigger, type: 'button', className: 'moba-settlement-button',
+          onClick: copy }, t('复制取舍码回给好友')),
+        copied && h('span', { role: 'status' }, t('战报码已复制。')),
+        showCode && h(InstallDialog, { title: t('复制取舍码回给好友'), className: 'moba-lighthouse-comparison moba-starter-dialog',
+          onCancel: close, initialFocus: '.moba-share-code', onKeyDown: event => closeDialogOnEscape(event, close) },
+          h('div', { className: 'moba-plan-fields moba-share-fields' },
+            h('label', null, t('我的取舍码'), h('textarea', { className: 'moba-share-code', readOnly: true,
+              value: code, rows: 3, spellCheck: false, onFocus: event => event.currentTarget.select() })),
+            h('p', { role: 'status' }, t('战报码已选中，可以手动复制。'))),
+          h('div', { className: 'moba-market-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open', onClick: close }, t('返回练习会话')))))
+    }
+
     function RunComparisonAnchor({ kind, member, sessionId, request, onVisit, consumeDraft, putTask, hasTurn, workspaces, onUse }) {
       const config = comparisonKinds[kind]
       const lesson = member?.lesson === lighthouseRematchLesson
@@ -3561,6 +3595,7 @@ window.__ModuleLoader__.load({
       const evidenceReplayTrigger = useRef(null)
       const availableLessonTask = evidence && member.lessonTaskSource
       const availableEvidenceReplay = evidence && member.canReplayLighthouseEvidence === true
+      const evidenceReportCode = evidence && member.evidenceReportCode
       useEffect(() => {
         if (!member?.id) return
         const outcome = consumeDraft(sessionId)
@@ -3585,12 +3620,13 @@ window.__ModuleLoader__.load({
       }
 
       return h(Fragment, null,
-        h('div', { className: 'moba-lighthouse-anchor' },
+        h('div', { className: 'moba-lighthouse-anchor', 'data-evidence-result': availableEvidenceReplay || undefined },
           h('div', null, h('strong', null, t(title)),
             h('span', null, scenario ? t(scenario.name) : comparisonArmName(comparisonArmConfig(kind, member.arm, evidenceReplay), member))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setOpen(true) }, t(evidenceReplay ? title : evidence ? '查看取舍记录' : lesson ? '查看练习记录' : config.entry)),
+            evidenceReportCode && h(EvidenceReply, { key: evidenceReportCode, code: evidenceReportCode }),
             availableEvidenceReplay && h('button', { ref: evidenceReplayTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setOpenEvidenceReplay(true) }, t(lighthouseEvidenceReplayLabel)),
             availableLessonTask && h('button', { ref: lessonTaskTrigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
@@ -10981,11 +11017,13 @@ window.__ModuleLoader__.load({
       .moba-public-evidence-comparison { scroll-padding-block-end: 80px; }
       .moba-lighthouse-anchor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
         gap: 3px 7px; padding: 6px 8px; margin-block-end: 5px; border: 1px solid #607d78; background: #192c33; color: #f3e9d2; font-size: 12px; }
-      .moba-lighthouse-anchor div { display: flex; flex-wrap: wrap; gap: 1px 7px; overflow-wrap: anywhere; }
+      .moba-lighthouse-anchor > div { display: flex; flex-wrap: wrap; gap: 1px 7px; overflow-wrap: anywhere; }
       .moba-lighthouse-anchor .moba-lighthouse-anchor-actions { justify-content: flex-end; gap: 4px 7px; }
+      .moba-lighthouse-anchor[data-evidence-result] { grid-template-columns: minmax(0, 1fr); }
+      .moba-lighthouse-anchor[data-evidence-result] .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       .moba-lighthouse-anchor-actions .moba-settlement-button { white-space: normal; }
-      .moba-lighthouse-anchor span { color: #b8ded4; }
-      .moba-lighthouse-anchor p { grid-column: 1 / -1; margin: 0; color: #ccdcd8; font-size: 11px; }
+      .moba-lighthouse-anchor > div > span { color: #b8ded4; }
+      .moba-lighthouse-anchor > p { grid-column: 1 / -1; margin: 0; color: #ccdcd8; font-size: 11px; }
       .moba-plan-task-draft textarea { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 5px; resize: vertical;
         border: 1px solid #607d78; background: #111b24; color: inherit; font: inherit; }
       .moba-starter-dialog h2 { margin: 0 0 12px; font-size: 22px; }

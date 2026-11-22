@@ -2461,6 +2461,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
           const member = (await equipmentIn(host, opened.sessionId)).workspaceComparison
           assert.equal(member.lessonTaskSource, undefined)
           assert.equal(member.canReplayLighthouseEvidence, undefined)
+          assert.equal(member.evidenceReportCode, undefined)
         } finally {
           if (question) await host.request(questions, { sessionId: opened.sessionId, choice: decision })
           await turn
@@ -2492,6 +2493,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
       const member = (await equipmentIn(host, opened.sessionId)).workspaceComparison
       assert.deepEqual(member.lessonTaskSource, transfer)
       assert.equal(member.canReplayLighthouseEvidence, scenario === 'gap' ? true : undefined)
+      if (scenario !== 'gap') assert.equal(member.evidenceReportCode, undefined)
       const openingResult = openingChoice && { choice: openingChoice, actualChoices: [decision] }
       assert.deepEqual(completed.evidenceOpeningChoice, openingResult)
       proved.push({ filter, arm, openingResult })
@@ -2536,7 +2538,9 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     await invoke('rematch-comparison-open', { ...openFields, comparisonId: pause.id }, 422)
     await invoke('rematch-comparison-open', { ...openFields, change: { removeId: 'present' } }, 422)
     await appendFile(card, '\nUnexpected edit after the public replay preview.\n')
-    assert.equal((await equipmentIn(host, lower.sessionId)).workspaceComparison.canReplayLighthouseEvidence, undefined)
+    const staleMember = (await equipmentIn(host, lower.sessionId)).workspaceComparison
+    assert.equal(staleMember.canReplayLighthouseEvidence, undefined)
+    assert.equal(staleMember.evidenceReportCode, undefined)
     await replayOptions(lower.id, 422)
     await invoke('rematch-comparison-open', openFields, 422)
     assert.deepEqual(await workspaceDirectories(), before)
@@ -2731,7 +2735,9 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.equal(wrongChoice.canReplayLighthouseEvidence, undefined)
     await replayOptions(edited.id, 422)
     assert.equal(rejected.evidenceOpeningChoice, undefined)
-    assert.equal((await equipmentIn(host, edited.sessionId)).workspaceComparison.lessonTaskSource, undefined)
+    const editedMember = (await equipmentIn(host, edited.sessionId)).workspaceComparison
+    assert.equal(editedMember.lessonTaskSource, undefined)
+    assert.equal(editedMember.evidenceReportCode, undefined)
     const changed = await openEnglish('confirmed', 'f'.repeat(32))
     const changedNative = await history(changed.sessionId)
     await appendFile(join(changedNative.workspacePath, material), '\nAn unexpected change to this isolated supply card.\n')
@@ -2791,6 +2797,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const pausedDecision = { choice: 'pause', delivered: false }
     assert.deepEqual(qualifiedReport.local, qualifiedDecision)
     assert.deepEqual(decodeCode(qualifiedReport.code, 'DSHR2.'), { sample: challenge.sample, ...qualifiedDecision })
+    assert.equal((await equipmentIn(host, lower.sessionId)).workspaceComparison.evidenceReportCode, qualifiedReport.code)
     assert.deepEqual((await decisionReport(gather.id)).local, { choice: 'gather', delivered: false })
     assert.deepEqual((await decisionReport(pause.id)).local, pausedDecision)
     assert.equal((await read({ comparisonId: lower.id })).canShareEvidenceReport, true)
@@ -2926,6 +2933,7 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const pausedReport = await receive('lighthouse-evidence-report', recipientReportSource)
     assert.deepEqual(pausedReport.local, pausedDecision)
     assert.deepEqual(decodeCode(pausedReport.code, 'DSHR2.'), { sample: challenge.sample, ...pausedDecision })
+    assert.equal((await equipmentIn(recipient, accepted.sessionId)).workspaceComparison.evidenceReportCode, pausedReport.code)
     assert.deepEqual(await receive('lighthouse-evidence-report-compare', friendReport),
       { local: pausedDecision, code: pausedReport.code, friend: qualifiedDecision })
     assert.deepEqual(await invoke('lighthouse-evidence-report-compare', { comparisonId: lower.id, code: pausedReport.code }),
