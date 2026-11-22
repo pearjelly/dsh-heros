@@ -2273,7 +2273,8 @@ window.__ModuleLoader__.load({
       }
 
       return h(Fragment, null,
-        h('div', { className: 'moba-lighthouse-anchor', 'data-task-pending': taskPending || undefined },
+        h('div', { className: 'moba-lighthouse-anchor', 'data-task-pending': taskPending || undefined,
+          'data-hero-delivery-replay': availableReplay || undefined },
           h('div', null, h('strong', null, t(heroTrialTitle)), hero && h('span', null, t(hero.name))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
@@ -11389,8 +11390,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) { grid-template-columns: minmax(0, 1fr); }
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       @media (max-width: 600px) {
-        .moba-lighthouse-anchor[data-delivery-review-result] { grid-template-columns: minmax(0, 1fr); }
-        .moba-lighthouse-anchor[data-delivery-review-result] .moba-lighthouse-anchor-actions { justify-content: flex-start; }
+        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay]) { grid-template-columns: minmax(0, 1fr); }
+        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       }
       .moba-lighthouse-anchor-actions .moba-settlement-button { white-space: normal; }
       .moba-lighthouse-anchor > div > span { color: #b8ded4; }

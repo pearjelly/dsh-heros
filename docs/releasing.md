@@ -12,8 +12,12 @@ Run releases from the repository root with Node, npm, `jq`, and an authenticated
    host_version=0.2.1-rc.5
    test_host_dir=$(mktemp -d)
    npm install --prefix "$test_host_dir" --no-save "@deepseek-ai/dsh@$host_version"
-   DSH_LOADOUT_TEST_BINARY="$test_host_dir/node_modules/.bin/dsh" npm --prefix agent-loadout test
+   npm_config_cache_dir="$test_host_dir/pnpm-metadata" \
+     XDG_CACHE_HOME="$test_host_dir/cache" \
+     DSH_LOADOUT_TEST_BINARY="$test_host_dir/node_modules/.bin/dsh" npm --prefix agent-loadout test
    ```
+
+   Use a fresh cache directory for each suite run. The local test registry uses temporary ports that the operating system can reuse.
 
 4. Commit the release changes on `main`. Build from that exact commit so local edits and untracked files stay out of the package.
 
