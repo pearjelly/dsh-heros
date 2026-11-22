@@ -3292,7 +3292,7 @@ window.__ModuleLoader__.load({
         lesson, evidenceReplayHint: rematch.publicEvidenceReplay, publicEvidenceReplayHint: rematch.publicEvidenceReplay,
         onBack: () => { returnFocus.current = `[data-rematch-arm="${rematch.arm}"]`; setRematch(null) }, onVisit, onClose })
       if (lessonTask) return h(PersonalLoadoutTask, { source: lessonTask.lessonTaskSource, workspaces, initialWorkspaceId, request, onVisit,
-        backLabel: lessonTask.fromSummary ? '返回两局实测结果' : undefined,
+        handoffStyle: lessonTask.handoffStyle, backLabel: lessonTask.fromSummary ? '返回两局实测结果' : undefined,
         onBack: () => { returnFocus.current = `[data-lesson-task-arm="${lessonTask.id}"], .moba-lighthouse-close`; setLessonTask(null) } })
       if (lessonLaunchOpen) return h(LighthouseLessonLaunch, { request, lesson: lessonMarker, onOpen: onVisit, onCancel: () => {
         returnFocus.current = '.moba-new-lesson'
@@ -3345,7 +3345,8 @@ window.__ModuleLoader__.load({
         value && h(Fragment, null,
           setup && h(WorkspaceComparisonForm, { form: workspaceForm, workspaces, workspaceId, setWorkspaceId, request,
             material, setMaterial, brief, defaultBrief, setBrief, busy: Boolean(launch) }),
-          ownReviewPair && h(HandoffOutcomeSummary, { outcome: ownReviewPair, ownReview: true, onVisit, busy: Boolean(launch) }),
+          ownReviewPair && h(HandoffOutcomeSummary, { outcome: ownReviewPair, ownReview: true, onVisit, busy: Boolean(launch),
+            onLessonTask: arm => setLessonTask({ id: arm.id, lessonTaskSource: arm.lessonTaskSource, fromSummary: true, handoffStyle: arm.style }) }),
           armoryHandoffOutcome ? h(Fragment, null,
             h(HandoffOutcomeSummary, { outcome: armoryHandoffOutcome, armory: true, onVisit, onPreserve: preserveHandoff, busy: Boolean(launch) }),
             h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看任务和出装')), workspaceFacts, gearChange, sharedTask))
@@ -3379,7 +3380,7 @@ window.__ModuleLoader__.load({
               onReuse: onUse && !publicEvidenceReplay && value.id && !evidenceOutcome?.arms.some(item => item.id === arm.id && item.canPreserve) &&
                 !armoryHandoffOutcome?.arms.some(item => item.id === arm.id && item.canPreserve)
                 ? arm => setReuse({ id: value.id, arm }) : undefined,
-              onLessonTask: practice && !publicEvidenceReplay && !publicReviewOutcome?.arms.some(item => item.id === arm.id && item.lessonTaskSource)
+              onLessonTask: practice && !publicEvidenceReplay && !(ownReviewPair ?? publicReviewOutcome)?.arms.some(item => item.id === arm.id && item.lessonTaskSource)
                 ? setLessonTask : undefined,
               onLighthouseEvidenceReplay: kind === 'workspace' && evidence && scenario?.id === 'gap' && value.id &&
                 arm.id === evidenceArm.id && arm.status === 'complete' && arm.canReplayLighthouseEvidence === true
@@ -5909,7 +5910,7 @@ window.__ModuleLoader__.load({
 
     const armoryTaskLabel = '用当前出装做任务'
 
-    function PersonalLoadoutTask({ source, armoryDraft, workspaces, initialWorkspaceId, rebaseline, request, onBack, onVisit,
+    function PersonalLoadoutTask({ source, armoryDraft, workspaces, initialWorkspaceId, rebaseline, handoffStyle, request, onBack, onVisit,
       backLabel = rebaseline ? '返回任务结果' : '返回记录' }) {
       const language = useLanguage()
       const workspaceSetup = useContext(WorkspaceSetupContext)
@@ -5948,6 +5949,7 @@ window.__ModuleLoader__.load({
       return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : armoryDraft ? armoryTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
         className: stockTaskLabel ? 'moba-lighthouse-comparison moba-stock-trial-task' : 'moba-lighthouse-comparison',
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
+        handoffStyle && h(InstallFacts, { facts: [[t('交接打法'), t(handoffStyle === 'review' ? '复核后交付' : '直接交付')]] }),
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t('用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
         options ? h(LoadoutTaskForm, { lessonSource: options.source, armoryDraft, workspaces: allowed, request,
           initialWorkspaceId: rebaseline?.workspaceId ?? initialWorkspaceId, initialMaterial: rebaseline?.material, initialBrief: rebaseline?.brief, backLabel,

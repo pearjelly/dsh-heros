@@ -2645,7 +2645,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal(friendMember.reviewInvitation, undefined)
     assert.equal((await host.request(endpoint)).value.hasLighthouseRuns, true)
     assert.deepEqual(await reviewDrafts(), [['delivery-review', friend.sessionId, 'review', 'zh']])
-    async function finishFriendReview(attempt, choice) {
+    async function finishFriendReview(attempt, choice, inspect = async () => (await read({ comparisonId: attempt.id })).arms[0]) {
       const turn = send(attempt)
       turn.catch(() => {})
       let question
@@ -2655,12 +2655,12 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
           if (!question) await delay(40)
         }
         assert.deepEqual(question?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
-        assert.equal((await read({ comparisonId: attempt.id })).arms[0].status, 'waiting-choice')
+        assert.equal((await inspect()).status, 'waiting-choice')
       } finally {
         if (question) await host.request(questions, { sessionId: attempt.sessionId, choice })
         await turn
       }
-      return (await read({ comparisonId: attempt.id })).arms[0]
+      return inspect()
     }
     const reviewSource = { kind: 'workspace', comparisonId: friend.id, arm: 'review' }
     await invoke('lighthouse-review-report', reviewSource, 422)
@@ -2759,6 +2759,45 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     ])
     assert.deepEqual(triedBoard.ownReviewPair.arms[0].deliverables, [])
     assert.deepEqual(triedBoard.ownReviewPair.arms[1].deliverables, triedResult.deliverables)
+    assert.deepEqual(triedBoard.ownReviewPair.arms.map(side => side.lessonTaskSource), [
+      reviewSource, { kind: 'workspace', comparisonId: triedDirect.id, arm: 'direct' },
+    ])
+    const carryPath = join(directory, 'carry-private')
+    const carryMaterial = 'materials/reuse-fixture.md'
+    const carryFile = join(carryPath, carryMaterial)
+    await mkdir(dirname(carryFile), { recursive: true })
+    await writeFile(carryFile, '# New private handoff notes')
+    const carryWorkspace = await host.request(workspace, { presetId: 'standard', workspacePath: carryPath })
+    const carried = new Set([carryWorkspace.sessionId])
+    for (const side of triedBoard.ownReviewPair.arms) {
+      const source = side.lessonTaskSource
+      const review = side.id === 'review'
+      const options = await invoke('lesson-task-options', source)
+      assert.equal(options.source.sessionId, side.sessionId)
+      assert.ok(options.workspaceIds.includes(carryWorkspace.workspaceId))
+      assert.ok(!options.workspaceIds.includes(triedHistory.workspaceId))
+      const fields = { ...source, workspaceId: carryWorkspace.workspaceId, material: carryMaterial, task: 'Deliver these private notes.' }
+      const preview = await invoke('lesson-task-preview', fields)
+      assert.equal(preview.source.sessionId, side.sessionId)
+      assert.deepEqual(new Set(preview.gear.map(item => item.id)), new Set(review ? ['present', 'review'] : ['present']))
+      assert.equal(preview.material, carryMaterial)
+      assert.ok(!preview.task.includes(material))
+      assert.deepEqual(new Set(await membership(carryWorkspace.workspaceId)), carried)
+      const opened = await invoke('lesson-task-open', { ...fields, token: preview.token, launchId: (review ? 'a' : 'b').repeat(32) })
+      carried.add(opened.sessionId)
+      const unsent = await history(opened.sessionId)
+      assert.equal(unsent.presetId, (await history(side.sessionId)).presetId)
+      assert.ok(noMessages(unsent))
+      const inspect = () => invoke('lesson-task-result', { sessionId: opened.sessionId })
+      if (review) await finishFriendReview(opened, 'Confirm handoff', inspect)
+      else await send(opened)
+      const proof = await inspect()
+      assert.equal(proof.materialDelivered, true)
+      assert.deepEqual(proof.entries.map(item => item.name), review ? ['ask_user_question', 'present'] : ['present'])
+      const events = (await history(opened.sessionId)).events
+      assert.equal(events.find(item => item.type === 'deliverables/presented').data.files[0].path, await realpath(carryFile))
+    }
+    assert.deepEqual((await read({ comparisonId: triedDirect.id })).ownReviewPair, triedBoard.ownReviewPair)
     assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, true)
     assert.equal((await read({ comparisonId: friendDirect.id })).ownReviewPair, undefined)
     assert.deepEqual(await invoke('lighthouse-review-report', {

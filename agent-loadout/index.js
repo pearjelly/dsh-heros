@@ -1872,8 +1872,9 @@ export async function apply(ctx) {
       }
     }
     if (result && await workspaceMaterialState(record, signal) === 'verified') {
+      const { sessionId, deliverables, lessonTaskSource } = observed
       return { language, played, decision: result.choiceLabel ? lighthouseReviewDecision(result.choiceLabel) : 'direct', ...result,
-        ...(includeSide && { side: { sessionId: observed.sessionId, deliverables: observed.deliverables } }) }
+        ...(includeSide && { side: { sessionId, deliverables, ...(lessonTaskSource && { lessonTaskSource }) } }) }
     }
   }
 
@@ -1928,7 +1929,8 @@ export async function apply(ctx) {
       { id: 'review', style: 'review', choices: [review.choiceLabel], materialDelivered: review.originalAttached,
         deliveredCount: review.side.deliverables.length, ...review.side },
       { id: 'direct', style: 'direct', choices: [], materialDelivered: true,
-        deliveredCount: direct.deliverables.length, sessionId: direct.sessionId, deliverables: direct.deliverables },
+        deliveredCount: direct.deliverables.length, sessionId: direct.sessionId, deliverables: direct.deliverables,
+        ...(direct.lessonTaskSource && { lessonTaskSource: direct.lessonTaskSource }) },
     ] }
   }
 
