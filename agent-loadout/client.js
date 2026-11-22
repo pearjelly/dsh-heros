@@ -1644,6 +1644,7 @@ window.__ModuleLoader__.load({
       { id: 'review', icon: 'lock', name: '复核后交付', gear: '交付物预览 + 交付前复核', note: '有明确的交接事项时，提示助手先用 DSH 确认卡请你确认交付或退回修改。' },
     ]
     function LighthouseReviewRoutes({ preview, sampleLanguage, disabled, onChoose, practice }) {
+      const showPracticeKit = practice && !preview.blocked && preview.routes.length > 0
       const descriptions = {
         direct: '准备好就把补给卡原件附到对话。',
         review: '交付前由你确认，或者退回修改。',
@@ -1653,13 +1654,20 @@ window.__ModuleLoader__.load({
           ? '好友选了直接交付。轮到你接班。' : '好友选了先复核。轮到你接班。')),
         h('fieldset', { className: 'moba-hero-trial-picks', disabled },
           h('legend', null, t('选你的交接打法')),
+          showPracticeKit && h('div', { className: 'moba-handoff-practice-kit' },
+            h('span', null, t('共用出装')),
+            h('div', null,
+              h('span', null, h(Glyph, { kind: 'crest', size: 14 }), t('标准模式')),
+              h('span', null, h(Glyph, { kind: 'report', size: 14 }), t('交付物预览')))),
           fieldPlaybooks.map(route => {
             const available = preview.routes.includes(route.id)
             return h('button', { key: route.id, type: 'button', className: 'moba-hero-trial-pick',
               disabled: !available, 'data-review-challenge-route': route.id, onClick: () => onChoose(route.id) },
               h(Glyph, { kind: route.icon, size: 20 }),
-              h('span', null, h('strong', null, t(route.name)), h('small', null,
-                t(available ? descriptions[route.id] : '本机暂时无法装配这套出装。'))))
+              h('span', null, h('strong', null, t(route.name)),
+                showPracticeKit && available && route.id === 'review' && h('small', { className: 'moba-handoff-added-gear' },
+                  h(Glyph, { kind: 'plus', size: 12 }), t('交付前复核')),
+                h('small', null, t(available ? descriptions[route.id] : '本机暂时无法装配这套出装。'))))
           })),
         h('details', { className: 'moba-minimal-replay-detail' },
           h('summary', null, t(practice ? '查看试玩任务' : '查看两边共用的任务')),
@@ -12074,6 +12082,13 @@ window.__ModuleLoader__.load({
       .moba-hero-trial-pick strong, .moba-hero-trial-pick small { display: block; overflow-wrap: anywhere; }
       .moba-hero-trial-pick strong { font-size: 14px; }
       .moba-hero-trial-pick small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+      .moba-handoff-practice-kit { grid-column: 1 / -1; display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
+      .moba-handoff-practice-kit > div { display: flex; flex-wrap: wrap; gap: 4px; }
+      .moba-handoff-practice-kit > div > span { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px;
+        color: var(--ink); border: 1px solid var(--line); background: var(--deep); }
+      .moba-hero-trial-pick .moba-handoff-added-gear { display: flex; align-items: flex-start; gap: 3px;
+        margin-block: 3px; color: var(--gold); }
+      .moba-handoff-added-gear svg, .moba-handoff-practice-kit svg { flex: none; }
       .moba-hero-trial-pick:hover:not(:disabled) { border-color: var(--gold); background: #273840; }
       .moba-hero-trial-pick:disabled { border-color: var(--line); background: #161c27; opacity: .85; }
       @media (max-width: 360px) {
