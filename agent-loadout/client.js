@@ -2024,7 +2024,8 @@ window.__ModuleLoader__.load({
             onClick: open }, t(opening ? '正在打开加装会话…' : '打开加装会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, workspaces, focusReplay, focusArm, firstHeroes, backLabel = '返回英雄图鉴' }) {
+    function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, workspaces, focusReplay, focusArm,
+      firstHeroes, fromTaskSessionId, backLabel = '返回英雄图鉴' }) {
       const language = useLanguage()
       const [need, setNeed] = useState('')
       const [activeId, setActiveId] = useState(comparisonId ?? '')
@@ -2099,14 +2100,14 @@ window.__ModuleLoader__.load({
         }
       }
 
-      async function prepareArmVisit(id, arm, signal) {
-        const action = 'hero-trial-open'
-        const opened = await request(action, { action, comparisonId: id, arm }, signal, language)
+      async function prepareArmVisit(id, arm, signal, taskSessionId) {
+        const action = taskSessionId ? 'hero-trial-open-from-task' : 'hero-trial-open'
+        const opened = await request(action, { action, comparisonId: id, arm, ...(taskSessionId && { sessionId: taskSessionId }) }, signal, language)
         return () => onVisit(opened.sessionId, opened.task)
       }
 
       async function openArm(id, arm) {
-        const visit = await prepareArmVisit(id, arm)
+        const visit = await prepareArmVisit(id, arm, undefined, arm === 'standard' ? fromTaskSessionId : undefined)
         visit()
       }
 
@@ -2199,8 +2200,9 @@ window.__ModuleLoader__.load({
       function renderArm(arm, config, extraResult) {
         const equipped = arm.id === minimalDeliveryReplayArm.id
         const reportable = canReportHeroHandoff(arm)
+        const visit = fromTaskSessionId && arm.id === 'standard' && arm.status === 'waiting' ? () => open(arm.id) : onVisit
         return h(ComparisonArm, { key: arm.id, arm, config, busy, canStart: true,
-          onStart: equipped ? undefined : open, task: value.task, sessionId, putTask, onVisit, fillOnVisit: false,
+          onStart: equipped ? undefined : open, task: value.task, sessionId, putTask, onVisit: visit, fillOnVisit: false,
           onLessonTask: equipped && recapPersonalSource ? undefined
             : (item, opener) => openPersonalTask(item.lessonTaskSource, opener),
           lessonTaskAction: stockTrialTaskLabels[arm.id] ?? lessonTaskLabel,
@@ -2290,20 +2292,58 @@ window.__ModuleLoader__.load({
     function PersonalTaskSourceTrial({ source, workspaces, ...props }) {
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       return h(HeroTrial, { ...props, comparisonId: source.comparisonId, focusArm: source.arm, workspaces: items,
-        backLabel: '返回任务结果' })
+        fromTaskSessionId: props.sessionId, backLabel: '返回任务结果' })
     }
 
-    function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, draftStore, hasTurn, workspaces }) {
+    const returnPersonalTaskLabel = '回到个人任务结果'
+
+    function HeroTrialTaskReturn({ tasks, onBack, onReturn }) {
+      const rows = tasks.map(item => {
+        const workspace = item.workspaceTitle && workspaceTitle({ title: item.workspaceTitle })
+        const time = new Date(item.startedAt)
+        return { ...item, workspace, time, minute: Number.isFinite(time.getTime()) ? reportTime(time) : '' }
+      })
+      const withSeconds = item => item.minute ? item.time.toLocaleString(activeLanguage.getSnapshot(),
+        { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''
+      return h(InstallDialog, { title: t('选择要返回的个人任务'), className: 'moba-lighthouse-comparison',
+        onCancel: onBack, initialFocus: '.moba-task-return-choice', onKeyDown: event => closeDialogOnEscape(event, onBack) },
+        rows.length > 0 ? h('ul', { className: 'moba-history-list' }, rows.map(item => {
+          const sameFile = rows.filter(other => other !== item && other.material === item.material && other.workspace === item.workspace)
+          const brief = sameFile.length > 0 ? item.briefPreview : undefined
+          const sameMinute = sameFile.filter(other => other.briefPreview === brief && other.minute === item.minute)
+          const timeLabel = sameMinute.length > 0 ? withSeconds(item) : item.minute
+          const sameSecond = sameMinute.filter(other => withSeconds(other) === timeLabel)
+          const suffix = item.sessionId.slice(-8)
+          const shortId = sameSecond.length > 0 && (sameSecond.some(other => other.sessionId.endsWith(suffix)) ? item.sessionId : suffix)
+          return h('li', { key: item.sessionId, className: 'moba-history-entry' },
+            h('header', null, h('div', null, h('h3', null, item.material), item.workspace && h('p', null, item.workspace)),
+              timeLabel && h('time', { dateTime: item.time.toISOString() }, timeLabel)),
+            brief && h('p', null, brief),
+            shortId && h('p', null, t('会话') + ' · ', h('code', null, shortId)),
+            h('div', { className: 'moba-history-card-actions' },
+              h('button', { type: 'button', className: 'moba-roster-open moba-task-return-choice',
+                'aria-label': [t(returnPersonalTaskLabel), item.material, item.workspace, brief, timeLabel, shortId].filter(Boolean).join(' · '),
+                onClick: () => onReturn(item.sessionId) }, t(returnPersonalTaskLabel))))
+        })) : h('p', { className: 'moba-empty', role: 'status' }, t('找不到本次任务的结果。')),
+        h('div', { className: 'moba-install-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: onBack }, t('返回试玩会话'))))
+    }
+
+    function HeroTrialAnchor({ member, sessionId, request, onVisit, onReturnTask, consumeDraft, putTask, draftStore, hasTurn, workspaces }) {
       const language = useLanguage()
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [open, setOpen] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
       const [personalSource, setPersonalSource] = useState(null)
       const [replayOpen, setReplayOpen] = useState(false)
+      const [returnTaskOpen, setReturnTaskOpen] = useState(false)
       const trigger = useRef(null)
       const personalTrigger = useRef(null)
       const replayTrigger = useRef(null)
+      const returnTaskTrigger = useRef(null)
       const availablePersonalTask = member.lessonTaskSource
+      const returnTasks = member.returnTasks ?? empty
+      const singleReturnTask = returnTasks.length === 1 ? returnTasks[0] : undefined
       const availableReplay = member.arm === 'minimal' && member.canReplayMinimalDelivery === true
       const verifiedDeliveryReplay = member.verifiedDeliveryReplay === true
       const taskPending = member.firstTaskPending && !hasTurn
@@ -2330,6 +2370,16 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (replayTrigger.current ?? trigger.current)?.focus())
       }
 
+      function closeReturnTask() {
+        setReturnTaskOpen(false)
+        requestAnimationFrame(() => (returnTaskTrigger.current ?? trigger.current)?.focus())
+      }
+
+      function returnToTask(nextSessionId) {
+        setReturnTaskOpen(false)
+        onReturnTask(nextSessionId)
+      }
+
       async function loadReportCode(signal) {
         const action = 'hero-trial-handoff-report'
         const report = await request(action, { action, comparisonId: member.id, arm: member.arm }, signal, language)
@@ -2340,9 +2390,14 @@ window.__ModuleLoader__.load({
 
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor', 'data-task-pending': taskPending || undefined,
-          'data-hero-delivery-replay': availableReplay || undefined, 'data-hero-report-copy': canCopyReport || undefined },
+          'data-hero-delivery-replay': availableReplay || undefined, 'data-hero-report-copy': canCopyReport || undefined,
+          'data-hero-task-return': returnTasks.length > 0 || undefined },
           h('div', null, h('strong', null, t(heroTrialTitle)), hero && h('span', null, t(hero.name))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
+            returnTasks.length > 0 && h('button', { ref: returnTaskTrigger, type: 'button', className: 'moba-settlement-button',
+              'aria-haspopup': !singleReturnTask ? 'dialog' : undefined,
+              'aria-label': singleReturnTask ? t(returnPersonalTaskLabel) + ' · ' + singleReturnTask.material : undefined,
+              onClick: () => singleReturnTask ? returnToTask(singleReturnTask.sessionId) : setReturnTaskOpen(true) }, t(returnPersonalTaskLabel)),
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setOpen(true) }, t(verifiedDeliveryReplay ? '查看换装战报' : heroTrialView)),
             canCopyReport && h(LocalCopyButton, { key: member.id + ':' + member.arm, loadText: loadReportCode,
@@ -2361,6 +2416,7 @@ window.__ModuleLoader__.load({
             : verifiedDeliveryReplay ? h('p', { role: 'status' }, t('加装后已附上补给卡原件，符合接班需求。'))
             : availableReplay ? h('p', { role: 'status' }, t('这局交接了文字，接班人还需要可打开的原件。'))
             : !hasTurn && !availablePersonalTask && draftStatus && h('p', { role: 'status' }, t(comparisonDraftNotices[draftStatus]))),
+        returnTaskOpen && h(HeroTrialTaskReturn, { tasks: returnTasks, onBack: closeReturnTask, onReturn: returnToTask }),
         replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: member.id, onBack: closeReplay,
           backLabel: '返回试玩会话', onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
         personalSource && h(PersonalLoadoutTask, { source: personalSource, workspaces: items, request,
@@ -9901,7 +9957,7 @@ window.__ModuleLoader__.load({
         }))
     }
 
-    function MatchEquipment({ sessionId, blankSession, request, openLobby, openContinuation, openDraftSession,
+    function MatchEquipment({ sessionId, blankSession, request, openLobby, openContinuation, openDraftSession, openTaskResult, consumeTaskResult,
       consumeTaskDraft, putTaskDraft, draftStore, send, workspaces }) {
       const language = useLanguage()
       const id = useId()
@@ -10243,6 +10299,9 @@ window.__ModuleLoader__.load({
           'data-level': snapshot.heroRank.level }, 'Lv.' + snapshot.heroRank.level),
         h('span', null, snapshot.heroName))
       const taskResult = snapshot?.lessonTaskResult || snapshot?.armoryTaskResult
+      useEffect(() => {
+        if (taskResult && taskResultTrigger.current && consumeTaskResult(sessionId)) taskResultTrigger.current.click()
+      }, [sessionId, taskResult, consumeTaskResult])
       const taskResultButton = taskResult ? h('button', { ref: taskResultTrigger, type: 'button', className: 'moba-settlement-button',
         'aria-controls': id, onClick: event => show(event, settlementAction) }, t('查看任务结果')) : undefined
       const armoryReviewButton = snapshot?.armoryTaskResult && snapshot.armoryReview ? h('button', { ref: armoryReviewTrigger,
@@ -10271,7 +10330,8 @@ window.__ModuleLoader__.load({
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
         snapshot?.heroTrial && h(HeroTrialAnchor, { key: sessionId, member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
-          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, draftStore, hasTurn: Boolean(snapshot.running || receipt), workspaces }),
+          onReturnTask: openTaskResult, consumeDraft: consumeTaskDraft, putTask: putTaskDraft, draftStore,
+          hasTurn: Boolean(snapshot.running || receipt), workspaces }),
         snapshot?.lighthouseComparison && h(RunComparisonAnchor, {
           kind: 'lighthouse', member: snapshot.lighthouseComparison, sessionId, request, onVisit: openDraftSession,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), onUse: reuseComparisonLoadout,
@@ -11621,8 +11681,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) { grid-template-columns: minmax(0, 1fr); }
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       @media (max-width: 600px) {
-        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy]) { grid-template-columns: minmax(0, 1fr); }
-        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
+        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return]) { grid-template-columns: minmax(0, 1fr); }
+        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       }
       .moba-lighthouse-anchor-actions .moba-settlement-button { white-space: normal; }
       .moba-lighthouse-anchor > div > span { color: #b8ded4; }
@@ -12007,10 +12067,12 @@ window.__ModuleLoader__.load({
         } : null
         let returnDraft
         let sessionTaskDraft
+        let taskResultTarget
         function consumeReturnDraft(draft) {
           if (returnDraft === draft) returnDraft = undefined
         }
         function openLobby(sessionId, snapshot, { selectionPresetId, followUp, inspect, relaySetup, flagId, proven } = {}) {
+          taskResultTarget = undefined
           const workspaces = ctx.workspaces.list.getSnapshot().items
           const workspace = workspaces.find(item => item.workspaceId === proven?.workspaceId) ?? workspaces.find(item => item.sessionIds.includes(sessionId))
           const projection = ctx.sessions.list.getSnapshot().byId[sessionId]?.projectionValues?.agentPreset
@@ -12038,8 +12100,19 @@ window.__ModuleLoader__.load({
           }
         }
         function openDraftSession(sessionId, task) {
+          taskResultTarget = undefined
           sessionTaskDraft = task ? { sessionId, task } : undefined
           ctx.uiWorkspace.openSession(sessionId)
+        }
+        function openTaskResult(sessionId) {
+          sessionTaskDraft = undefined
+          taskResultTarget = sessionId
+          ctx.uiWorkspace.openSession(sessionId)
+        }
+        function consumeTaskResult(sessionId) {
+          if (taskResultTarget !== sessionId) return false
+          taskResultTarget = undefined
+          return true
         }
         function consumeTaskDraft(sessionId) {
           if (sessionTaskDraft?.sessionId !== sessionId) return
@@ -12109,7 +12182,7 @@ window.__ModuleLoader__.load({
             const id = sessionId ?? session?.sessionId
             const blankSession = session?.blank === true && !session.running && !session.promptAttempted
             return id ? h(WorkspaceSetupContext.Provider, { value: workspaceSetup },
-              h(MatchEquipment, { key: id, sessionId: id, blankSession, request, openLobby, send, openDraftSession,
+              h(MatchEquipment, { key: id, sessionId: id, blankSession, request, openLobby, send, openDraftSession, openTaskResult, consumeTaskResult,
                 consumeTaskDraft, putTaskDraft, draftStore, workspaces: ctx.workspaces.list,
                 openContinuation: next => ctx.uiWorkspace.openSession(next) })) : null
           }))

@@ -4217,6 +4217,60 @@ export async function apply(ctx) {
     }
   }
 
+  function standardReturnDirectory(comparisonId) {
+    return join(heroTrials.armDirectory(comparisonId), 'personal-returns')
+  }
+
+  function personalTaskBrief(task) {
+    return task.split('\n').slice(2, -1).join('\n').trim()
+  }
+
+  async function openStandardFromPersonal({ sessionId, comparisonId, arm }, english, signal) {
+    const unavailable = '无法从这次个人任务打开标准模式试玩。'
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error(unavailable)
+    const original = await observeLessonTask(sessionId, signal, true)
+    const source = original && await pendingStandardTrial(original, signal)
+    if (!source || source.comparisonId !== comparisonId || source.arm !== arm) throw new Error(unavailable)
+    const waiting = (await heroTrials.readArm(comparisonId, arm))?.opened === true
+    const opened = await openComparisonArm(heroTrials, source, english, signal)
+    try {
+      await saveEntry(standardReturnDirectory(comparisonId), sessionId, { startedAt: Date.now() }, { exclusive: true })
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+    }
+    updates.notify(opened.sessionId)
+    const { task, ...reply } = opened
+    return waiting ? reply : { ...reply, task }
+  }
+
+  async function standardReturnTasks(record, signal) {
+    const directory = standardReturnDirectory(record.id)
+    const entries = await readdir(directory).catch(() => [])
+    const ids = entries.filter(file => file.endsWith('.json')).map(file => file.slice(0, -5))
+      .filter(id => heroAlternateSessionId.test(id))
+    const tasks = await Promise.all(ids.map(async sessionId => {
+      try {
+        const { startedAt } = JSON.parse(await readFile(join(directory, sessionId + '.json'), 'utf8'))
+        if (!Number.isSafeInteger(startedAt) || startedAt < 0) return
+        const original = await observeLessonTask(sessionId, signal, true)
+        if (!original || original.launch.source?.comparisonId !== record.id ||
+          (await heroAlternateTaskOption(sessionId, original, signal))?.arm !== 'standard') return
+        const { workspaceId, material } = original.target
+        const workspaceTitle = ctx.get('workspaceRegistry')?.get(workspaceId)?.title
+        return { sessionId, material, workspaceTitle, startedAt, task: original.target.task }
+      } catch {
+        signal?.throwIfAborted()
+      }
+    }))
+    const eligible = tasks.filter(Boolean).sort((a, b) => b.startedAt - a.startedAt || a.sessionId.localeCompare(b.sessionId))
+    return eligible.map(({ task, ...item }) => {
+      if (!eligible.some(other => other.sessionId !== item.sessionId &&
+        other.material === item.material && other.workspaceTitle === item.workspaceTitle)) return item
+      const briefPreview = Array.from(personalTaskBrief(task).replace(/\s+/gu, ' ')).slice(0, 120).join('')
+      return { ...item, briefPreview }
+    })
+  }
+
   async function openHeroAlternateTask({ sessionId, token }, english, signal) {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error(heroAlternateUnavailable)
     const launchId = createHash('sha256').update(JSON.stringify([planTaskOwner, 'hero-alternate', sessionId])).digest('hex').slice(0, 32)
@@ -5016,7 +5070,7 @@ export async function apply(ctx) {
       .map(({ id, name, kind, xp, sourceName }) => ({ id, name, kind, xp, ...(sourceName && { sourceName }) }))
     const workspace = canContinue && !evidenceSource && ctx.get('workspaceRegistry')?.list()
       .find(item => item.path === cwd && item.sessionIds.includes(sessionId))
-    const brief = launch.task.split('\n').slice(2, -1).join('\n').trim()
+    const brief = personalTaskBrief(launch.task)
     let rematchSource = original?.canReuse ? reference : undefined
     let rebaseline = !armory && workspace && brief ? { workspaceId: workspace.id, material: launch.material, brief } : undefined
     let armoryDraft, armoryReason
@@ -6524,11 +6578,8 @@ export async function apply(ctx) {
     path: route + '/locale/en', methods: ['GET'], requestBody: 'buffered',
     fetch: () => Response.json(englishStrings, { headers: { 'Cache-Control': 'no-cache' } }),
   }))
-  ctx.effect(() => ctx.connection.fetch.register({
-    path: route + '/session',
-    methods: ['GET'],
-    requestBody: 'buffered',
-    async fetch(request) {
+  ctx.effect(() => {
+    async function readSession(request) {
       const sessionId = new URL(request.url).searchParams.get('sessionId')
       const [value, savedTask] = await Promise.all([sessionEquipment(sessionId), planTaskSession(sessionId, request.signal).catch(() => undefined)])
       const comparison = lighthouseComparisons.member(sessionId)
@@ -6588,7 +6639,11 @@ export async function apply(ctx) {
               value.heroTrial = { ...heroTrial, firstTaskPending: true, ...(observed.presetChanged && { presetChanged: true }) }
             } else if (stockTask) {
               const lessonTaskSource = await stockTrialTaskReference(record, observed, request.signal)
-              if (lessonTaskSource) value.heroTrial = { ...heroTrial, lessonTaskSource }
+              if (lessonTaskSource) {
+                const returnTasks = heroTrial.arm === 'standard' && record.need === 'original'
+                  ? await standardReturnTasks(record, request.signal) : []
+                value.heroTrial = { ...heroTrial, lessonTaskSource, ...(returnTasks.length && { returnTasks }) }
+              }
             } else if (canReplayHeroDelivery(record, observed) && !(await heroTrials.readArm(heroTrial.id, lighthouseHeroDelivery))?.opened) {
               value.heroTrial = { ...heroTrial, canReplayMinimalDelivery: true }
             }
@@ -6613,8 +6668,21 @@ export async function apply(ctx) {
       }
       return Response.json({ ok: true, value: englishRequest(request) ? localizeDisplay(value) : value },
         { headers: { 'Cache-Control': 'no-store' } })
-    },
-  }))
+    }
+    return ctx.connection.fetch.register({
+      path: route + '/session',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      async fetch(request) {
+        try {
+          return await readSession(request)
+        } catch (error) {
+          if (!request.signal.aborted) throw error
+          return new Response(null, { status: 204 })
+        }
+      },
+    })
+  })
   ctx.on('tools/change', () => updates.notify(), { global: true })
   ctx.on('agent-loadout/executor-changed', scope => {
     if (!scope) return updates.notify()
@@ -6768,6 +6836,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
         else if (selection?.action === 'hero-trial-create') value = await createHeroTrial(selection, english, request.signal)
         else if (selection?.action === 'hero-trial-open') value = await openComparisonArm(heroTrials, selection, english, request.signal)
+        else if (selection?.action === 'hero-trial-open-from-task') value = await openStandardFromPersonal(selection, english, request.signal)
         else if (selection?.action === 'hero-trial-replay-preview') value = (await checkHeroDeliveryReplay(heroTrials.read(selection.comparisonId), request.signal)).view
         else if (selection?.action === 'hero-trial-replay-open') value = await openHeroDeliveryReplay(selection, english, request.signal)
         else if (selection?.action === 'hero-trial') {

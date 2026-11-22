@@ -9,6 +9,7 @@ import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { digestWorkspaceMaterial } from '../match-comparisons.js'
 import { createGitModule, gitModuleName, moduleName, moduleVersion, name as marketPackage, startMarket, version as marketVersion } from './fixtures/market-fixture.mjs'
 
 const exec = promisify(execFile)
@@ -1826,6 +1827,13 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const ownContent = '# 舞台设备交接台账\n\n存放：工作室东侧 3 号柜\n已点验：2 台备用对讲机、1 根备用天线。\n'
     await mkdir(join(ownWorkspace, ownFolder), { recursive: true })
     await writeFile(ownPath, ownContent)
+    const canonicalOwnWorkspace = await realpath(ownWorkspace)
+    const canceledMaterial = new AbortController()
+    const interruptedDigest = digestWorkspaceMaterial(canonicalOwnWorkspace, ownMaterial, canceledMaterial.signal)
+    canceledMaterial.abort()
+    await assert.rejects(interruptedDigest, { name: 'AbortError' })
+    assert.equal(await digestWorkspaceMaterial(canonicalOwnWorkspace, ownMaterial),
+      createHash('sha256').update(ownContent).digest('hex'))
     const method = 'workspace/create'
     const rpcId = randomUUID()
     const registered = await host.request('/api/' + method, { type: 'client-request', rpcId, method,
@@ -2162,6 +2170,14 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const fromReplay = await invoke('lesson-task-open', { ...ownInput, token: checkedOwn.token, launchId: launchId('c') })
     assert.equal((await invoke('lesson-task-result', { sessionId: fromReplay.sessionId })).sourceTrial, undefined)
     await send(fromReplay)
+    const otherOwnInput = { ...ownInput, material: newMaterial, task: '清点备用补给并交付这份原件。' }
+    const checkedOther = await invoke('lesson-task-preview', otherOwnInput)
+    const otherOwn = await invoke('lesson-task-open', { ...otherOwnInput, token: checkedOther.token, launchId: launchId('d') })
+    await send(otherOwn)
+    const sameFileInput = { ...ownInput, task: '核对原文件的存放地点，再附上原件。' }
+    const checkedSameFile = await invoke('lesson-task-preview', sameFileInput)
+    const sameFileOwn = await invoke('lesson-task-open', { ...sameFileInput, token: checkedSameFile.token, launchId: launchId('e') })
+    await send(sameFileOwn)
     const differentTrial = await create(launchId('d'), 'original')
     assert.equal((await read()).id, differentTrial.id)
     const lessonResult = () => invoke('lesson-task-result', { sessionId: fromReplay.sessionId })
@@ -2174,17 +2190,40 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     await appendFile(ownPath, '\nEdited after completing the handoff.\n')
     assert.equal((await lessonResult()).sourceTrial, undefined)
     await writeFile(ownPath, ownContent)
-    const standardPractice = await open(sourceHint.comparisonId, sourceHint.arm)
+    const openStandardFromTask = (sessionId, source = sourceHint, status) =>
+      invoke('hero-trial-open-from-task', { ...source, sessionId }, status)
+    await openStandardFromTask(fromReplay.sessionId, { ...sourceHint, comparisonId: differentTrial.id }, 422)
+    await openStandardFromTask(standardOwn.sessionId, sourceHint, 422)
+    assert.deepEqual(await nativeSessions(), beforeSourceVisit)
+    const standardPractice = await openStandardFromTask(fromReplay.sessionId)
     assert.notEqual(standardPractice.sessionId, fromReplay.sessionId)
     assert.equal(standardPractice.task, startingTrial.task)
     assert.ok(!(await history(standardPractice.sessionId)).events.some(event => event.type === 'turn/start'))
     assert.deepEqual((await lessonResult()).sourceTrial, sourceHint)
+    const { task: _practiceTask, ...pendingStandard } = standardPractice
+    assert.deepEqual(await Promise.all([
+      openStandardFromTask(fromReplay.sessionId), openStandardFromTask(otherOwn.sessionId), openStandardFromTask(sameFileOwn.sessionId),
+    ]), [pendingStandard, pendingStandard, pendingStandard])
+    const standardMember = async () => (await equipmentIn(host, standardPractice.sessionId)).heroTrial
+    assert.equal((await standardMember()).returnTasks, undefined)
     await send(standardPractice)
     const stockPractice = await history(standardPractice.sessionId)
     assert.deepEqual(traceTools(stockPractice).map(event => event.data.name), ['read', 'present'])
     assert.deepEqual(traceFiles(stockPractice).map(file => file.path), [join(stockPractice.workspacePath, material)])
     assert.equal((await lessonResult()).sourceTrial, undefined)
     assert.deepEqual((await lessonResult()).alternateTask, { arm: 'standard' })
+    await openStandardFromTask(fromReplay.sessionId, sourceHint, 422)
+    const returns = (await standardMember()).returnTasks
+    assert.deepEqual(new Set(returns.map(item => item.sessionId)), new Set([fromReplay.sessionId, otherOwn.sessionId, sameFileOwn.sessionId]))
+    assert.equal(returns.find(item => item.sessionId === fromReplay.sessionId)?.briefPreview, ownInput.task)
+    assert.equal(returns.find(item => item.sessionId === sameFileOwn.sessionId)?.briefPreview, sameFileInput.task)
+    assert.equal(returns.find(item => item.sessionId === otherOwn.sessionId)?.material, newMaterial)
+    assert.equal(returns.find(item => item.sessionId === otherOwn.sessionId)?.briefPreview, undefined)
+    await appendFile(ownPath, '\nChanged again after both practice handoffs.\n')
+    assert.deepEqual((await standardMember()).returnTasks?.map(item => item.sessionId), [otherOwn.sessionId])
+    await writeFile(ownPath, ownContent)
+    assert.deepEqual((await standardMember()).returnTasks, returns)
+    assert.ok(!JSON.stringify(await shareHandoff(startingTrial.id, 'standard')).includes(fromReplay.sessionId))
     const privateAlternate = await alternatePreview(fromReplay.sessionId)
     assert.equal(privateAlternate.material, ownMaterial)
     assert.equal(privateAlternate.task, fromReplay.task)
@@ -2278,6 +2317,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
 
     await host.stop()
     host = await startHost({ ...env, DSH_LOADOUT_TEST_WRONG_LIGHTHOUSE_CARD: '1' }, patch)
+    assert.deepEqual((await standardMember()).returnTasks, returns)
     assert.deepEqual(await read(trial.id), replayed)
     assert.deepEqual(await open(trial.id, 'standard'), standard)
     assert.deepEqual(await openReplay(trial.id, replayPreview.token), replay)

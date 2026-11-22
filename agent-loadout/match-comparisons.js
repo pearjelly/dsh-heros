@@ -161,6 +161,7 @@ export function validRematchComparison(record) {
 }
 
 export async function digestWorkspaceMaterial(cwd, material, signal) {
+  signal?.throwIfAborted()
   const filename = join(cwd, material)
   if (!(await lstat(filename)).isFile()) throw new Error('Not a regular file')
   const resolved = await realpath(filename)
@@ -173,8 +174,15 @@ export async function digestWorkspaceMaterial(cwd, material, signal) {
     const before = await file.stat({ bigint: true })
     if (!before.isFile()) throw new Error('Not a regular file')
     const hash = createHash('sha256')
-    for await (const chunk of file.createReadStream({ autoClose: false, signal })) hash.update(chunk)
+    const buffer = Buffer.allocUnsafe(64 * 1024)
+    for (;;) {
+      signal?.throwIfAborted()
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, null)
+      if (!bytesRead) break
+      hash.update(buffer.subarray(0, bytesRead))
+    }
     const after = await file.stat({ bigint: true })
+    signal?.throwIfAborted()
     if (before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
       throw new Error('Material changed while reading')
     }
