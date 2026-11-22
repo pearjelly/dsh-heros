@@ -2927,9 +2927,9 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     assert.deepEqual(pausedReport.local, pausedDecision)
     assert.deepEqual(decodeCode(pausedReport.code, 'DSHR2.'), { sample: challenge.sample, ...pausedDecision })
     assert.deepEqual(await receive('lighthouse-evidence-report-compare', friendReport),
-      { local: pausedDecision, friend: qualifiedDecision })
+      { local: pausedDecision, code: pausedReport.code, friend: qualifiedDecision })
     assert.deepEqual(await invoke('lighthouse-evidence-report-compare', { comparisonId: lower.id, code: pausedReport.code }),
-      { local: qualifiedDecision, friend: pausedDecision })
+      { local: qualifiedDecision, code: qualifiedReport.code, friend: pausedDecision })
     for (const change of [{ sample: 'unknown-sample' }, { choice: 'unverified' }, { delivered: 1 }, { sessionId: lower.sessionId }]) {
       const invalid = encodeCode({ sample: challenge.sample, ...qualifiedDecision, ...change }, 'DSHR2.')
       await receive('lighthouse-evidence-report-compare', { comparisonId: accepted.id, code: invalid }, 422)

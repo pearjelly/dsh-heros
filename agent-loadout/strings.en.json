@@ -1412,6 +1412,8 @@
   "请先完成并核验一局缺证取舍。": "Complete a verified Missing key evidence round first.",
   "分享本局取舍": "Share this decision",
   "对照好友取舍": "Compare a friend's decision",
+  "复制我的取舍码": "Copy my decision code",
+  "我的取舍码": "My decision code",
   "取舍码包含公开样例版本、实际选择和是否交付。": "The report code carries the public sample version, recorded decision, and whether a file was delivered.",
   "粘贴好友的灯塔取舍码，对照同一份缺证样例里各自的选择和交付。": "Paste your friend's report code to compare your recorded decisions and deliveries on the same Lighthouse sample.",
   "缺证时，你们怎么选？": "What did you each choose when evidence was missing?",

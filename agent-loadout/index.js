@@ -1564,7 +1564,7 @@ export async function apply(ctx) {
     const local = observedLighthouseEvidenceReport(record, arm, materialState)
     if (!local) throw new Error(unavailable)
     signal?.throwIfAborted()
-    return friend ? { local, friend } : { local, code: encodeLighthouseEvidenceReport(local.choice, local.delivered) }
+    return { local, code: encodeLighthouseEvidenceReport(local.choice, local.delivered), ...(friend && { friend }) }
   }
 
   async function shareLighthouseChallenge({ comparisonId }, signal) {

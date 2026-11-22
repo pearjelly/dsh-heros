@@ -1737,9 +1737,11 @@ window.__ModuleLoader__.load({
       const [result, setResult] = useState(null)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
+      const [replyCodeVisible, setReplyCodeVisible] = useState(false)
       const [busy, setBusy] = useState(false)
       const pending = useRef(null)
       const field = useRef(null)
+      const replyField = useRef(null)
       const heading = useRef(null)
       const share = report.mode === 'share'
       const evidence = report.evidence === true
@@ -1760,12 +1762,20 @@ window.__ModuleLoader__.load({
         return () => abort.abort()
       }, [share, shareAction, request, comparisonId, report.arm, language])
       useEffect(() => { if (!share && result) heading.current?.focus() }, [share, result])
+      useEffect(() => {
+        if (replyCodeVisible) {
+          replyField.current?.focus()
+          replyField.current?.select()
+        }
+      }, [replyCodeVisible])
 
       async function check(event) {
         event.preventDefault()
         const code = input.trim()
         if (pending.current || !code) return
         setResult(null)
+        setNotice('')
+        setReplyCodeVisible(false)
         if (input.length > lighthouseHandoffReportCodeLimit || !codePattern.test(code)) {
           setError(t(invalidCode))
           field.current?.focus()
@@ -1788,14 +1798,28 @@ window.__ModuleLoader__.load({
       }
 
       async function copy() {
+        if (!result?.code) return
         try {
           await navigator.clipboard.writeText(result.code)
           setNotice(t('战报码已复制。'))
         } catch {
-          field.current?.focus()
-          field.current?.select()
+          if (share || replyCodeVisible) {
+            const target = share ? field.current : replyField.current
+            target?.focus()
+            target?.select()
+          } else {
+            setReplyCodeVisible(true)
+          }
           setNotice(t('战报码已选中，可以手动复制。'))
         }
+      }
+
+      function changeInput(event) {
+        setInput(event.target.value)
+        setResult(null)
+        setError('')
+        setNotice('')
+        setReplyCodeVisible(false)
       }
 
       function renderSide(side, title) {
@@ -1832,12 +1856,17 @@ window.__ModuleLoader__.load({
             !share && h('label', null, t('好友战报码'),
               h('textarea', { className: 'moba-share-code', ref: field, value: input, rows: 3, maxLength: lighthouseHandoffReportCodeLimit + 1,
                 readOnly: busy, spellCheck: false,
-                autoComplete: 'off', autoCapitalize: 'off', onChange: event => { setInput(event.target.value); setResult(null); setError('') } })),
+                autoComplete: 'off', autoCapitalize: 'off', onChange: changeInput })),
             (busy || share && !result && !error) && h('p', { role: 'status' }, t('正在核对战报…')),
             error && h('p', { className: 'moba-alert', role: 'alert' }, error),
             result && h('section', { className: 'moba-handoff-outcome' },
               h('h3', { ref: heading, tabIndex: -1 }, evidence ? t('缺证时，你们怎么选？') :
                 h(Fragment, null, t('接班人需要什么？'), ' ', t(need.name))),
+              evidence && comparison && result.code && h('div', { className: 'moba-detail-actions' },
+                h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制我的取舍码'))),
+              replyCodeVisible && result.code && h('label', null, t('我的取舍码'),
+                h('textarea', { ref: replyField, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
+                  spellCheck: false, onFocus: event => event.currentTarget.select() })),
               h('div', { className: 'moba-lighthouse-arms moba-handoff-report-grid' },
                 renderSide(result.local, evidence ? '本机核对的取舍' : '本机核对的交接'),
                 comparison && renderSide(comparison, evidence ? '好友分享的取舍' : '好友分享的交接')),
