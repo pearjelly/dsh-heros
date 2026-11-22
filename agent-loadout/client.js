@@ -6687,14 +6687,16 @@ window.__ModuleLoader__.load({
       }
 
       const source = state?.source
+      const visit = sessionId => onVisit(sessionId, sessionId === source.sessionId
+        ? { id: plan.id, revision: plan.revision, name: plan.name } : undefined)
       return h(Fragment, null,
         h('button', { type: 'button', className: handoff ? 'moba-roster-open moba-plan-source-action' : 'moba-roster-open',
           ref: trigger, disabled: Boolean(state?.loading), 'aria-haspopup': 'dialog', onClick: open }, t('查看实战来源')),
         state?.loading && h('p', { className: 'moba-plan-note', role: 'status' }, t('正在核对实战来源…')),
         state?.error && h('p', { className: 'moba-alert', role: 'alert' }, state.error),
-        source && (handoff ? h(HandoffSourceDialog, { source, planName: plan.name, onBack: back, onVisit })
+        source && (handoff ? h(HandoffSourceDialog, { source, planName: plan.name, onBack: back, onVisit: visit })
           : h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId, testedSourceArm: source.arm, evidenceReplayHint: true,
-            request, onVisit, onClose: back, onBack: back, backLabel: t('返回方案库') })))
+            request, onVisit: visit, onClose: back, onBack: back, backLabel: t('返回方案库') })))
     }
 
     function sameReviewedDraft(draft, reviewed) {
@@ -6703,7 +6705,7 @@ window.__ModuleLoader__.load({
         draft.equipmentIds.every(id => draft.equipmentSources?.[id] === reviewed.equipmentSources?.[id])
     }
 
-    function BuildPlans({ plans, initialMode, initialTaskReference, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport,
+    function BuildPlans({ plans, initialMode, initialTaskReference, initialPlanReference, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport,
       workspaces, workspaceId, onOpenTask, onOpenSource, evidenceSave, pairSaveEvidence }) {
       const [editor, setEditor] = useState(initialMode === 'create' ? { mode: 'create' } : null)
       const [sharing, setSharing] = useState(null)
@@ -6715,10 +6717,12 @@ window.__ModuleLoader__.load({
       const [name, setName] = useState('')
       const [note, setNote] = useState('')
       const [query, setQuery] = useState('')
-      const [picked, setPicked] = useState('')
+      const [picked, setPicked] = useState(() => initialPlanReference
+        ? plans.find(item => planMatchesRevision(item, initialPlanReference))?.id ?? '' : '')
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const dialog = useRef(null)
+      const returnedPlanRadio = useRef(null)
       const saving = useRef(false)
       const openingTask = useRef(false)
       const focus = useRef(null)
@@ -6733,8 +6737,9 @@ window.__ModuleLoader__.load({
       const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
       const visible = plans.filter(item => terms.every(term =>
         [item.name, item.heroName, item.note].some(text => text.toLowerCase().includes(term))))
-      const plan = visible.find(item => item.id === picked)
-        ?? visible.find(item => item.heroId === current.hero?.id) ?? visible[0]
+      const unavailableReturn = initialPlanReference && !picked
+      const plan = unavailableReturn ? undefined
+        : visible.find(item => item.id === picked) ?? visible.find(item => item.heroId === current.hero?.id) ?? visible[0]
       const hasAlternative = plans.some(item => item.id !== plan?.id && !item.broken)
       const retestId = plan?.hasEvidenceOrigin && !plan.broken ? plan.id : undefined
       const retestRevision = retestId ? plan.revision : undefined
@@ -6752,7 +6757,10 @@ window.__ModuleLoader__.load({
         receiptBack.current?.focus()
         return () => element.close()
       }, [])
-      useEffect(() => focus.current?.focus(), [editor?.mode])
+      useEffect(() => {
+        const target = editor ? focus.current : returnedPlanRadio.current ?? focus.current
+        target?.focus()
+      }, [editor?.mode])
       useEffect(() => {
         if (!initialTaskReference) return
         const abort = new AbortController()
@@ -6854,7 +6862,8 @@ window.__ModuleLoader__.load({
       const changedHandoff = mode === 'create' && pairSaveEvidence?.handoffKeep && !reviewedPair
       const cannotSaveDraft = (mode === 'create' || mode === 'replace') && (!canSave || changedHandoff)
       const testedSource = plan && (plan.hasHandoffOrigin || plan.hasEvidenceOrigin) && onOpenSource &&
-        h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request, onVisit: sessionId => { close(); onOpenSource(sessionId) } })
+        h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
+          onVisit: (sessionId, reference) => { close(); onOpenSource(sessionId, reference) } })
       return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
         'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan || initialTaskReference || pairPlan), 'aria-labelledby': title,
         onCancel: event => { event.preventDefault(); if (pairPlan) closePair(); else if (taskPlan) closeTask(); else if (sharing) closeSharing(); else close() },
@@ -6912,12 +6921,15 @@ window.__ModuleLoader__.load({
           h(Fragment, null,
             h('div', { className: 'moba-plan-library' },
               h('div', { className: 'moba-plan-roster' },
+                unavailableReturn && h('p', { className: 'moba-alert', role: 'alert' },
+                  t('这份方案已更新或不可用。请从出装方案重新选择。')),
                 plans.length > 0 && h('label', { className: 'moba-search' }, h(Glyph, { kind: 'search', size: 17 }),
                   h('input', { ref: focus, type: 'search', 'aria-label': t('搜索方案'), placeholder: t('搜索方案、英雄或适用情形'),
                     value: query, onChange: event => setQuery(event.target.value) })),
                 visible.length > 0 ? h('fieldset', { className: 'moba-plan-list', 'aria-label': t('预览出装方案') },
-                  visible.map(item => h('label', { key: item.id, className: 'moba-plan-option', 'data-picked': item.id === plan.id },
-                    h('input', { type: 'radio', name: group, value: item.id, checked: item.id === plan.id,
+                  visible.map(item => h('label', { key: item.id, className: 'moba-plan-option', 'data-picked': item.id === plan?.id },
+                    h('input', { type: 'radio', name: group, value: item.id, checked: item.id === plan?.id,
+                      ref: initialPlanReference?.id === item.id && plan?.id === item.id ? returnedPlanRadio : undefined,
                       onClick: () => setPicked(item.id), onChange: () => setPicked(item.id) }),
                     h(HeroArt, { id: item.heroId, art: item.heroArt, className: 'moba-avatar' }),
                     h('span', null, h('strong', null, item.name), h('small', null, item.heroName)),
@@ -7568,7 +7580,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-text', disabled: pending, onClick: onReturn }, t('回原对局'))))
     }
 
-    function Lobby({ request, workspaces, open, manage, openSource, openDraftSession, getReturnDraft, consumeReturnDraft }) {
+    function Lobby({ request, workspaces, open, manage, openSource, openPlanSource, openDraftSession, getReturnDraft, consumeReturnDraft }) {
       const language = useLanguage()
       const workspaceList = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [returning] = useState(getReturnDraft)
@@ -7627,7 +7639,8 @@ window.__ModuleLoader__.load({
       const [flagsOpen, setFlagsOpen] = useState(() => returning?.flagId ? { id: returning.flagId } : null)
       const [historicalHero, setHistoricalHero] = useState(proven?.draft.presetId ?? returning?.followUp?.heroId ?? '')
       const [journalOpen, setJournalOpen] = useState(false)
-      const [planMode, setPlanMode] = useState(proven?.save ? 'create' : '')
+      const [planMode, setPlanMode] = useState(proven?.save ? 'create' : returning?.planReference ? 'library' : '')
+      const [planReference, setPlanReference] = useState(returning?.planReference)
       const [pairSaveEvidence, setPairSaveEvidence] = useState(proven?.pairSaveEvidence)
       const [receiptTask, setReceiptTask] = useState(null)
       const receiptTaskButton = useRef(null)
@@ -8081,6 +8094,7 @@ window.__ModuleLoader__.load({
 
       function closePlans() {
         setPlanMode('')
+        setPlanReference(undefined)
         setPairSaveEvidence(undefined)
         if (receiptTask) {
           setReceiptTask(null)
@@ -8517,10 +8531,10 @@ window.__ModuleLoader__.load({
               else if (prepare) prepareEquipmentTrial(item)
             } }),
           journalOpen && h(QuestJournal, { request, onClose: () => setJournalOpen(false), onOpenMatch: openSource }),
-          data && (planMode || receiptTask) && h(BuildPlans, { initialMode: planMode, initialTaskReference: receiptTask,
+          data && (planMode || receiptTask) && h(BuildPlans, { initialMode: planMode, initialTaskReference: receiptTask, initialPlanReference: planReference,
             request, draft: loadoutDraft(), canSave: canCompare, pairSaveEvidence,
             workspaces: comparableWorkspaces, workspaceId: workspace?.workspaceId,
-            onOpenTask: ({ sessionId, task }) => openDraftSession(sessionId, task), onOpenSource: openSource,
+            onOpenTask: ({ sessionId, task }) => openDraftSession(sessionId, task), onOpenSource: openPlanSource,
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
             current: { hero: stagePreset, items: selections, removed: removedLabels },
             plans: plans.map(plan => {
@@ -10413,8 +10427,9 @@ window.__ModuleLoader__.load({
     }
 
     function MatchEquipment({ sessionId, blankSession, request, openLobby, openContinuation, openDraftSession, openTaskResult, consumeTaskResult,
-      consumeTaskDraft, putTaskDraft, draftStore, send, workspaces }) {
+      consumeTaskDraft, putTaskDraft, draftStore, send, workspaces, planSourceStore, returnToPlan }) {
       const language = useLanguage()
+      const planVisit = useSyncExternalStore(planSourceStore.subscribe, planSourceStore.getSnapshot)
       const id = useId()
       const anchor = '--moba-match-' + id.replace(/[^a-zA-Z0-9-]/g, '')
       const popover = useRef(null)
@@ -10786,6 +10801,10 @@ window.__ModuleLoader__.load({
             else { setArmoryReview(null); openDraftSession(next, task) }
           } }),
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
+        planVisit?.sessionId === sessionId && h('div', { className: 'moba-settlement-commands moba-plan-source-return' },
+          h('button', { type: 'button', className: 'moba-settlement-button', 'aria-haspopup': 'dialog',
+            'aria-description': planVisit.plan.name, onClick: () => returnToPlan(planVisit) },
+          h(Glyph, { kind: 'back', size: 14 }), t('返回这份方案'))),
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
         snapshot?.heroTrial && h(HeroTrialAnchor, { key: sessionId, member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
@@ -11130,6 +11149,8 @@ window.__ModuleLoader__.load({
       .moba-splash > .moba-art-seal, .moba-comparison-portrait > .moba-art-seal { inset: 9px auto auto 9px; min-width: 35px; min-height: 22px; padding: 3px 6px; border: 1px solid currentColor; font-size: 11px; }
       .moba-comparison-portrait > .moba-art-seal { min-height: 16px; min-width: 25px; padding: 2px 4px; font-size: 9px; }
       .moba-match-strip { width: calc(100% - 2 * var(--dsh-composer-side-clearance, 16px)); max-width: var(--dsh-composer-card-max-width, 952px); min-width: 0; margin-inline: auto; }
+      .moba-plan-source-return { padding-block: 3px; }
+      .moba-plan-source-return .moba-settlement-button { min-height: 36px; }
       .moba-match-dock, .moba-settlement-ribbon { box-sizing: border-box; min-width: 0; width: 100%; border: 1px solid #775f40; border-radius: 5px; color: #f3e4c8; background: #151a25; font: inherit; font-size: 12px; color-scheme: dark; }
       .moba-match-dock { display: flex; align-items: center; gap: 7px; padding: 4px 6px; }
       .moba-settlement-ribbon { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px 9px; padding: 5px 7px; margin-bottom: 4px; }
@@ -12551,6 +12572,33 @@ window.__ModuleLoader__.load({
         let returnDraft
         let sessionTaskDraft
         let taskResultTarget
+        let planSourceVisit
+        const planSourceEvents = new EventTarget()
+        const planSourceStore = {
+          getSnapshot: () => planSourceVisit,
+          subscribe(listener) {
+            planSourceEvents.addEventListener('change', listener)
+            return () => planSourceEvents.removeEventListener('change', listener)
+          },
+        }
+        function openPlanSource(sessionId, plan) {
+          ctx.uiWorkspace.openSession(sessionId)
+          const navigation = plan && ctx.get('layout')?.beginNavigation()
+          if (!navigation) return
+          const visit = planSourceVisit = { sessionId, plan }
+          navigation.addEventListener('abort', () => {
+            if (planSourceVisit !== visit) return
+            planSourceVisit = undefined
+            planSourceEvents.dispatchEvent(new Event('change'))
+          }, { once: true })
+          planSourceEvents.dispatchEvent(new Event('change'))
+        }
+        function returnToPlan(visit) {
+          const layout = ctx.get('layout')
+          if (planSourceVisit !== visit || !layout) return
+          returnDraft = { planReference: visit.plan }
+          layout.selectPanel(panelId)
+        }
         function consumeReturnDraft(draft) {
           if (returnDraft === draft) returnDraft = undefined
         }
@@ -12666,7 +12714,7 @@ window.__ModuleLoader__.load({
             const blankSession = session?.blank === true && !session.running && !session.promptAttempted
             return id ? h(WorkspaceSetupContext.Provider, { value: workspaceSetup },
               h(MatchEquipment, { key: id, sessionId: id, blankSession, request, openLobby, send, openDraftSession, openTaskResult, consumeTaskResult,
-                consumeTaskDraft, putTaskDraft, draftStore, workspaces: ctx.workspaces.list,
+                consumeTaskDraft, putTaskDraft, draftStore, workspaces: ctx.workspaces.list, planSourceStore, returnToPlan,
                 openContinuation: next => ctx.uiWorkspace.openSession(next) })) : null
           }))
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
@@ -12674,7 +12722,7 @@ window.__ModuleLoader__.load({
           ({ sessionId }) => sessionId ? h(InteractionReturn, { sessionId, status: ctx.uiSession.sessionStatus, openLobby }) : null))
         ctx.slots.inject('main', () => ctx.slots.register(
           { name: 'main', key: panelId, inject: () => ({
-            request, workspaces: ctx.workspaces.list, manage, openSource: id => ctx.uiWorkspace.openSession(id), openDraftSession,
+            request, workspaces: ctx.workspaces.list, manage, openSource: id => ctx.uiWorkspace.openSession(id), openPlanSource, openDraftSession,
             getReturnDraft: () => returnDraft, consumeReturnDraft,
             async open(workspaceId, { presetId: agentPreset, verifyLive }, matchMode, sourceSessionId) {
               if (!matchMode && !verifyLive) return ctx.uiWorkspace.openWorkspace(workspaceId, undefined, { agentPreset })
