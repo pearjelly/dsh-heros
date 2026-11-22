@@ -9068,6 +9068,12 @@ window.__ModuleLoader__.load({
       alternate: { label: '换装局', action: '查看换装局会话' },
     }
 
+    function HeroPersonalRunEvidence({ originalAttached, tools }) {
+      return h(Fragment, null,
+        h('p', { className: 'moba-lighthouse-note' }, t(originalAttached ? '已交付所选材料。' : '未核验所选材料的附件。')),
+        tools?.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('实测工具调用'), ' · ', h('code', null, tools.join(' · '))))
+    }
+
     function HeroPersonalPairResult({ pair, onOpenMatch, onKeep, keepButtons }) {
       const heading = useId()
       return h('section', { className: 'moba-handoff-outcome', 'data-hero-personal-pair': true, 'aria-labelledby': heading },
@@ -9080,8 +9086,7 @@ window.__ModuleLoader__.load({
           return h('article', { key: run.sessionId, className: 'moba-lighthouse-arm moba-handoff-report-side' },
             h('header', null, h(HeroArt, { id: equipped ? 'minimal' : run.arm, art: hero?.art, className: 'moba-starter-hero' }),
               h('h4', null, t(label), h('span', null, t(hero?.name ?? run.arm)))),
-            h('p', { className: 'moba-lighthouse-note' }, t(run.originalAttached ? '已交付所选材料。' : '未核验所选材料的附件。')),
-            run.tools?.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('实测工具调用'), ' · ', h('code', null, run.tools.join(' · '))),
+            h(HeroPersonalRunEvidence, { originalAttached: run.originalAttached, tools: run.tools }),
             h('footer', null,
               run.canReview === true && h('button', { type: 'button', className: 'moba-roster-open', ref: keepButtons[side],
                 'aria-label': t('保留这套出装') + ' · ' + t(label), onClick: () => onKeep(side) }, t('保留这套出装')),
@@ -9115,6 +9120,9 @@ window.__ModuleLoader__.load({
       const sourceArm = source && comparisonArmConfig(source.kind, source.arm)
       const sourceLabel = source && [comparisonArmName(sourceArm, source), source.heroName].filter(Boolean).join(' · ')
       const alternateLabel = alternateTaskLabels[result?.alternateTask?.arm]
+      const reviewedRunTools = pairSide && result?.draft && result.materialDelivered === true
+        ? [...new Set(result.entries?.filter(entry => entry.type === 'tool' && entry.state === 'completed').map(entry => entry.name))]
+        : undefined
 
       useEffect(() => {
         const abort = new AbortController()
@@ -9175,6 +9183,7 @@ window.__ModuleLoader__.load({
           pairSide ? h('p', { className: 'moba-match-action-note' }, [t(heroPersonalPairSides[pairSide].label), result.hero?.name].filter(Boolean).join(' · '))
             : sourceLabel && h('p', { className: 'moba-match-action-note' }, t('练习出装') + ' · ' + sourceLabel),
           review ? result.draft && h(Fragment, null,
+            reviewedRunTools && h(HeroPersonalRunEvidence, { originalAttached: true, tools: reviewedRunTools }),
             h(PlanEquipment, { items: result.gear ?? empty, removed: result.removed ?? empty }),
             h(SharedPlanCapabilities, { comparison: result.comparison }))
             : h(Fragment, null,

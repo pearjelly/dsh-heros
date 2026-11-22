@@ -15,11 +15,11 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.157.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.158.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
-桌面版用应用随附的 CLI，把 `--profile web` 改为 `--profile desktop`，安装后退出并重新打开应用。如果已安装早期版本，先从同一 Profile 移除 `dsh-agent-loadout` 再安装。发布包沿用这个内部名称，便于兼容原有阵容。
+首次安装桌面版插件时，先打开一次 DeepSeek Harness Desktop，让应用初始化 Profile，然后完全退出。用应用随附的 CLI 安装时，把命令里的 `--profile web` 改为 `--profile desktop`。装好后重新打开应用。升级前先从同一 Profile 移除旧版 `dsh-agent-loadout`。
 
 从插件社区过来时，用上方命令安装当前版本。带版本的地址使用独立的 pnpm 缓存条目，`-w` 允许 CLI 把插件装到 Profile 工作区根目录。
 
@@ -78,7 +78,7 @@ dsh web
 
 同一本机试玩的标准模式和加装极简模式都通过原件交付核验时，用其中一套交付个人文件后，任务结果顶部会提供「用标准模式试同一任务」或「用极简模式 + 交付物预览试同一任务」。核对两套出装、原文件和原任务，再打开独立草稿并手动发送。
 
-换装局完成后，可以在任务结果并排看两局使用的工具和所选文件交付情况，也可打开各自原会话核对细节。在交付了所选原件的一侧点「保留这套出装」，核对英雄与工具后命名保存。下次开局时，可以另选材料并填写新任务。
+换装局完成后，可以在任务结果并排看两局使用的工具和所选文件交付情况，也可打开各自原会话核对细节。在交付了所选原件的一侧点「保留这套出装」，核对英雄、装备变化和本局实际调用与交付，再命名保存。下次开局时，可以另选材料并填写新任务。
 
 ## 玩一局灯塔证据取舍
 

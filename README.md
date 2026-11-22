@@ -15,11 +15,11 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.157.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.158.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
-For the desktop app, use its bundled CLI with `--profile desktop`, then quit and reopen the app. If an earlier copy is installed, remove `dsh-agent-loadout` from the same profile before installing the release. The package keeps that identifier for compatibility.
+If this is your first Desktop installation, open DeepSeek Harness Desktop once to initialize its profile. Fully quit the app before running the install command with its bundled CLI and `--profile desktop`. Reopen Desktop after installation. When upgrading, remove `dsh-agent-loadout` from the same profile before installing the release.
 
 If you came from the community catalog, use the command above to install this release. The versioned address has its own pnpm cache entry, and `-w` lets the CLI install at the profile workspace root.
 
@@ -76,7 +76,7 @@ After **Minimal + Deliverable Preview** delivers the original sample card and pa
 
 If Standard and equipped Minimal both delivered the original in the same local trial, a verified personal delivery can show **Try the same task with Standard** or **Try the same task with Minimal + Deliverable Preview** near the top of its task result. Review the two loadouts and your original file and task. Confirm to open a separate draft, then send it manually.
 
-After the alternate session finishes, its task result can show both personal runs together. See the tools that completed calls and whether each run attached the selected file. Open either native session to check the details. On a run that attached the selected original, choose **Keep this loadout** to review its hero and tools. Give the plan a name, then choose new material and write a new brief if you want to run it again.
+After the alternate session finishes, its task result can show both personal runs together. Open either native session to check the details. On a run that attached the selected original, choose **Keep this loadout**. The review shows its hero, added or removed equipment, and the actual tool calls and attachment from that run. Name the plan, then choose new material and write a new brief when you run it again.
 
 ## Play Lighthouse evidence choices
 

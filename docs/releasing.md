@@ -68,7 +68,7 @@ DSH_HOME="$smoke_home" dsh web --port 0
 - Open the DSH-Heros lobby in English, then change the host language to 中文. Check the text and entry points changed in this release in both languages.
 - Start a fresh session from the Armory, equip a hero, and complete a real turn using the equipped tools. Check the observed tool calls and the resulting Armory feedback. Change equipment and verify that the conversation resumes with the updated loadout. [Sample files and first-turn task](demo/lighthouse)
 - In a separate scratch profile, install the previous tagged bundle and create a saved loadout and session before upgrading. Keep the same pnpm store for both installs. Use the documented remove-and-add flow for `dsh-agent-loadout` in that profile with the new bundle or its tagged URL. Verify the installed version in `profiles/web/node_modules/dsh-agent-loadout/package.json`, then check that the saved loadout, progression, and session are still usable.
-- Repeat the core check in the desktop app using its matching bundled CLI and the `desktop` profile. Record the host versions and smoke results with the release notes.
+- Repeat the core check in the desktop app using its bundled CLI and the `desktop` profile. For a clean Desktop install, open the app once to initialize the profile, fully quit, install the packed bundle, then reopen. Record the host versions and smoke results with the release notes.
 
 ## Publish on GitHub
 
