@@ -6457,6 +6457,21 @@ window.__ModuleLoader__.load({
             }, t(side.open), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
+    function HandoffSourceDialog({ planName, source, onBack, onVisit }) {
+      return h(InstallDialog, { title: t('此方案保存自这局'), className: 'moba-starter-dialog',
+        onCancel: onBack, initialFocus: '.moba-plan-source-back', onKeyDown: event => closeDialogOnEscape(event, onBack) },
+        h('div', { className: 'moba-hero-replay-result' },
+          h('p', { className: 'moba-plan-note' }, h('strong', null, planName), ' · ', t(handoffStyleLabels[source.style])),
+          h(ObservedChoiceSummary, { choices: source.choices }),
+          h(HeroPersonalRunEvidence, { originalAttached: source.materialDelivered, tools: source.tools, deliveredCount: source.fileNames.length }),
+          source.fileNames.length > 0 && h('section', { className: 'moba-proven-files' },
+            h('h4', null, t('已交付的文件')), h('ul', null, source.fileNames.map((name, index) => h('li', { key: index }, name))))),
+        h('div', { className: 'moba-install-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open moba-plan-source-back', onClick: onBack }, t('返回方案库')),
+          h('button', { type: 'button', className: 'moba-start', onClick: () => onVisit(source.sessionId) },
+            t('查看原会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
     function PlanTestedSource({ plan, request, onVisit }) {
       const language = useLanguage()
       const [state, setState] = useState(null)
@@ -6474,11 +6489,11 @@ window.__ModuleLoader__.load({
         try {
           const source = await request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
           if (abort.signal.aborted) return
-          if (!source?.sessionId || (!handoff && (!source.comparisonId || !['baseline', 'rematch'].includes(source.arm)))) {
+          if (!source?.sessionId || (handoff ? !Object.hasOwn(handoffStyleLabels, source.style)
+            : !source.comparisonId || !['baseline', 'rematch'].includes(source.arm))) {
             throw new Error(t('这份方案的实测来源已不可查看。'))
           }
-          if (handoff) onVisit(source.sessionId)
-          else setState({ source })
+          setState({ source })
         } catch (reason) {
           if (!abort.signal.aborted) setState({ error: reason.message })
         } finally {
@@ -6493,12 +6508,13 @@ window.__ModuleLoader__.load({
 
       const source = state?.source
       return h(Fragment, null,
-        h('button', { type: 'button', className: 'moba-roster-open', ref: trigger, disabled: Boolean(state?.loading),
-          'aria-haspopup': handoff ? undefined : 'dialog', onClick: open }, t('查看实战来源')),
+        h('button', { type: 'button', className: handoff ? 'moba-roster-open moba-plan-source-action' : 'moba-roster-open',
+          ref: trigger, disabled: Boolean(state?.loading), 'aria-haspopup': 'dialog', onClick: open }, t('查看实战来源')),
         state?.loading && h('p', { className: 'moba-plan-note', role: 'status' }, t('正在核对实战来源…')),
         state?.error && h('p', { className: 'moba-alert', role: 'alert' }, state.error),
-        source && h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId, testedSourceArm: source.arm, evidenceReplayHint: true,
-          request, onVisit, onClose: back, onBack: back, backLabel: t('返回方案库') }))
+        source && (handoff ? h(HandoffSourceDialog, { source, planName: plan.name, onBack: back, onVisit })
+          : h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId, testedSourceArm: source.arm, evidenceReplayHint: true,
+            request, onVisit, onClose: back, onBack: back, backLabel: t('返回方案库') })))
     }
 
     function sameReviewedDraft(draft, reviewed) {
@@ -6657,6 +6673,8 @@ window.__ModuleLoader__.load({
         sameReviewedDraft(draft, pairSaveEvidence.draft) ? pairSaveEvidence : undefined
       const changedHandoff = mode === 'create' && pairSaveEvidence?.handoffKeep && !reviewedPair
       const cannotSaveDraft = (mode === 'create' || mode === 'replace') && (!canSave || changedHandoff)
+      const testedSource = plan && (plan.hasHandoffOrigin || plan.hasEvidenceOrigin) && onOpenSource &&
+        h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request, onVisit: sessionId => { close(); onOpenSource(sessionId) } })
       return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
         'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan || initialTaskReference || pairPlan), 'aria-labelledby': title,
         onCancel: event => { event.preventDefault(); if (pairPlan) closePair(); else if (taskPlan) closeTask(); else if (sharing) closeSharing(); else close() },
@@ -6726,6 +6744,7 @@ window.__ModuleLoader__.load({
                     item.broken && h('small', { className: 'moba-gallery-unavailable' }, t('不可用')))))
                   : h('p', { className: 'moba-empty', role: 'status' }, plans.length ? t('未找到匹配的方案。') : t('还没有出装方案。'))),
               plan && h('div', { className: 'moba-plan-preview' },
+                plan.hasHandoffOrigin && testedSource && h('div', { className: 'moba-plan-source-actions' }, testedSource),
                 h('div', { className: 'moba-plan-hero' },
                   h(HeroArt, { id: plan.heroId, art: plan.heroArt, className: 'moba-splash' }),
                   h('div', { className: 'moba-stage-shade' }),
@@ -6745,8 +6764,7 @@ window.__ModuleLoader__.load({
                       onClick: () => setPairPlan({ plan }) }, t('与另一份方案同题对照')),
                     canRetest && h('button', { className: 'moba-roster-open', type: 'button', ref: retestButton,
                       onClick: () => setPairPlan({ plan, evidenceRetest: options }) }, t(evidenceRetestLabel))),
-                  (plan.hasEvidenceOrigin || plan.hasHandoffOrigin) && onOpenSource && h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
-                    onVisit: sessionId => { close(); onOpenSource(sessionId) } }),
+                  !plan.hasHandoffOrigin && testedSource,
                   !plan.broken && !hasAlternative && h('p', { className: 'moba-lighthouse-note' }, t('再保存一套可用出装方案，就能做同题对照。')),
                   h('div', { className: 'moba-plan-manage' },
                     h('button', { className: 'moba-text', type: 'button', ref: shareButton,
@@ -11570,6 +11588,8 @@ window.__ModuleLoader__.load({
       .moba-plan-hero .moba-hero-title { inset: auto 14px 11px; }
       .moba-plan-details, .moba-plan-fields { display: grid; gap: 10px; padding: 14px; min-width: 0; }
       .moba-plan-note { margin: 0; color: #e0dbce; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .moba-plan-source-actions { display: grid; gap: 6px; padding: 8px 14px; border-block-end: 1px solid var(--line); }
+      .moba-plans .moba-plan-source-action { justify-self: start; min-height: 44px; }
       .moba-plan-gear { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 7px; }
       .moba-plan-gear li { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 7px 4px 4px; background: #0e141f; border: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
       .moba-plan-gear .moba-item-art { flex: none; width: 28px; }

@@ -5357,7 +5357,10 @@ export async function apply(ctx) {
     }
     buildPlans.read(id, revision)
     signal?.throwIfAborted()
-    return { sessionId }
+    const { materialDelivered, deliverables, entries } = run.evidence
+    return { sessionId, style, materialDelivered, choices: comparisonChoices(run.evidence),
+      tools: [...new Set(entries.filter(entry => entry.state === 'completed').map(entry => entry.name))],
+      fileNames: deliverables.map(file => file.name) }
   }
 
   async function readLessonTaskResult({ sessionId, review, pairSide }, signal) {

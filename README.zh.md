@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.175.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.176.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -150,7 +150,7 @@ dsh web
 
 单人灯塔练习也能接到同一条实战路线。用标准模式交付补给卡，加装交付前复核再试同题。两局通过核验后，从战报挑任一套带去做自己的任务。个人任务结束后可沿用原文件和说明试另一套。
 
-从 v0.175.0 起，从个人战报保留的出装可在方案库点 **查看实战来源**。它会打开当时选中的那局，方便回看实际选择和交付。会话链接留在本机 Profile，分享码携带可复用的出装。
+从 v0.175.0 起，从个人战报保留的出装可在方案库点 **查看实战来源**。在这里可核对该局实际选择、工具和交付文件，再回到同一份方案或打开原会话。会话链接留在本机 Profile，分享码携带可复用的出装。
 
 好友挑战或复核复赛还没发送时，回大厅点 **继续未发送的灯塔对局**，按打法和任务语言找回原草稿。
 

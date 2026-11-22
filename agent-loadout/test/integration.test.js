@@ -2930,12 +2930,18 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal(keptReview.presetId, (await history(first.opened.sessionId)).presetId)
     const keptIds = [keptDirect.id, keptReview.id].sort()
     const sources = [[keptDirect, next.sessionId, 'direct'], [keptReview, first.opened.sessionId, 'review']]
+    const expectedOrigins = new Map([
+      [next.sessionId, { sessionId: next.sessionId, style: 'direct', materialDelivered: true,
+        choices: [], tools: ['present'], fileNames: [basename(carryMaterial)] }],
+      [first.opened.sessionId, { sessionId: first.opened.sessionId, style: 'review', materialDelivered: false,
+        choices: ['Revise draft'], tools: ['ask_user_question'], fileNames: [] }],
+    ])
     await origin(originalReview, 422)
     for (const [saved, sessionId, style] of sources) {
       assert.equal(saved.hasHandoffOrigin, true)
       assert.equal(saved.hasEvidenceOrigin, undefined)
       assert.equal(saved.handoffOrigin, undefined)
-      assert.deepEqual(await origin(saved), { sessionId })
+      assert.deepEqual(await origin(saved), expectedOrigins.get(sessionId))
       assert.deepEqual((await storedPlan(saved.id)).handoffOrigin, { sessionId, style })
       const exported = await invoke('plan-share-export', { id: saved.id, revision: saved.revision })
       assert.ok(exported.code?.startsWith('DSHH1.'), JSON.stringify(exported))
@@ -2949,7 +2955,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.deepEqual(new Set(await membership(carryWorkspace.workspaceId)), new Set([...carried, next.sessionId]))
     await appendFile(carryFile, '\nThis file changed after the plans were saved.\n')
     assert.equal((await inspectNext()).handoffPair, undefined)
-    for (const [saved, sessionId] of sources) assert.deepEqual(await origin(saved), { sessionId })
+    for (const [saved, sessionId] of sources) assert.deepEqual(await origin(saved), expectedOrigins.get(sessionId))
     await writeFile(carryFile, carryText)
     assert.deepEqual((await read({ comparisonId: triedDirect.id })).ownReviewPair, triedBoard.ownReviewPair)
     assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, true)
@@ -2969,7 +2975,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal((await inspectNext()).handoffPair, undefined)
     assert.deepEqual((await inspectSoloReview()).handoffPair, soloResult.handoffPair)
     await saveSide(directSide.handoffKeep, 'Stale public source', 422)
-    for (const [saved, sessionId] of sources) assert.deepEqual(await origin(saved), { sessionId })
+    for (const [saved, sessionId] of sources) assert.deepEqual(await origin(saved), expectedOrigins.get(sessionId))
     const newMaterial = '会签 文件.md'
     const newFile = join(carryPath, newMaterial)
     await writeFile(newFile, '# Next personal handoff')
@@ -3066,7 +3072,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     await host.stop()
     host = await startHost({ ...env, DSH_LOADOUT_TEST_WRONG_LIGHTHOUSE_CARD: '1' }, patch)
     assert.deepEqual((await catalog()).plans.map(plan => plan.id).sort(), keptIds)
-    for (const [saved, sessionId] of sources) assert.deepEqual(await origin(saved), { sessionId })
+    for (const [saved, sessionId] of sources) assert.deepEqual(await origin(saved), expectedOrigins.get(sessionId))
     assert.deepEqual(await open(launchId), baseline)
     assert.deepEqual(await open('d'.repeat(32)), fresh)
     assert.deepEqual(await reviewDrafts(), [['delivery-review', savedDraft.sessionId, 'review', 'zh']])
