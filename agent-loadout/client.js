@@ -1731,7 +1731,7 @@ window.__ModuleLoader__.load({
 
     const lighthouseHandoffReportCodeLimit = 192
 
-    function LighthouseHandoffReport({ report, comparisonId, request, onBack }) {
+    function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat }) {
       const language = useLanguage()
       const [input, setInput] = useState('')
       const [result, setResult] = useState(null)
@@ -1739,7 +1739,9 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState('')
       const [replyCodeVisible, setReplyCodeVisible] = useState(false)
       const [busy, setBusy] = useState(false)
+      const [openingRepeat, setOpeningRepeat] = useState(false)
       const pending = useRef(null)
+      const repeatLaunchId = useRef(null)
       const field = useRef(null)
       const replyField = useRef(null)
       const heading = useRef(null)
@@ -1814,6 +1816,29 @@ window.__ModuleLoader__.load({
         }
       }
 
+      async function openRepeat() {
+        if (pending.current || !result?.friend || !onOpenRepeat) return
+        if (repeatLaunchId.current === null) {
+          const bytes = crypto.getRandomValues(new Uint8Array(16))
+          repeatLaunchId.current = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+        }
+        const abort = pending.current = new AbortController()
+        setOpeningRepeat(true)
+        setError('')
+        let opened
+        try {
+          const action = 'lighthouse-evidence-repeat'
+          opened = await request(action, { action, comparisonId, code: input.trim(), launchId: repeatLaunchId.current },
+            abort.signal, language)
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setOpeningRepeat(false)
+        }
+        if (!abort.signal.aborted && opened) onOpenRepeat(opened.sessionId, opened.task)
+      }
+
       function changeInput(event) {
         setInput(event.target.value)
         setResult(null)
@@ -1844,9 +1869,13 @@ window.__ModuleLoader__.load({
         : '粘贴好友的灯塔取舍码，对照同一份缺证样例里各自的选择和交付。') : (share
         ? '战报码只包含公开题目版本、接班需求、出装和是否附上原件。'
         : '粘贴同一题、同一接班需求的战报码，看看两套出装交接得怎么样。')
+      function back() {
+        if (!openingRepeat) onBack()
+      }
+
       return h(InstallDialog, { title: t(title), className: 'moba-lighthouse-comparison moba-starter-dialog',
-        onCancel: onBack, initialFocus: share ? '.moba-challenge-back' : '.moba-share-code',
-        onKeyDown: event => closeDialogOnEscape(event, onBack) },
+        onCancel: back, busy: openingRepeat, initialFocus: share ? '.moba-challenge-back' : '.moba-share-code',
+        onKeyDown: event => closeDialogOnEscape(event, back) },
         h('form', { onSubmit: check },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
             h('p', { className: 'moba-starter-note' }, t(note)),
@@ -1855,7 +1884,7 @@ window.__ModuleLoader__.load({
                 spellCheck: false, onFocus: event => event.currentTarget.select() })),
             !share && h('label', null, t('好友战报码'),
               h('textarea', { className: 'moba-share-code', ref: field, value: input, rows: 3, maxLength: lighthouseHandoffReportCodeLimit + 1,
-                readOnly: busy, spellCheck: false,
+                readOnly: busy || openingRepeat, spellCheck: false,
                 autoComplete: 'off', autoCapitalize: 'off', onChange: changeInput })),
             (busy || share && !result && !error) && h('p', { role: 'status' }, t('正在核对战报…')),
             error && h('p', { className: 'moba-alert', role: 'alert' }, error),
@@ -1863,7 +1892,9 @@ window.__ModuleLoader__.load({
               h('h3', { ref: heading, tabIndex: -1 }, evidence ? t('缺证时，你们怎么选？') :
                 h(Fragment, null, t('接班人需要什么？'), ' ', t(need.name))),
               evidence && comparison && result.code && h('div', { className: 'moba-detail-actions' },
-                h('button', { type: 'button', className: 'moba-roster-open', onClick: copy }, t('复制我的取舍码'))),
+                h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRepeat, onClick: copy }, t('复制我的取舍码')),
+                onOpenRepeat && h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRepeat, onClick: openRepeat },
+                  t(openingRepeat ? '正在打开同题会话…' : '用同一出装再试一局'))),
               replyCodeVisible && result.code && h('label', null, t('我的取舍码'),
                 h('textarea', { ref: replyField, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                   spellCheck: false, onFocus: event => event.currentTarget.select() })),
@@ -1873,9 +1904,9 @@ window.__ModuleLoader__.load({
               comparison && h('p', { className: 'moba-lighthouse-note' }, t('可以打开自己的原会话核对细节。好友的交接来自对方提供的战报码。'))),
             notice && h('p', { role: 'status', className: 'moba-empty' }, notice)),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
-            h('button', { type: 'button', className: 'moba-roster-open moba-challenge-back', onClick: onBack }, t('返回')),
+            h('button', { type: 'button', className: 'moba-roster-open moba-challenge-back', disabled: openingRepeat, onClick: back }, t('返回')),
             share ? result?.code && h('button', { type: 'button', className: 'moba-start', onClick: copy }, t('复制战报码'))
-              : h('button', { type: 'submit', className: 'moba-start', disabled: busy || !input.trim() }, t('对照这两局')))))
+              : h('button', { type: 'submit', className: 'moba-start', disabled: busy || openingRepeat || !input.trim() }, t('对照这两局')))))
     }
 
     function MinimalDeliveryReplay({ request, comparisonId, onBack, onVisit, backLabel = '返回试玩对照' }) {
@@ -2918,7 +2949,7 @@ window.__ModuleLoader__.load({
         setChallengeShareId('')
       } })
       if (evidenceReport) return h(LighthouseHandoffReport, { report: { mode: evidenceReport, evidence: true },
-        comparisonId: value.id, request, onBack: () => {
+        comparisonId: value.id, request, onOpenRepeat: (next, task) => { setEvidenceReport(''); onVisit(next, task) }, onBack: () => {
           returnFocus.current = `[data-evidence-report="${evidenceReport}"]`
           setEvidenceReport('')
         } })

@@ -1542,21 +1542,25 @@ export async function apply(ctx) {
       verifiedEvidenceArm(arm) && comparisonChoices(arm).length > 0
   }
 
+  function evidenceReportTaskLanguage(record) {
+    if (record.material !== lighthouseHeroMaterial) return
+    return [false, true].find(english => record.task === workspaceComparisonTask({
+      material: record.material, task: lighthouseEvidenceTask(english, 'gap'),
+    }, english).task)
+  }
+
   function observedLighthouseEvidenceReport(record, arm, materialState) {
-    if (materialState !== 'verified' || !completedLighthouseChallenge(record, arm) || record.material !== lighthouseHeroMaterial ||
-      ![false, true].some(english => record.task === workspaceComparisonTask({
-        material: record.material, task: lighthouseEvidenceTask(english, 'gap'),
-      }, english).task)) return
+    if (materialState !== 'verified' || !completedLighthouseChallenge(record, arm) ||
+      evidenceReportTaskLanguage(record) === undefined) return
     const choice = lighthouseEvidenceDecision(comparisonChoices(arm))
     if (choice) return { choice, delivered: completedPresentDelivery(arm) }
   }
 
-  async function evidenceHandoffReport({ comparisonId, code }, signal, compare = false) {
+  async function verifiedLighthouseEvidenceReport(comparisonId, signal) {
     const record = workspaceComparisons.read(comparisonId)
     const unavailable = '请先完成并核验一局缺证取舍。'
     if (record?.lesson !== evidenceLesson || record.scenario !== 'gap' ||
       ctx.get('workspaceRegistry')?.get(record.workspaceId)?.path !== record.cwd) throw new Error(unavailable)
-    const friend = compare ? decodeLighthouseEvidenceReport(code) : undefined
     const [arm, materialState] = await Promise.all([
       readComparisonArm(workspaceComparisons, record, 'evidence', signal, { linkedChoicesOnly: true }),
       workspaceMaterialState(record, signal),
@@ -1564,7 +1568,29 @@ export async function apply(ctx) {
     const local = observedLighthouseEvidenceReport(record, arm, materialState)
     if (!local) throw new Error(unavailable)
     signal?.throwIfAborted()
+    return { record, local }
+  }
+
+  async function evidenceHandoffReport({ comparisonId, code }, signal, compare = false) {
+    const friend = compare ? decodeLighthouseEvidenceReport(code) : undefined
+    const { local } = await verifiedLighthouseEvidenceReport(comparisonId, signal)
     return { local, code: encodeLighthouseEvidenceReport(local.choice, local.delivered), ...(friend && { friend }) }
+  }
+
+  async function checkedLighthouseChallengeSource(comparisonId, signal) {
+    const { proof, ecosystem } = await verifiedLessonTaskSource({ kind: 'workspace', comparisonId, arm: 'evidence' }, signal)
+    const expected = await plan(standardDeliveryDraft(ecosystem, ['present', 'evidence']), ecosystem)
+    if (expected.id !== proof.presetId) throw new Error(challengeChanged)
+    return proof
+  }
+
+  async function repeatLighthouseEvidence({ comparisonId, code, launchId }, signal) {
+    if (!validOpeningId(launchId)) throw new Error('开局请求无效，请重试。')
+    decodeLighthouseEvidenceReport(code)
+    const { record } = await verifiedLighthouseEvidenceReport(comparisonId, signal)
+    const proof = await checkedLighthouseChallengeSource(comparisonId, signal)
+    const id = createHash('sha256').update(JSON.stringify(['lighthouse-evidence-repeat', comparisonId, launchId])).digest('hex').slice(0, 32)
+    return openLighthouseLesson({ launchId: id }, evidenceReportTaskLanguage(record), signal, evidenceLesson, proof.presetId)
   }
 
   async function shareLighthouseChallenge({ comparisonId }, signal) {
@@ -1573,9 +1599,7 @@ export async function apply(ctx) {
     if (record?.lesson !== evidenceLesson || record.scenario !== 'gap') throw new Error(unavailable)
     const observed = await readComparisonArm(workspaceComparisons, record, 'evidence', signal, { linkedChoicesOnly: true })
     if (!completedLighthouseChallenge(record, observed)) throw new Error(unavailable)
-    const { proof, ecosystem } = await verifiedLessonTaskSource({ kind: 'workspace', comparisonId, arm: 'evidence' }, signal)
-    const expected = await plan(standardDeliveryDraft(ecosystem, ['present', 'evidence']), ecosystem)
-    if (expected.id !== proof.presetId) throw new Error(challengeChanged)
+    const proof = await checkedLighthouseChallengeSource(comparisonId, signal)
     const share = await describeBuildShare({ name: lighthouseChallengeName, heroId: 'standard',
       heroName: presetLabels.get('standard')?.[0] ?? 'Standard', presetId: proof.presetId })
     signal?.throwIfAborted()
@@ -6326,6 +6350,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-challenge-share') value = await shareLighthouseChallenge(selection, request.signal)
         else if (selection?.action === 'lighthouse-evidence-report') value = await evidenceHandoffReport(selection, request.signal)
         else if (selection?.action === 'lighthouse-evidence-report-compare') value = await evidenceHandoffReport(selection, request.signal, true)
+        else if (selection?.action === 'lighthouse-evidence-repeat') value = await repeatLighthouseEvidence(selection, request.signal)
         else if (selection?.action === 'hero-trial-challenge-share') value = await shareHeroChallenge(selection, request.signal)
         else if (selection?.action === 'hero-trial-handoff-report') value = await heroHandoffReport(selection, request.signal)
         else if (selection?.action === 'hero-trial-handoff-compare') value = await heroHandoffReport(selection, request.signal, true)

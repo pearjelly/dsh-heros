@@ -2951,6 +2951,51 @@ test('Lighthouse Evidence Check offers real choices only for the unsupported han
     const exactDraft = await recipient.request('/api/loadout-fixture-history?sessionId=' + exact.sessionId)
     assert.equal(exactDraft.presetId, blank.presetId)
     assert.ok(!exactDraft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+
+    const repeatedFields = { ...friendReport, launchId: 'd'.repeat(32) }
+    const repeat = (overrides, status) => receive('lighthouse-evidence-repeat', { ...repeatedFields, ...overrides }, status)
+    const sessionsBeforeRepeat = await recipientSessions()
+    await repeat({ code }, 422)
+    await repeat({ comparisonId: exact.id }, 422)
+    await repeat({ launchId: '../' }, 422)
+    const recipientCard = join(played.workspacePath, material)
+    const recipientCardBytes = await readFile(recipientCard)
+    await appendFile(recipientCard, '\nChanged since the original evidence round.\n')
+    await repeat({}, 422)
+    await writeFile(recipientCard, recipientCardBytes)
+    assert.deepEqual(await recipientSessions(), sessionsBeforeRepeat)
+
+    const [nextRound, retriedRound] = await Promise.all([repeat({}), repeat({})])
+    assert.deepEqual(retriedRound, nextRound)
+    assert.notEqual(nextRound.sessionId, accepted.sessionId)
+    assert.equal(nextRound.task, accepted.task)
+    assert.equal((await recipientSessions()).length, sessionsBeforeRepeat.length + 1)
+    const repeatedNative = () => recipient.request('/api/loadout-fixture-history?sessionId=' + nextRound.sessionId)
+    const nextDraft = await repeatedNative()
+    assert.notEqual(nextDraft.workspaceId, played.workspaceId)
+    assert.equal(nextDraft.presetId, played.presetId)
+    assert.deepEqual(await Promise.all(sampleFiles.map(name => readFile(join(nextDraft.workspacePath, name)))), sampleBytes)
+    assert.ok(!nextDraft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+    const secondPlay = recipient.request(turnEndpoint, { ...nextRound, text: nextRound.task })
+    secondPlay.catch(() => {})
+    let nextQuestion
+    try {
+      for (let attempt = 0; attempt < 100 && !nextQuestion; attempt++) {
+        nextQuestion = (await recipient.request(questions, { sessionId: nextRound.sessionId })).question
+        if (!nextQuestion) await delay(40)
+      }
+      assert.deepEqual(nextQuestion?.options.map(option => option.label), ['继续补证', '降级推荐', '暂缓提交'])
+    } finally {
+      if (nextQuestion) await recipient.request(questions, { sessionId: nextRound.sessionId, choice: '降级推荐' })
+      await secondPlay
+    }
+    const nextHistory = await repeatedNative()
+    assert.deepEqual(tools(nextHistory).map(event => event.data.name), ['read', 'ask_user_question', 'write', 'present'])
+    assert.equal(provider(nextHistory), provider(baseNative))
+    assert.deepEqual(files(nextHistory).map(item => item.path), [join(nextHistory.workspacePath, 'qualified-handoff.md')])
+    assert.deepEqual((await receive('workspace-comparison', { comparisonId: nextRound.id })).evidenceOpeningChoice, undefined)
+    assert.deepEqual(await receive('lighthouse-evidence-report', { comparisonId: nextRound.id }), qualifiedReport)
+    assert.deepEqual(await receive('lighthouse-evidence-report', { comparisonId: accepted.id }), pausedReport)
   } finally {
     await recipient?.stop()
     await host?.stop()
