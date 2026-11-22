@@ -3552,13 +3552,16 @@ window.__ModuleLoader__.load({
         h('div', { className: 'moba-pending-runs-list', tabIndex: -1, ref: listRef },
           rows.length > 0 && h('ul', { className: 'moba-history-list' }, rows.map(item => {
             const evidence = item.kind === 'evidence'
-            const hero = evidence ? undefined : heroTrialHeroes.find(option => option.id === item.arm)
-            const detail = evidence ? evidenceScenarios.find(option => option.id === item.scenario)
-              : heroTrialNeeds.find(option => option.id === item.need)
-            const title = evidence ? t('灯塔证据取舍') : [t(heroTrialTitle), hero && t(hero.name)].filter(Boolean).join(' · ')
+            const review = item.kind === 'delivery-review'
+            const hero = item.kind === 'hero' ? heroTrialHeroes.find(option => option.id === item.arm) : undefined
+            const route = review && fieldPlaybooks.find(option => option.id === item.arm)
+            const detail = evidence ? evidenceScenarios.find(option => option.id === item.scenario)?.name
+              : review ? { en: '英文', zh: '中文' }[item.sampleLanguage] : heroTrialNeeds.find(option => option.id === item.need)?.name
+            const title = evidence ? t('灯塔证据取舍') : (review ? [t('灯塔同题交接'), route && t(route.name)]
+              : [t(heroTrialTitle), hero && t(hero.name)]).filter(Boolean).join(' · ')
             const time = new Date(item.createdAt)
             const timeLabel = Number.isFinite(time.getTime()) ? reportTime(time) : ''
-            const detailLabel = [detail && t(detail.name), item.presetChanged && t('原出装已变化')].filter(Boolean).join(' · ')
+            const detailLabel = [detail && t(detail), item.presetChanged && t('原出装已变化')].filter(Boolean).join(' · ')
             const openLabel = t('打开草稿')
             return h('li', { className: 'moba-history-entry', key: item.sessionId },
               h('header', null, h('div', null, h('h3', null, title), detailLabel && h('p', null, detailLabel)),

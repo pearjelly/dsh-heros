@@ -857,7 +857,8 @@ export async function apply(ctx) {
       lighthouseWorkspaceId: sampleWorkspace?.id,
       heroTrialAvailable: await heroTrialAvailable(ecosystem),
       ...(lastHeroTrial && { lastHeroTrial: { id: lastHeroTrial.id, need: lastHeroTrial.need } }),
-      ...((lastHeroTrial || workspaceComparisons.latest(record => record.lesson === evidenceLesson)) && { hasLighthouseRuns: true }),
+      ...((lastHeroTrial || workspaceComparisons.latest(record => record.lesson === evidenceLesson || record.reviewChallengeArm)) &&
+        { hasLighthouseRuns: true }),
       equipment: [
         ...equipment.map(item => withRank({ ...publicEquipment(item), kind: 'featured', roles: classes.byId.get(item.id),
           art: art('gear', item.id) }, growth.gearRank(item.id))),
@@ -4969,9 +4970,11 @@ export async function apply(ctx) {
       previous = { createdAt: Number(fields[1]), sessionId: fields[2] }
     }
     const candidates = [
-      ...Array.from(workspaceComparisons.list()).filter(record => record.lesson === evidenceLesson).map(record => ({
-        record, store: workspaceComparisons, arm: 'evidence', kind: 'evidence',
-      })),
+      ...Array.from(workspaceComparisons.list()).flatMap(record => {
+        if (record.lesson === evidenceLesson) return [{ record, store: workspaceComparisons, arm: 'evidence', kind: 'evidence' }]
+        if (record.reviewChallengeArm) return [{ record, store: workspaceComparisons, arm: record.reviewChallengeArm, kind: 'delivery-review' }]
+        return []
+      }),
       ...Array.from(heroTrials.list()).flatMap(record => lighthouseHeroArms.map(arm => ({
         record, store: heroTrials, arm, kind: 'hero',
       }))),
@@ -4985,11 +4988,13 @@ export async function apply(ctx) {
         const saved = await store.readArm(record.id, arm)
         const workspace = saved && registry?.get(saved.workspaceId)
         if (!workspace || saved.opened !== true || workspace.path !== saved.cwd || !workspace.sessionIds.includes(sessionId)) return
-        if (kind === 'evidence' && (record.workspaceId !== saved.workspaceId || record.cwd !== saved.cwd)) return
-        const result = kind === 'evidence' ? await readComparisonArm(store, record, arm, signal)
-          : await readHeroTrialArm(record, arm, signal)
+        if (kind !== 'hero' && (record.workspaceId !== saved.workspaceId || record.cwd !== saved.cwd)) return
+        if (kind === 'delivery-review' && await workspaceMaterialState(record, signal) !== 'verified') return
+        const result = kind === 'hero' ? await readHeroTrialArm(record, arm, signal)
+          : await readComparisonArm(store, record, arm, signal)
         if (result.status === 'waiting') return { kind, sessionId, createdAt,
-          ...(kind === 'evidence' ? { scenario: record.scenario } : { arm, need: record.need }),
+          ...(kind === 'evidence' ? { scenario: record.scenario }
+            : kind === 'delivery-review' ? { arm, sampleLanguage: lighthouseReviewLanguage(record) } : { arm, need: record.need }),
           ...(result.presetChanged && { presetChanged: true }) }
       } catch {
         signal?.throwIfAborted()
