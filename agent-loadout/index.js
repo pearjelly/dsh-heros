@@ -5110,7 +5110,8 @@ export async function apply(ctx) {
     return b.createdAt - a.createdAt || b.id.localeCompare(a.id) || b.kind.localeCompare(a.kind)
   }
 
-  async function lighthouseRunList({ before }, signal, completed = false) {
+  async function lighthouseRunList({ before, code }, signal, completed = false) {
+    const sampleLanguage = completed && code !== undefined ? decodeLighthouseReviewReport(code).language : undefined
     const order = (a, b) => b.createdAt - a.createdAt || b.sessionId.localeCompare(a.sessionId)
     let previous
     if (before !== undefined) {
@@ -5119,7 +5120,10 @@ export async function apply(ctx) {
         ? '找不到这页灯塔交接战报。' : '找不到这页待发送的灯塔对局。')
       previous = { createdAt: Number(fields[1]), sessionId: fields[2] }
     }
-    const handoffCandidates = (sourceKind, store, defaultArm) => Array.from(store.list()).filter(lighthouseReviewLanguage)
+    const handoffCandidates = (sourceKind, store, defaultArm) => Array.from(store.list()).filter(record => {
+      const language = lighthouseReviewLanguage(record)
+      return language && (!sampleLanguage || language === sampleLanguage)
+    })
       .map(record => ({ record, store, sourceKind, arm: record.reviewChallengeArm ?? defaultArm, kind: 'delivery-review' }))
     const candidates = (completed ? [
       ...handoffCandidates('workspace', workspaceComparisons, 'direct'),
@@ -5173,7 +5177,8 @@ export async function apply(ctx) {
       inspected += batch.length
     }
     const last = candidates[inspected - 1]
-    return { items, ...(last && inspected < candidates.length && { before: `${last.createdAt}:${last.sessionId}` }) }
+    return { items, ...(sampleLanguage && { sampleLanguage }),
+      ...(last && inspected < candidates.length && { before: `${last.createdAt}:${last.sessionId}` }) }
   }
 
   async function comparisonHistory({ query = '', kind = 'all', outcome = 'all', before, scope, probe = false }, signal) {

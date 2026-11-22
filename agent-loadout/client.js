@@ -1520,9 +1520,9 @@ window.__ModuleLoader__.load({
       return code ? { code } : { problem: '没有找到灯塔挑战码。请粘贴邀请或挑战码。' }
     }
 
-    function LighthouseChallengeJoin({ request, onCancel, onOpen, onFindHandoffReport, firstHeroes }) {
+    function LighthouseChallengeJoin({ request, onCancel, onOpen, onFindHandoffReport, firstHeroes, initialInput = '' }) {
       const language = useLanguage()
-      const [input, setInput] = useState('')
+      const [input, setInput] = useState(initialInput)
       const [checked, setChecked] = useState(null)
       const [openingChoice, setOpeningChoice] = useState('')
       const [busy, setBusy] = useState('')
@@ -1924,6 +1924,7 @@ window.__ModuleLoader__.load({
     const lighthouseHandoffReportCodeLimit = 192
     const heroHandoffReportCode = /^DSHR1\.[A-Za-z0-9_-]+$/u
     const reviewHandoffReportCode = /^DSHR3\.[A-Za-z0-9_-]+$/u
+    const reviewHandoffInvalidCode = '灯塔交接战报码无效或版本不受支持。'
     const reviewHandoffDecisions = { confirm: '确认交付', revise: '退回修改', answered: '已作出复核选择' }
 
     function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal, onPersonalTask,
@@ -1949,7 +1950,7 @@ window.__ModuleLoader__.load({
       const shareAction = reviewKind ? 'lighthouse-review-report' : evidence ? 'lighthouse-evidence-report' : 'hero-trial-handoff-report'
       const compareAction = reviewKind || evidence ? shareAction + '-compare' : 'hero-trial-handoff-compare'
       const codePattern = reviewKind ? reviewHandoffReportCode : evidence ? /^DSHR2\.[A-Za-z0-9_-]+$/ : heroHandoffReportCode
-      const invalidCode = reviewKind ? '灯塔交接战报码无效或版本不受支持。'
+      const invalidCode = reviewKind ? reviewHandoffInvalidCode
         : evidence ? '灯塔取舍战报码无效或版本不受支持。' : '英雄战报码无效或版本不受支持。'
 
       useEffect(() => () => pending.current?.abort(), [])
@@ -3677,7 +3678,7 @@ window.__ModuleLoader__.load({
     const lighthouseDraftsLabel = '继续未发送的灯塔对局'
     const lighthouseHandoffHistoryLabel = '找回交接战报'
 
-    function LighthouseRunList({ request, onClose, onOpen, completed, initialReportCode }) {
+    function LighthouseRunList({ request, onClose, onOpen, completed, initialReportCode, onEditReport }) {
       const language = useLanguage()
       const [page, setPage] = useState({})
       const [loaded, setLoaded] = useState(null)
@@ -3686,6 +3687,8 @@ window.__ModuleLoader__.load({
       const loading = loaded?.page !== page || loaded?.language !== language
       const error = !loading && loaded.error
       const invalidCursor = page.before && error === t(completed ? '找不到这页灯塔交接战报。' : '找不到这页待发送的灯塔对局。')
+      const invalidReport = initialReportCode && error === t(reviewHandoffInvalidCode)
+      const reportLanguage = { en: '英文', zh: '中文' }[loaded?.sampleLanguage]
       const before = loaded?.before
       const canLoadOlder = Boolean(before && before !== page.before)
       const listRef = useRef(null)
@@ -3694,13 +3697,14 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         const abort = new AbortController()
         const action = completed ? 'lighthouse-handoff-history' : 'lighthouse-pending-runs'
-        request(action, { action, ...(page.before && { before: page.before }) }, abort.signal, language)
+        request(action, { action, ...(page.before && { before: page.before }),
+          ...(initialReportCode && { code: initialReportCode }) }, abort.signal, language)
           .then(value => {
             if (abort.signal.aborted) return
             setLoaded(previous => {
               const existing = page.before ? previous?.items ?? empty : empty
               const items = new Map([...existing, ...value.items].map(item => [item.sessionId, item]))
-              return { page, language, items: [...items.values()], before: value.before }
+              return { page, language, items: [...items.values()], before: value.before, sampleLanguage: value.sampleLanguage }
             })
           })
           .catch(reason => {
@@ -3709,7 +3713,7 @@ window.__ModuleLoader__.load({
             }))
           })
         return () => abort.abort()
-      }, [page, language, request, completed])
+      }, [page, language, request, completed, initialReportCode])
 
       function loadOlder() {
         if (loading || error || !canLoadOlder) return
@@ -3727,6 +3731,9 @@ window.__ModuleLoader__.load({
       return h(InstallDialog, { title: t(completed ? '我完成的灯塔交接' : lighthouseDraftsLabel), className: 'moba-lighthouse-comparison',
         onCancel: onClose, initialFocus: '.moba-pending-runs-list', onKeyDown: event => closeDialogOnEscape(event, onClose) },
         h('div', { className: 'moba-pending-runs-list', tabIndex: -1, ref: listRef },
+          onEditReport && h('div', { className: 'moba-detail-actions moba-handoff-history-actions' },
+            reportLanguage && h('p', { className: 'moba-starter-note' }, t('战报题目语言'), ' · ', h('strong', null, t(reportLanguage))),
+            h('button', { type: 'button', className: 'moba-roster-open', onClick: onEditReport }, t('编辑战报码'))),
           rows.length > 0 && h('ul', { className: 'moba-history-list' }, rows.map(item => {
             const evidence = item.kind === 'evidence'
             const review = item.kind === 'delivery-review'
@@ -3760,12 +3767,13 @@ window.__ModuleLoader__.load({
           })),
           loading ? h('p', { className: 'moba-empty', role: 'status' }, t(completed ? '正在读取灯塔交接战报…' : '正在读取灯塔草稿…'))
             : error ? h('p', { className: 'moba-alert', role: 'alert' }, error, ' ',
-              h('button', { type: 'button', className: 'moba-text', onClick: () => {
+              !invalidReport && h('button', { type: 'button', className: 'moba-text', onClick: () => {
                 listRef.current?.focus()
                 setPage(invalidCursor ? {} : { ...page })
               } }, t(invalidCursor ? '从第一页重新读取' : '重试')))
               : !rows.length && h('p', { className: 'moba-empty', role: 'status' }, t(canLoadOlder
-                ? '这页没有匹配项，仍有更早的记录可查。' : completed ? '还没有通过核验的灯塔交接。' : '没有未发送的灯塔对局。'))),
+                ? '这页没有匹配项，仍有更早的记录可查。' : reportLanguage ? '没有与战报同语言的已核验交接。'
+                  : completed ? '还没有通过核验的灯塔交接。' : '没有未发送的灯塔对局。'))),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
           canLoadOlder && !error && h('button', { type: 'button', className: 'moba-roster-open', disabled: loading,
             onClick: loadOlder }, t('加载更多记录')),
@@ -7565,7 +7573,7 @@ window.__ModuleLoader__.load({
       const starterLessonButton = useRef(null)
       const evidenceButton = useRef(null)
       const starterEvidenceButton = useRef(null)
-      const [challengeTrigger, setChallengeTrigger] = useState(null)
+      const [challengeJoin, setChallengeJoin] = useState(null)
       const challengeButton = useRef(null)
       const [reviewStartOpen, setReviewStartOpen] = useState(false)
       const reviewStartButton = useRef(null)
@@ -8280,7 +8288,7 @@ window.__ModuleLoader__.load({
                 onClick: () => setReviewStartOpen(true) },
               h(Glyph, { kind: 'flag', size: 17 }), h('span', null, t('试玩灯塔交接'))),
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
-                ref: challengeButton, 'aria-haspopup': 'dialog', onClick: () => setChallengeTrigger(challengeButton) },
+                ref: challengeButton, 'aria-haspopup': 'dialog', onClick: () => setChallengeJoin({ trigger: challengeButton }) },
               h(Glyph, { kind: 'arrow', size: 17 }), h('span', null, t('加入灯塔挑战'))),
               data.hasLighthouseHandoffs === true && h('button', { type: 'button',
                 className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending, ref: handoffHistoryButton,
@@ -8333,7 +8341,7 @@ window.__ModuleLoader__.load({
             onCompare: () => { setStarterOpen(false); setLighthouseCompareOpen(true) },
             onLesson: lesson => setLessonOpen({ lesson, trigger: lesson === lighthouseEvidenceLesson ? starterEvidenceButton : starterLessonButton }),
             lessonButton: starterLessonButton, evidenceButton: starterEvidenceButton,
-            challengeButton: starterChallengeButton, onJoinChallenge: () => setChallengeTrigger(starterChallengeButton),
+            challengeButton: starterChallengeButton, onJoinChallenge: () => setChallengeJoin({ trigger: starterChallengeButton }),
             onOpen: sessionId => { cue('lock'); setStarterOpen(false); openSource(sessionId) } }),
           lessonOpen && h(LighthouseLessonLaunch, { request, lesson: lessonOpen.lesson, onCancel: () => {
             const { trigger } = lessonOpen
@@ -8353,21 +8361,26 @@ window.__ModuleLoader__.load({
             setReviewStartOpen(false)
             openDraftSession(sessionId, task)
           } }),
-          challengeTrigger && h(LighthouseChallengeJoin, { request, firstHeroes: trialHeroes.length === 2 ? trialHeroes : undefined,
+          challengeJoin && h(LighthouseChallengeJoin, { request, initialInput: challengeJoin.input,
+            firstHeroes: trialHeroes.length === 2 ? trialHeroes : undefined,
             onFindHandoffReport: data?.hasLighthouseHandoffs === true ? code => {
-              setLighthouseRunsView({ completed: true, trigger: challengeTrigger, reply: code })
-              setChallengeTrigger(null)
+              setLighthouseRunsView({ completed: true, trigger: challengeJoin.trigger, reply: code })
+              setChallengeJoin(null)
               setStarterOpen(false)
             } : undefined, onCancel: () => {
-            setChallengeTrigger(null)
-            requestAnimationFrame(() => challengeTrigger.current?.focus())
+            setChallengeJoin(null)
+            requestAnimationFrame(() => (challengeJoin.trigger.current ?? challengeButton.current)?.focus())
           }, onOpen: (sessionId, task) => {
             cue('lock')
-            setChallengeTrigger(null)
+            setChallengeJoin(null)
             setStarterOpen(false)
             openDraftSession(sessionId, task)
           } }),
-          lighthouseRunsView && h(LighthouseRunList, { request, completed: lighthouseRunsView.completed, initialReportCode: lighthouseRunsView.reply, onClose: () => {
+          lighthouseRunsView && h(LighthouseRunList, { request, completed: lighthouseRunsView.completed, initialReportCode: lighthouseRunsView.reply,
+            onEditReport: lighthouseRunsView.reply ? () => {
+              setChallengeJoin({ trigger: lighthouseRunsView.trigger, input: lighthouseRunsView.reply })
+              setLighthouseRunsView(null)
+            } : undefined, onClose: () => {
             const { trigger } = lighthouseRunsView
             setLighthouseRunsView(null)
             requestAnimationFrame(() => (trigger.current ?? challengeButton.current)?.focus())
@@ -12052,6 +12065,8 @@ window.__ModuleLoader__.load({
       .moba-history-entry time { flex: none; }
       .moba-history-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
       .moba-history-card-actions .moba-comparison-previous { margin-block: 0; margin-inline-end: auto; }
+      .moba-handoff-history-actions { justify-content: space-between; margin-block-end: 8px; }
+      .moba-handoff-history-actions .moba-starter-note { margin: 0; }
       .moba-history-arms { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); align-items: start; gap: 5px; }
       .moba-history-arms > li { min-width: 0; padding: 5px; border: 1px solid #3d4051; font-size: 12px; }
       .moba-history-state { margin-inline-start: 6px; color: var(--muted); }

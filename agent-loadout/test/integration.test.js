@@ -2768,6 +2768,12 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     const differentLanguage = 'DSHR3.' + Buffer.from(JSON.stringify({
       ...reportFields(reviewReport.code), sample: 'lighthouse-delivery-review-1-en',
     })).toString('base64url')
+    const scopedChinese = await invoke('lighthouse-handoff-history', { code: reviewReport.code })
+    assert.equal(scopedChinese.sampleLanguage, 'zh')
+    assert.deepEqual(scopedChinese.items, handoffs.filter(item => item.sampleLanguage === 'zh'))
+    assert.deepEqual(await invoke('lighthouse-handoff-history', { code: differentLanguage }), { items: [], sampleLanguage: 'en' })
+    await invoke('lighthouse-handoff-history', { code: 'DSHR3.invalid' }, 422)
+    assert.deepEqual(await completedHandoffs(), handoffs)
     await compareReview(directSource, differentLanguage, 422)
     await compareReview(directSource, reviewCode, 422)
     const repeatReport = (code, status) =>
@@ -3187,6 +3193,13 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.ok(noMessages(separate))
     assert.deepEqual((await readdir(separate.workspacePath)).sort(), files)
     assert.deepEqual(await Promise.all(files.map(file => readFile(join(separate.workspacePath, file), 'utf8'))), contents)
+    await send(fresh)
+    const englishSource = { kind: 'workspace', comparisonId: fresh.id, arm: 'direct' }
+    const englishReport = await invoke('lighthouse-review-report', englishSource)
+    const scopedEnglish = await invoke('lighthouse-handoff-history', { code: englishReport.code })
+    assert.equal(scopedEnglish.sampleLanguage, 'en')
+    assert.deepEqual(scopedEnglish.items.map(item => item.sessionId), [fresh.sessionId])
+    assert.ok((await completedHandoffs()).some(item => item.sessionId === friendDirect.sessionId))
     assert.match(await readFile(join(native.workspacePath, material), 'utf8'), /Modified old practice material/u)
     assert.equal((await read()).id, own.id)
     assert.deepEqual((await invoke('lighthouse-comparison', { prototype: true })).arms.map(arm => arm.id), ['recon', 'delivery'])
