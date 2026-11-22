@@ -1746,6 +1746,11 @@ export async function apply(ctx) {
       arm.materialRead === true && Boolean(arm.summary) && typeof arm.originalAttached === 'boolean'
   }
 
+  function heroHandoffLanguage(record) {
+    return record?.task === lighthouseHeroTask(true) ? 'en'
+      : record?.task === lighthouseHeroTask(false) ? 'zh' : undefined
+  }
+
   async function shareHeroChallenge({ comparisonId }, signal) {
     const record = heroTrials.read(comparisonId)
     const unavailable = '请先完成并核验一局原装英雄试玩。'
@@ -1759,8 +1764,7 @@ export async function apply(ctx) {
 
   async function heroHandoffReport({ comparisonId, arm, code }, signal, compare = false) {
     const record = heroTrials.read(comparisonId)
-    const language = record?.task === lighthouseHeroTask(true) ? 'en'
-      : record?.task === lighthouseHeroTask(false) ? 'zh' : undefined
+    const language = heroHandoffLanguage(record)
     const unavailable = '请先完成这局灯塔交接，再核对战报。'
     if (!language || !heroTrials.arms.includes(arm)) throw new Error(unavailable)
     const { need } = record
@@ -6420,16 +6424,18 @@ export async function apply(ctx) {
         const heroTrial = { ...heroMember, need: record.need }
         value.heroTrial = heroTrial
         if (!value.running) {
+          let observed
           if (heroTrial.arm === lighthouseHeroDelivery) {
             const [original, replay] = await Promise.all([
               readHeroTrialArm(record, 'minimal', request.signal), readHeroTrialArm(record, lighthouseHeroDelivery, request.signal),
             ])
+            observed = replay
             value.heroTrial = { ...heroTrial, ...(replay.status === 'waiting' && { firstTaskPending: true }),
               ...(replay.presetChanged && { presetChanged: true }),
               ...(heroDeliveryLessonSource(record, original, replay) && { verifiedDeliveryReplay: true }) }
           } else {
             const stockTask = heroTrial.arm === 'standard' || record.need === 'summary'
-            const observed = await readHeroTrialArm(record, heroTrial.arm, request.signal, stockTask)
+            observed = await readHeroTrialArm(record, heroTrial.arm, request.signal, stockTask)
             if (observed.status === 'waiting') {
               value.heroTrial = { ...heroTrial, firstTaskPending: true, ...(observed.presetChanged && { presetChanged: true }) }
             } else if (stockTask) {
@@ -6438,6 +6444,9 @@ export async function apply(ctx) {
             } else if (canReplayHeroDelivery(record, observed) && !(await heroTrials.readArm(heroTrial.id, lighthouseHeroDelivery))?.opened) {
               value.heroTrial = { ...heroTrial, canReplayMinimalDelivery: true }
             }
+          }
+          if (heroHandoffLanguage(record) && verifiedHeroHandoff(observed)) {
+            value.heroTrial = { ...value.heroTrial, canCopyHeroReport: true }
           }
         }
       }

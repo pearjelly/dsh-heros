@@ -1737,6 +1737,7 @@ window.__ModuleLoader__.load({
     }
 
     const lighthouseHandoffReportCodeLimit = 192
+    const heroHandoffReportCode = /^DSHR1\.[A-Za-z0-9_-]+$/u
 
     function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero }) {
       const language = useLanguage()
@@ -1758,7 +1759,7 @@ window.__ModuleLoader__.load({
       const evidence = report.evidence === true
       const shareAction = evidence ? 'lighthouse-evidence-report' : 'hero-trial-handoff-report'
       const compareAction = evidence ? 'lighthouse-evidence-report-compare' : 'hero-trial-handoff-compare'
-      const codePattern = evidence ? /^DSHR2\.[A-Za-z0-9_-]+$/ : /^DSHR1\.[A-Za-z0-9_-]+$/
+      const codePattern = evidence ? /^DSHR2\.[A-Za-z0-9_-]+$/ : heroHandoffReportCode
       const invalidCode = evidence ? '灯塔取舍战报码无效或版本不受支持。' : '英雄战报码无效或版本不受支持。'
 
       useEffect(() => () => pending.current?.abort(), [])
@@ -2246,6 +2247,7 @@ window.__ModuleLoader__.load({
     }
 
     function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, draftStore, hasTurn, workspaces }) {
+      const language = useLanguage()
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [open, setOpen] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
@@ -2259,6 +2261,7 @@ window.__ModuleLoader__.load({
       const verifiedDeliveryReplay = member.verifiedDeliveryReplay === true
       const taskPending = member.firstTaskPending && !hasTurn
       const need = taskPending ? heroTrialNeeds.find(item => item.id === member.need) : undefined
+      const canCopyReport = member.canCopyHeroReport === true && !taskPending
       const hero = member.arm === minimalDeliveryReplayArm.id ? minimalDeliveryReplayArm : heroTrialHeroes.find(item => item.id === member.arm)
       useEffect(() => {
         const status = consumeDraft(sessionId)
@@ -2280,13 +2283,25 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (replayTrigger.current ?? trigger.current)?.focus())
       }
 
+      async function loadReportCode(signal) {
+        const action = 'hero-trial-handoff-report'
+        const report = await request(action, { action, comparisonId: member.id, arm: member.arm }, signal, language)
+        const code = report?.code
+        return report?.local?.arm === member.arm && typeof code === 'string' &&
+          code.length <= lighthouseHandoffReportCodeLimit && heroHandoffReportCode.test(code) ? code : undefined
+      }
+
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor', 'data-task-pending': taskPending || undefined,
-          'data-hero-delivery-replay': availableReplay || undefined },
+          'data-hero-delivery-replay': availableReplay || undefined, 'data-hero-report-copy': canCopyReport || undefined },
           h('div', null, h('strong', null, t(heroTrialTitle)), hero && h('span', null, t(hero.name))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setOpen(true) }, t(verifiedDeliveryReplay ? '查看换装战报' : heroTrialView)),
+            canCopyReport && h(LocalCopyButton, { key: member.id + ':' + member.arm, loadText: loadReportCode,
+              label: '复制本局战报码', fieldLabel: '战报码', copiedNotice: '战报码已复制。',
+              manualNotice: '战报码已选中，可以手动复制。', backLabel: '返回试玩会话',
+              errorNotice: '这局的战报码暂时不可用。请查看试玩对照后重试。' }),
             availablePersonalTask && h('button', { ref: personalTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setPersonalSource(availablePersonalTask) },
               t(stockTrialTaskLabels[member.arm] ?? lessonTaskLabel)),
@@ -3746,35 +3761,55 @@ window.__ModuleLoader__.load({
           evidenceSave: { comparisonId, arm }, onChanged: evidenceSaved, onClose: closeNaming }))
     }
 
-    function LocalCopyButton({ text, label, fieldLabel, copiedNotice, manualNotice, backLabel }) {
-      const [copied, setCopied] = useState(false)
-      const [showCode, setShowCode] = useState(false)
+    function LocalCopyButton({ text, loadText, label, fieldLabel, copiedNotice, manualNotice, backLabel, errorNotice }) {
+      const [result, setResult] = useState(null)
       const trigger = useRef(null)
+      const pending = useRef(null)
+      const checking = result?.kind === 'checking'
+
+      useEffect(() => () => pending.current?.abort(), [])
 
       async function copy() {
+        if (pending.current) return
+        const abort = pending.current = new AbortController()
         try {
-          await navigator.clipboard.writeText(text)
-          setCopied(true)
-        } catch {
-          setCopied(false)
-          setShowCode(true)
+          let value = text
+          if (loadText) {
+            setResult({ kind: 'checking' })
+            value = await loadText(abort.signal).catch(() => undefined)
+            if (abort.signal.aborted) return
+            if (!value) {
+              setResult({ kind: 'error' })
+              return
+            }
+          }
+          try {
+            await navigator.clipboard.writeText(value)
+            if (!abort.signal.aborted) setResult({ kind: 'copied' })
+          } catch {
+            if (!abort.signal.aborted) setResult({ kind: 'manual', value })
+          }
+        } finally {
+          pending.current = null
         }
       }
 
       function close() {
-        setShowCode(false)
+        setResult(null)
         requestAnimationFrame(() => trigger.current?.focus())
       }
 
       return h(Fragment, null,
-        h('button', { ref: trigger, type: 'button', className: 'moba-settlement-button',
+        h('button', { ref: trigger, type: 'button', className: 'moba-settlement-button', 'aria-disabled': checking || undefined,
           onClick: copy }, t(label)),
-        copied && h('span', { role: 'status' }, t(copiedNotice)),
-        showCode && h(InstallDialog, { title: t(label), className: 'moba-lighthouse-comparison moba-starter-dialog',
+        checking && h('span', { role: 'status' }, t('正在核对战报…')),
+        result?.kind === 'copied' && h('span', { role: 'status' }, t(copiedNotice)),
+        result?.kind === 'error' && h('span', { role: 'alert', className: 'moba-local-copy-error' }, t(errorNotice)),
+        result?.kind === 'manual' && h(InstallDialog, { title: t(label), className: 'moba-lighthouse-comparison moba-starter-dialog',
           onCancel: close, initialFocus: '.moba-share-code', onKeyDown: event => closeDialogOnEscape(event, close) },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
             h('label', null, t(fieldLabel), h('textarea', { className: 'moba-share-code', readOnly: true,
-              value: text, rows: 3, spellCheck: false, onFocus: event => event.currentTarget.select() })),
+              value: result.value, rows: 3, spellCheck: false, onFocus: event => event.currentTarget.select() })),
             h('p', { role: 'status' }, t(manualNotice))),
           h('div', { className: 'moba-market-actions' },
             h('button', { type: 'button', className: 'moba-roster-open', onClick: close }, t(backLabel)))))
@@ -11401,11 +11436,12 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) { grid-template-columns: minmax(0, 1fr); }
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       @media (max-width: 600px) {
-        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay]) { grid-template-columns: minmax(0, 1fr); }
-        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
+        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy]) { grid-template-columns: minmax(0, 1fr); }
+        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       }
       .moba-lighthouse-anchor-actions .moba-settlement-button { white-space: normal; }
       .moba-lighthouse-anchor > div > span { color: #b8ded4; }
+      .moba-lighthouse-anchor-actions > .moba-local-copy-error { flex-basis: 100%; color: #ffc7b5; }
       .moba-lighthouse-anchor > p, .moba-task-pending > p { margin: 0; color: #ccdcd8; font-size: 11px; }
       .moba-lighthouse-anchor > p { grid-column: 1 / -1; }
       .moba-lighthouse-anchor > .moba-task-pending { align-items: center; gap: 4px 7px; }

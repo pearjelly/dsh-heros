@@ -1568,6 +1568,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const completedStandard = (await equipmentIn(host, standard.sessionId)).heroTrial
     assert.deepEqual(completedStandard.lessonTaskSource, standardTransfer)
     assert.equal(completedStandard.firstTaskPending, undefined)
+    assert.equal(completedStandard.canCopyHeroReport, true)
     assert.notEqual(between.canReplayMinimalDelivery, true)
     assert.equal(await minimalShortcut(minimal.sessionId), undefined)
     await previewReplay(trial.id, 422)
@@ -1681,6 +1682,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     await recipient.request(turnEndpoint, { ...joined, text: joined.task })
     assert.deepEqual(await receive('lighthouse-pending-runs'), { items: [] })
     const recipientRound = await recipientHistory()
+    assert.equal((await equipmentIn(recipient, joined.sessionId)).heroTrial.canCopyHeroReport, true)
     assert.equal(recipientRound.events.find(event => event.type === 'user/message' && event.data.source.kind === 'user')?.data.content[0].text, trial.task)
     assert.deepEqual(traceTools(recipientRound).map(event => event.data.name), ['bash'])
     assert.deepEqual(traceFiles(recipientRound), [])
@@ -1805,7 +1807,9 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(replayed.minimalReplay.lessonTaskSource, transfer)
     assert.deepEqual(replayed.deliveryReplay, { sessionId: replay.sessionId,
       originalFile: { name: material, seq: delivery.seq, index: 0 } })
-    assert.equal((await equipmentIn(host, replay.sessionId)).heroTrial.verifiedDeliveryReplay, true)
+    const replayMember = (await equipmentIn(host, replay.sessionId)).heroTrial
+    assert.equal(replayMember.verifiedDeliveryReplay, true)
+    assert.equal(replayMember.canCopyHeroReport, true)
     const equippedOutcome = { arm: 'minimal-present', originalAttached: true, meetsNeed: true }
     assert.deepEqual(await shareHandoff(trial.id, 'minimal-present'), { need: 'original', local: equippedOutcome,
       code: reportCode({ ...standardFields, arm: 'minimal-present' }) })
@@ -1857,7 +1861,10 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const changedReplay = await read(trial.id)
     assert.equal(changedReplay.minimalReplay.lessonTaskSource, undefined)
     assert.equal(changedReplay.deliveryReplay, undefined)
-    assert.equal((await equipmentIn(host, replay.sessionId)).heroTrial.verifiedDeliveryReplay, undefined)
+    const staleReplay = (await equipmentIn(host, replay.sessionId)).heroTrial
+    assert.equal(staleReplay.verifiedDeliveryReplay, undefined)
+    assert.equal(staleReplay.canCopyHeroReport, undefined)
+    await shareHandoff(trial.id, 'minimal-present', 422)
     await invoke('lesson-task-options', transfer, 422)
     await invoke('lesson-task-open', ownFields, 422)
     await writeFile(replayCard, materialBytes)
@@ -1921,7 +1928,10 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const beforeStandardPersonal = await nativeSessions()
     await appendFile(unavailableCard, '\nChanged after the verified original handoff.\n')
     assert.equal(byHero(await read(trial.id), 'standard').lessonTaskSource, undefined)
-    assert.equal((await equipmentIn(host, standard.sessionId)).heroTrial.lessonTaskSource, undefined)
+    const staleStandard = (await equipmentIn(host, standard.sessionId)).heroTrial
+    assert.equal(staleStandard.lessonTaskSource, undefined)
+    assert.equal(staleStandard.canCopyHeroReport, undefined)
+    await shareHandoff(trial.id, 'standard', 422)
     await invoke('lesson-task-open', standardFieldsForOwn, 422)
     await writeFile(unavailableCard, materialBytes)
     assert.deepEqual(await nativeSessions(), beforeStandardPersonal)
