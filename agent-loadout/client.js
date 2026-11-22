@@ -1451,6 +1451,7 @@ window.__ModuleLoader__.load({
         t(heroTrial ? '来玩一局深度荣耀的灯塔英雄挑战。打开大厅，点「加入灯塔挑战」，粘贴这整段并核对，选你的首发英雄。'
           : reviewKind ? '打开深度荣耀大厅，点「加入灯塔挑战」，粘贴邀请。用同一张补给卡选你的交接打法。'
             : '补给卡没有记录两节备用电池。你会补证、降级推荐，还是暂缓提交？打开深度荣耀大厅，点「加入灯塔挑战」，粘贴这整段邀请。'),
+        ...(reviewKind ? [t('打完后，点「复制战报给好友」把你的结果发给我。')] : []),
         t('深度荣耀安装指南') + '\n' + guide,
         result.code,
       ].join('\n\n')
@@ -1489,7 +1490,7 @@ window.__ModuleLoader__.load({
       }
 
       return h(InstallDialog, { title: t(heroTrial ? '分享英雄试玩' : reviewKind ? '邀请好友同题交接' : '分享灯塔挑战'),
-        className: heroTrial ? 'moba-lighthouse-comparison moba-starter-dialog' : 'moba-starter-dialog',
+        className: heroTrial ? 'moba-lighthouse-comparison moba-starter-dialog' : 'moba-lighthouse-invitation moba-starter-dialog',
         onCancel: onBack, initialFocus: '.moba-challenge-back', onKeyDown: event => closeDialogOnEscape(event, onBack) },
         h('div', { className: 'moba-plan-fields moba-share-fields' },
           h('p', { className: 'moba-starter-note' }, t(heroTrial ? '挑战码包含公开样例、任务语言和接班需求。接收者自己选首发英雄。'
@@ -4335,11 +4336,24 @@ window.__ModuleLoader__.load({
           'data-review-invitation': reviewInvitation || undefined },
           h('div', null, h('strong', null, t(title)),
             h('span', null, scenario ? t(scenario.name) : comparisonArmName(comparisonArmConfig(kind, member.arm, evidenceReplay), member))),
+          reviewInvitation && h('section', { className: 'moba-lighthouse-peer-steps', 'aria-label': t('和好友比一局') },
+            h('div', null,
+              h('small', null, t('好友还没开局')),
+              h('div', { className: 'moba-lighthouse-anchor-actions' },
+                h('button', { ref: reviewInvitationTrigger, type: 'button', 'aria-haspopup': 'dialog',
+                  className: 'moba-settlement-button', 'data-review-challenge-share': true,
+                  onClick: () => setOpenReviewInvitation(true) }, t('邀请好友同题交接')))),
+            h('div', null,
+              h('small', null, t('两局都打完后')),
+              h('div', { className: 'moba-lighthouse-anchor-actions' },
+                h(LocalCopyButton, { key: member.id + ':' + member.arm, loadText: loadReviewReportCode,
+                  label: '复制战报给好友', fieldLabel: '本局战报码', copiedNotice: '战报码已复制。两人都打完后，用它对照两局。',
+                  manualNotice: '已选中战报码。两人都打完后，可以手动复制并交换。', backLabel: '返回练习会话',
+                  errorNotice: '这局的战报码暂时不可用。请查看练习记录后重试。' }),
+                h('button', { ref: reviewReportTrigger, type: 'button', 'aria-haspopup': 'dialog',
+                  className: 'moba-settlement-button', 'data-review-handoff-report': true,
+                  onClick: () => setOpenReviewReport(true) }, t('对照好友战报'))))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
-            reviewInvitation && h(LocalCopyButton, { key: member.id + ':' + member.arm, loadText: loadReviewReportCode,
-              label: '复制战报给好友', fieldLabel: '本局战报码', copiedNotice: '战报码已复制。可以发给好友对照。',
-              manualNotice: '已选中战报码。请手动复制并发给好友。', backLabel: '返回练习会话',
-              errorNotice: '这局的战报码暂时不可用。请查看练习记录后重试。' }),
             availableDirectRematch && h('button', { ref: directRematchTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', 'data-review-direct-preview': true,
               onClick: () => setOpenDirectRematch(true) }, t('试试直接交付')),
@@ -4353,12 +4367,6 @@ window.__ModuleLoader__.load({
               className: 'moba-settlement-button', onClick: () => setOpenEvidenceReplay(true) }, t(lighthouseEvidenceReplayLabel)),
             availableDeliveryReview && h('button', { ref: deliveryReviewTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', onClick: () => setOpenDeliveryReview(true) }, t('试试交付前复核')),
-            reviewInvitation && h('button', { ref: reviewInvitationTrigger, type: 'button', 'aria-haspopup': 'dialog',
-              className: 'moba-settlement-button', 'data-review-challenge-share': true,
-              onClick: () => setOpenReviewInvitation(true) }, t('邀请好友同题交接')),
-            reviewInvitation && h('button', { ref: reviewReportTrigger, type: 'button', 'aria-haspopup': 'dialog',
-              className: 'moba-settlement-button', 'data-review-handoff-report': true,
-              onClick: () => setOpenReviewReport(true) }, t('对照好友战报')),
             availableLessonTask && h('button', { ref: lessonTaskTrigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setLessonTaskSource(availableLessonTask) }, t(lessonTaskLabel))),
           taskPending && h(ChallengeTaskDraft, { task: member.task, presetChanged: member.presetChanged,
@@ -12048,8 +12056,10 @@ window.__ModuleLoader__.load({
       .moba-direct-form input[type="file"]::file-selector-button { margin-right: 8px; padding: 6px 9px; border: 1px solid #745f40; background: #1b2331; color: var(--ink); cursor: pointer; }
       .moba-market-dialog .moba-market-actions { margin-top: 12px; }
       .moba-starter-dialog { width: min(535px, calc(100vw - 28px)); }
-      .moba-lighthouse-comparison { --ink: #f3e9d2; --muted: #b6b4bc; --gold: #e6bc70; --line: #564532;
-        --blue: #9ed4ec; --deep: #0a0e17; width: min(700px, calc(100vw - 28px)); }
+      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation) {
+        --ink: #f3e9d2; --muted: #b6b4bc; --gold: #e6bc70; --line: #564532; --blue: #9ed4ec; --deep: #0a0e17;
+      }
+      .moba-lighthouse-comparison { width: min(700px, calc(100vw - 28px)); }
       .moba-lighthouse-comparison h2 { margin: 0; font-size: 22px; }
       .moba-rematch-editor h3 { margin: 8px 0 4px; color: var(--gold); font-size: 15px; }
       .moba-rematch-fields { display: grid; gap: 7px; min-width: 0; margin: 8px 0; padding: 8px; border: 1px solid var(--line); }
@@ -12060,7 +12070,7 @@ window.__ModuleLoader__.load({
         border: 1px solid #4b655f; background: #111b24; color: var(--ink); font: inherit; }
       .moba-rematch-fields p { margin: 0; }
       .moba-lighthouse-comparison button { font: inherit; }
-      .moba-lighthouse-comparison :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation) :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
       .moba-lighthouse-note { margin: 6px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
       .moba-comparison-previous { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; margin-block: 7px; }
       .moba-comparison-previous p { margin: 0; }
@@ -12191,12 +12201,18 @@ window.__ModuleLoader__.load({
         gap: 3px 7px; padding: 6px 8px; margin-block-end: 5px; border: 1px solid #607d78; background: #192c33; color: #f3e9d2; font-size: 12px; }
       .moba-lighthouse-anchor > div { display: flex; flex-wrap: wrap; gap: 1px 7px; overflow-wrap: anywhere; }
       .moba-lighthouse-anchor .moba-lighthouse-anchor-actions { justify-content: flex-end; gap: 4px 7px; }
-      .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) { grid-template-columns: minmax(0, 1fr); }
-      .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
+      .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending], [data-review-invitation]) { grid-template-columns: minmax(0, 1fr); }
+      .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending], [data-review-invitation]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       @media (max-width: 600px) {
-        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return], [data-review-invitation]) { grid-template-columns: minmax(0, 1fr); }
-        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return], [data-review-invitation]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
+        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return]) { grid-template-columns: minmax(0, 1fr); }
+        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       }
+      .moba-lighthouse-peer-steps { display: flex; flex-wrap: wrap; gap: 7px 12px; padding-block: 4px 6px; border-block-end: 1px solid #38555a; }
+      .moba-lighthouse-peer-steps > div { display: grid; min-width: 0; gap: 2px; align-content: start; }
+      .moba-lighthouse-peer-steps small { color: #c4ddd7; font-size: 11px; }
+      .moba-lighthouse-peer-steps .moba-lighthouse-anchor-actions { display: flex; flex-wrap: wrap; }
+      .moba-lighthouse-peer-steps .moba-lighthouse-anchor-actions > span { flex-basis: 100%; }
+      .moba-lighthouse-peer-steps [data-review-challenge-share] { color: #ffe1a4; background: #473322; border-color: #a7834c; }
       .moba-lighthouse-anchor-actions .moba-settlement-button { white-space: normal; }
       .moba-lighthouse-anchor > div > span { color: #b8ded4; }
       .moba-lighthouse-anchor-actions > .moba-local-copy-error { flex-basis: 100%; color: #ffc7b5; }
