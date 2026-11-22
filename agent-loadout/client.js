@@ -1660,6 +1660,10 @@ window.__ModuleLoader__.load({
     const heroTrialTitle = '英雄同题试玩'
     const heroTrialView = '查看试玩对照'
     const stockTrialTaskLabels = { standard: '用标准模式做自己的任务', minimal: '用极简模式做自己的任务' }
+    const alternateTaskLabels = {
+      standard: '用标准模式试同一任务',
+      'minimal-present': '用极简模式 + 交付物预览试同一任务',
+    }
     const minimalDeliveryReplayLabel = '给极简模式装上交付物预览'
     const heroTrialNeeds = [
       { id: 'original', icon: 'report', name: '可打开的原件', note: '接班人要在会话里打开原件核对。',
@@ -5739,6 +5743,70 @@ window.__ModuleLoader__.load({
       return h(PersonalLoadoutTask, { ...props, workspaces: items })
     }
 
+    function LessonTaskAlternate({ sessionId, request, onBack, onVisit }) {
+      const language = useLanguage()
+      const [checked, setChecked] = useState(null)
+      const [attempt, retry] = useState(0)
+      const [opening, setOpening] = useState(false)
+      const [openError, setOpenError] = useState('')
+      const pending = useRef(null)
+      const state = checked?.attempt === attempt && checked?.language === language ? checked : null
+      const preview = state?.value
+
+      useEffect(() => () => pending.current?.abort(), [])
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'lesson-task-alternate-preview'
+        request(action, { action, sessionId }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setChecked({ attempt, language, value }) })
+          .catch(reason => { if (!abort.signal.aborted) setChecked({ attempt, language, error: reason.message }) })
+        return () => abort.abort()
+      }, [request, sessionId, attempt, language])
+
+      async function open() {
+        if (pending.current || !preview?.token || openError) return
+        const abort = pending.current = new AbortController()
+        setOpening(true)
+        let result
+        try {
+          const action = 'lesson-task-alternate-open'
+          result = await request(action, { action, sessionId, token: preview.token }, abort.signal, language)
+        } catch (reason) {
+          if (!abort.signal.aborted) setOpenError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setOpening(false)
+        }
+        if (!abort.signal.aborted && result) onVisit(result.sessionId, result.task)
+      }
+
+      const heroName = arm => arm === minimalDeliveryReplayArm.id ? t(minimalDeliveryReplayArm.name)
+        : t(heroTrialHeroes.find(hero => hero.id === arm)?.name)
+      const problem = state?.error || openError || (state && !preview?.token && t('同组已核验的另一套出装暂不可用。'))
+      return h(InstallDialog, { title: t(alternateTaskLabels[preview?.source?.arm] ?? '核对同一任务的另一套出装'), busy: opening,
+        className: 'moba-lighthouse-comparison moba-playbook-dialog', onCancel: onBack, initialFocus: '[data-alternate-task-intro]',
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
+        h('p', { tabIndex: -1, 'data-alternate-task-intro': true }, t('沿用同一份材料和任务。打开后请手动发送。')),
+        preview && h(Fragment, null,
+          h(InstallFacts, { facts: [[t('已验证的原出装'), heroName(preview.fromArm)],
+            [t('这次核对的出装'), heroName(preview.source?.arm)], [t('工作区'), preview.workspaceTitle],
+            [t('材料文件相对路径'), preview.material]] }),
+          h(PlanEquipment, { items: preview.gear ?? empty, removed: preview.removed ?? empty }),
+          h(SharedPlanCapabilities, { comparison: preview.comparison, title: '相比原出装的能力变化' }),
+          h('details', { className: 'moba-minimal-replay-detail' },
+            h('summary', null, t('两边共用的任务')),
+            h('label', { className: 'moba-lighthouse-task' }, t('即将填入会话的任务'),
+              h('textarea', { readOnly: true, rows: 4, value: preview.task })))),
+        !state && h('p', { role: 'status' }, t('正在核对材料和出装…')),
+        problem && h('p', { role: 'alert', className: 'moba-alert' }, problem),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', disabled: opening, onClick: onBack }, t('返回任务结果')),
+          problem && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
+            onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
+          preview?.token && h('button', { type: 'button', className: 'moba-start', disabled: opening || Boolean(problem), onClick: open },
+            t(opening ? '正在准备对局…' : '确认并打开会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
     function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, fixedPlanRevision, lessonSource, armoryDraft, workspaces, initialWorkspaceId,
       initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange,
       workspaceSetup, addedWorkspace, onWorkspaceAdded, onWorkspaceApplied, workspaceStatus, workspaceError, retryWorkspaces }) {
@@ -9006,6 +9074,7 @@ window.__ModuleLoader__.load({
       const returnFocus = useRef(false)
       const rematchButton = useRef(null)
       const rebaselineButton = useRef(null)
+      const alternateButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
       const action = 'lesson-task-result'
       const pane = review ? 'review' : 'result'
@@ -9015,6 +9084,7 @@ window.__ModuleLoader__.load({
       const source = result?.source
       const sourceArm = source && comparisonArmConfig(source.kind, source.arm)
       const sourceLabel = source && [comparisonArmName(sourceArm, source), source.heroName].filter(Boolean).join(' · ')
+      const alternateLabel = alternateTaskLabels[result?.alternateTask?.arm]
 
       useEffect(() => {
         const abort = new AbortController()
@@ -9045,7 +9115,8 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (review || !current || !initialPersonalFocus || restoredPersonalFocus.current) return
         restoredPersonalFocus.current = true
-        const button = initialPersonalFocus === 'rebaseline' ? rebaselineButton.current : rematchButton.current
+        const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton }
+        const button = buttons[initialPersonalFocus]?.current
         const target = button ?? rebaselineButton.current ?? reviewHeading.current
         target?.focus()
       }, [review, current, initialPersonalFocus])
@@ -9085,6 +9156,8 @@ window.__ModuleLoader__.load({
               onClick: () => onUse(result, true) }, t('保存为方案')))
             : h(Fragment, null,
               h('button', { type: 'button', className: 'moba-text', onClick: onSource }, t('查看原会话')),
+              alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
+                onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
               result?.rebaseline && h('button', { ref: rebaselineButton, type: 'button',
                 className: result.rematchSource ? 'moba-text' : 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'rebaseline', source: result.source, armoryDraft: result.armoryDraft,
@@ -10120,6 +10193,8 @@ window.__ModuleLoader__.load({
           onBack: closePersonalFlow, onClose: closePersonalFlow, onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'rebaseline' && h(PersonalBaselineTask, { source: personalFlow.source, rebaseline: personalFlow.rebaseline,
           armoryDraft: personalFlow.armoryDraft, workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
+        personalFlow?.mode === 'alternate' && h(LessonTaskAlternate, { sessionId, request,
+          onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         armoryReview && h(RematchEditor, { ...armoryReview, sourceSessionId: sessionId, request,
           guidedReview: true, backLabel: '返回任务会话', onBack: closeArmoryReview, onClose: closeArmoryReview,
           onVisit: (next, task) => {

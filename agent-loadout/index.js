@@ -1250,10 +1250,11 @@ export async function apply(ctx) {
   }
 
   async function previewReviewedTask(checked, signal) {
-    const { view, reason, draft, candidate, ecosystem, token } = checked
+    const { view, reason, draft, candidate, ecosystem, token, against } = checked
     if (!token) return { ...view, reason }
     try {
-      const comparison = await compare(draft, ecosystem, candidate)
+      const selection = against ? { ...draft, againstDraft: against.draft } : draft
+      const comparison = await compare(selection, ecosystem, candidate, against?.candidate)
       signal?.throwIfAborted()
       const removed = historicalRemovals(candidate, presetEquipment(ecosystem, draft.presetId), ecosystem)
       return { ...view, comparison, gear: comparison.after.outfit, removed, token }
@@ -1310,6 +1311,7 @@ export async function apply(ctx) {
     plan: { input: requestedPlanTask, check: checkPlanTask, unavailable: '当前 DSH 无法从出装方案开启新任务。' },
     lesson: { input: requestedLessonTask, check: checkLessonTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
     armory: { input: requestedArmoryTask, check: checkArmoryTask, unavailable: '当前 DSH 无法用当前出装开启任务。' },
+    alternate: { input: requestedHeroAlternateTask, check: checkHeroAlternateTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
   }
 
   async function openReviewedTask(selection, english, signal, kind = 'plan') {
@@ -1319,7 +1321,7 @@ export async function apply(ctx) {
       throw new Error('请先核对新任务的材料和出装。')
     }
     const { input: readInput, check, unavailable } = reviewedTaskKinds[kind]
-    const input = readInput(selection, english)
+    const input = await readInput(selection, english, signal)
     const controller = ctx.get('sessionController')
     const registry = ctx.get('workspaceRegistry')
     if (!controller?.create || !ctx.get('sessionQuery') || !registry) {
@@ -1331,7 +1333,9 @@ export async function apply(ctx) {
 
     const open = async () => {
       const existing = await planTaskSession(sessionId, signal)
-      if (existing?.launch?.token === token && existing.launch.request === input.hash) return reply
+      if (existing?.launch?.token === token && existing.launch.request === input.hash) {
+        return kind === 'alternate' && existing.started ? { sessionId, workspaceId: input.workspaceId } : reply
+      }
       const checked = await check(input, signal)
       if (checked.token !== token) throw new Error('材料、任务或出装已变化，请重新核对。')
       const { presetId, verifyLive: verify } = await prepare(checked.draft, checked.candidate)
@@ -1369,7 +1373,8 @@ export async function apply(ctx) {
       const target = (source || armory) && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
         ...(source && isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
-        ...(target && { target }), ...(source && { source }), ...(armory && { armory }) })
+        ...(target && { target }), ...(source && { source }), ...(armory && { armory }),
+        ...(kind === 'alternate' && { alternateOf: input.alternateOf }) })
       updates.notify(sessionId)
       return reply
     }
@@ -4127,6 +4132,68 @@ export async function apply(ctx) {
     }
   }
 
+  const heroAlternateUnavailable = '同组已核验的另一套出装暂不可用。'
+  const heroAlternateChanged = '材料、任务或出装已变化，请重新核对。'
+  const heroAlternateSessionId = /^session-a076[a-f0-9]{28}$/u
+
+  function alternateHeroSource(launch) {
+    const source = launch?.source
+    if (launch?.alternateOf || !source || heroTrials.read(source.comparisonId)?.need !== 'original') return
+    const arm = isStandardTrialSource(source) ? lighthouseHeroDelivery : isHeroDeliveryTrialSource(source) ? 'standard' : undefined
+    if (arm) return { kind: 'hero-trial', comparisonId: source.comparisonId, arm }
+  }
+
+  function heroAlternateInput(sessionId, launch, target, english) {
+    const source = alternateHeroSource(launch)
+    if (!source || !target) throw new Error(heroAlternateUnavailable)
+    const { workspaceId, material, task } = target
+    const fields = { alternateOf: sessionId, source, workspaceId, material, task, originalTarget: target }
+    const hash = createHash('sha256').update(JSON.stringify(fields)).digest('hex')
+    return { ...fields, hash, english }
+  }
+
+  async function requestedHeroAlternateTask({ sessionId }, english, signal) {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error(heroAlternateUnavailable)
+    const saved = await planTaskSession(sessionId, signal)
+    return heroAlternateInput(sessionId, saved?.launch, saved && personalTaskTarget(saved.launch, saved.header), english)
+  }
+
+  async function checkHeroAlternateTask(input, signal, observed) {
+    const original = observed ?? await observeLessonTask(input.alternateOf, signal, true)
+    if (!original || !isDeepStrictEqual(original.target, input.originalTarget) ||
+      !isDeepStrictEqual(alternateHeroSource(original.launch), input.source) ||
+      original.evidence.status !== 'complete' || !original.evidence.materialDelivered ||
+      !verifiedPresentHandoff(original.evidence) || !original.presentBinding) throw new Error(heroAlternateUnavailable)
+    const [against, checked] = await Promise.all([
+      verifiedLessonTaskSource(original.launch.source, signal),
+      checkLessonTask(input, signal),
+    ])
+    const present = against.stockBindings?.find(binding => binding.tool === 'present')
+    if (against.proof.sessionId !== original.launch.source.sessionId ||
+      against.proof.presetId !== original.target.presetId || against.proof.identity !== original.target.identity ||
+      (present && !isDeepStrictEqual(present, original.presentBinding)) ||
+      checked.cwd !== original.target.cwd || checked.digest !== original.target.digest) throw new Error(heroAlternateChanged)
+    const token = createHash('sha256').update(JSON.stringify([checked.token, against.proof])).digest('hex')
+    return { ...checked, against, token, view: { ...checked.view, fromArm: original.launch.source.arm } }
+  }
+
+  async function heroAlternateTaskOption(sessionId, original, signal) {
+    if (!original.presentBinding || !alternateHeroSource(original.launch)) return
+    try {
+      const input = heroAlternateInput(sessionId, original.launch, original.target, false)
+      await checkHeroAlternateTask(input, signal, original)
+      return { arm: input.source.arm }
+    } catch {
+      signal?.throwIfAborted()
+    }
+  }
+
+  async function openHeroAlternateTask({ sessionId, token }, english, signal) {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error(heroAlternateUnavailable)
+    const launchId = createHash('sha256').update(JSON.stringify([planTaskOwner, 'hero-alternate', sessionId])).digest('hex').slice(0, 32)
+    return openReviewedTask({ sessionId, token, launchId }, english, signal, 'alternate')
+  }
+
   async function checkedPersonalRematchBaseline(selection, signal, original) {
     original ??= await personalRematchEvidence(selection, signal)
     if (!original || !original.canReuse) throw new Error('请选择一局已核验的实战作为原局。')
@@ -4811,7 +4878,8 @@ export async function apply(ctx) {
       if (textBinding?.tool === 'bash' && evidence.status === 'complete' && !evidence.continuationReason &&
         !evidence.deliverables.length && observedTextHandoff(source.events, evidence.turn, textBinding) &&
         await personalTaskMaterialState(target, signal) === 'verified') evidence.textHandoff = true
-      const presentBinding = launch.armory === true && presetId === 'standard' && evidence.materialDelivered &&
+      const usesVerifiedDelivery = launch.armory === true ? presetId === 'standard' : isHeroTrialTaskSource(launch.source)
+      const presentBinding = usesVerifiedDelivery && evidence.materialDelivered &&
         observedMaterialDelivery(source.events, evidence.turn, cwd, launch.material)
       return { launch, cwd, presetId, evidence, target, ...(presentBinding && { presentBinding }) }
     } finally {
@@ -4873,9 +4941,10 @@ export async function apply(ctx) {
     const canContinue = canReview && (!publicReplay || evidence.materialDelivered)
     const reference = canContinue && target && !minimalText && (!evidenceSource || choices.length > 0) &&
       { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }
-    const [settled, original] = await Promise.all([
+    const [settled, original, alternateTask] = await Promise.all([
       growth.settlementAwards(sessionId, receiptIds),
       reference && personalRematchEvidence(reference, signal),
+      canReview && review !== true && heroAlternateTaskOption(sessionId, resultView, signal),
     ])
     const awards = settled.filter(item => item.kind)
       .map(({ id, name, kind, xp, sourceName }) => ({ id, name, kind, xp, ...(sourceName && { sourceName }) }))
@@ -4910,6 +4979,7 @@ export async function apply(ctx) {
     const result = { source: launch.source, material: launch.material, ...evidence,
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
+      ...(alternateTask && { alternateTask }),
       ...(armoryDraft && { armoryDraft }), ...(armoryReason && { reason: armoryReason }) }
     if (review !== true || !canReview) return result
     try {
@@ -6753,6 +6823,11 @@ export async function apply(ctx) {
           value = await previewReviewedTask(await checkLessonTask(requestedLessonTask(selection, english), request.signal), request.signal)
         } else if (selection?.action === 'lesson-task-open') {
           value = await openReviewedTask(selection, english, request.signal, 'lesson')
+        } else if (selection?.action === 'lesson-task-alternate-preview') {
+          const input = await requestedHeroAlternateTask(selection, english, request.signal)
+          value = await previewReviewedTask(await checkHeroAlternateTask(input, request.signal), request.signal)
+        } else if (selection?.action === 'lesson-task-alternate-open') {
+          value = await openHeroAlternateTask(selection, english, request.signal)
         } else if (selection?.action === 'armory-task-options') {
           value = { workspaceIds: await personalWorkspaceIds(request.signal) }
         } else if (selection?.action === 'armory-task-preview') {

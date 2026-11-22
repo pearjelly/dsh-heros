@@ -1964,6 +1964,57 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.equal(stockResult.draft?.presetId, 'standard')
     assert.deepEqual(await read(trial.id), replayed)
 
+    const alternatePreview = (sessionId, fields, status) => invoke('lesson-task-alternate-preview', { sessionId, ...fields }, status)
+    const alternateOpen = (sessionId, token, status) => invoke('lesson-task-alternate-open', { sessionId, token }, status)
+    const beforeAlternates = await nativeSessions()
+    await alternatePreview(standard.sessionId, {}, 422)
+    const alternateFromMinimal = await alternatePreview(own.sessionId, { arm: 'minimal', workspaceId: 'forged', material: 'wrong.md', task: 'Wrong task' })
+    assert.equal(alternateFromMinimal.source.arm, 'standard')
+    assert.equal(alternateFromMinimal.workspaceId, workspaceId)
+    assert.equal(alternateFromMinimal.material, ownMaterial)
+    assert.equal(alternateFromMinimal.task, own.task)
+    await alternateOpen(own.sessionId, '0'.repeat(64), 422)
+    await appendFile(ownPath, '\nMaterial changed after reviewing the other loadout.\n')
+    await alternatePreview(own.sessionId, {}, 422)
+    await alternateOpen(own.sessionId, alternateFromMinimal.token, 422)
+    await writeFile(ownPath, ownContent)
+    await appendFile(replayCard, '\nThe local source of equipped Minimal changed.\n')
+    await alternatePreview(standardOwn.sessionId, {}, 422)
+    await writeFile(replayCard, materialBytes)
+    assert.deepEqual(await nativeSessions(), beforeAlternates)
+
+    const alternateSessions = []
+    for (const [started, arm, readTool, priorTrace, targetTrace] of [
+      [own, 'standard', 'read', ownNative, stockTrace],
+      [standardOwn, 'minimal-present', 'bash', stockPersonal, nativeReplay],
+    ]) {
+      assert.deepEqual((await invoke('lesson-task-result', { sessionId: started.sessionId })).alternateTask, { arm })
+      const preview = await alternatePreview(started.sessionId)
+      assert.equal(preview.task, started.task)
+      assert.equal(preview.material, ownMaterial)
+      assert.equal(preview.source.arm, arm)
+      const [opened, duplicate] = await Promise.all([
+        alternateOpen(started.sessionId, preview.token), alternateOpen(started.sessionId, preview.token),
+      ])
+      assert.deepEqual(duplicate, opened)
+      assert.equal(opened.task, started.task)
+      assert.equal(opened.workspaceId, workspaceId)
+      alternateSessions.push(opened.sessionId)
+      const draft = await history(opened.sessionId)
+      assert.equal(draft.presetId, targetTrace.presetId)
+      assert.equal(draft.inherited, 0)
+      assert.ok(!draft.events.some(event => ['turn/start', 'user/message', 'tool/call', 'deliverables/presented'].includes(event.type)))
+      await send(opened)
+      const completed = await history(opened.sessionId)
+      assert.deepEqual(traceTools(completed).map(event => event.data.name), [readTool, 'present'])
+      assert.deepEqual(traceFiles(completed).map(file => file.path), [await realpath(ownPath)])
+      for (const name of [readTool, 'present']) assert.deepEqual(toolSource(completed, name), toolSource(targetTrace, name))
+      assert.deepEqual(await alternateOpen(started.sessionId, preview.token), { sessionId: opened.sessionId, workspaceId })
+      assert.equal((await invoke('lesson-task-result', { sessionId: opened.sessionId })).alternateTask, undefined)
+      assert.deepEqual(await history(started.sessionId), priorTrace)
+    }
+    assert.deepEqual(await nativeSessions(), [...beforeAlternates, ...alternateSessions].sort())
+
     const personalSource = stockResult.rematchSource
     assert.deepEqual(personalSource, { kind: 'personal', comparisonId: standardOwn.sessionId.slice('session-'.length), arm: 'task' })
     const personalOptions = await invoke('rematch-comparison-options', personalSource)
@@ -2090,6 +2141,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     const summaryResult = await invoke('lesson-task-result', { sessionId: summaryOwn.sessionId, review: true })
     assert.equal(summaryResult.textHandoff, true)
     assert.equal(summaryResult.canReview, true)
+    await alternatePreview(summaryOwn.sessionId, {}, 422)
     assert.equal(summaryResult.draft?.presetId, 'minimal')
     assert.deepEqual(summaryResult.source, summaryOptions.source)
     await appendFile(ownPath, '\nMaterial changed after the native text handoff.\n')
