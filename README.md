@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Requires DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, or 0.2.2-rc.1 through 0.2.2-rc.5. Run the command with the CLI for the DSH installation you use.
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.129.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.130.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -77,7 +77,7 @@ After **Minimal + Deliverable Preview** delivers the original sample card and pa
 
 ## Share a Lighthouse challenge
 
-1. Complete the public **Missing key evidence** exercise and open **View evidence run**. Choose **Share a Lighthouse challenge** and **Copy invitation** to share the problem with a friend. The invitation carries the packaged sample version and a portable recipe for the standard loadout.
+1. Complete the public **Missing key evidence** exercise and open **View evidence run**. Choose **Share a Lighthouse challenge** and **Copy invitation** to share the problem with a friend. The invitation includes the installation guide and a code for the packaged sample and standard loadout.
 2. To play a shared challenge, choose **Join a Lighthouse challenge** in the Armory's Lighthouse section. You can also reach it from **Lighthouse Supply Run**. Paste the code yourself and choose **Check challenge code**. After checking the sample and equipment sources, you can record your own optional opening choice and open a fresh session. Manually send the task and decide on the native DSH question card.
 3. If the sample and stock loadout match and only the source package versions differ, choose **Review the local Standard loadout**. Check the original DSH version alongside the gear and sources this session will actually use. You can then record an opening choice and manually send the task in a new DSH session. A missing stock source or a different loadout blocks this option, while exact matches continue to open from the original check.
 4. After both players finish, use **Share this decision** and **Compare a friend's decision** in your evidence records. On the comparison, choose **Copy my decision code** to reply. The code carries only the public sample version, the recorded choice, and whether a file was delivered. The board labels your own verified result and your friend's shared result.

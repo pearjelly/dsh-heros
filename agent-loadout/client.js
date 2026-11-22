@@ -1314,10 +1314,13 @@ window.__ModuleLoader__.load({
         standard: '我用标准模式打了一局。同一张补给卡，你会选谁？',
         minimal: '我用极简模式打了一局。同一张补给卡，你会选谁？',
       }[playedHero]
+      const guide = 'https://github.com/pearjelly/dsh-heros/blob/main/' +
+        (language === 'en' ? 'README.md#install' : 'README.zh.md#%E5%AE%89%E8%A3%85')
       const invitation = result?.code && [
         ...(heroHook ? [t(heroHook)] : []),
         t(heroTrial ? '来玩一局深度荣耀的灯塔英雄挑战。打开大厅，点「加入灯塔挑战」，粘贴这整段并核对，选你的首发英雄。'
           : '补给卡没有记录两节备用电池。你会补证、降级推荐，还是暂缓提交？打开深度荣耀大厅，点「加入灯塔挑战」，粘贴这整段邀请。'),
+        t('深度荣耀安装指南') + '\n' + guide,
         result.code,
       ].join('\n\n')
       useEffect(() => {
