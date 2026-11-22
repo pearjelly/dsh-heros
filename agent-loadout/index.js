@@ -4477,11 +4477,11 @@ export async function apply(ctx) {
     if (previous.personal) {
       const original = await personalRematchEvidence(previous.personal, signal)
       if (!original || original.sessionId !== sessionId || original.evidenceReplay !== previous.personal.evidenceReplay) return missing
-      const { target, observed, canReuse } = original
+      const { target, observed, canReuse, presentBinding } = original
       if (target.presetId !== previous.personal.presetId || target.identity !== previous.personal.identity ||
         target.workspaceId !== comparison.workspaceId || target.cwd !== comparison.cwd ||
         target.digest !== comparison.digest || target.material !== comparison.material || target.task !== comparison.task) return missing
-      return { id, sessionId, heroName, planName, ...observed, canReuse, canRematch: false }
+      return { id, sessionId, heroName, planName, ...observed, canReuse, canRematch: false, ...(presentBinding && { armoryDelivery: true }) }
     }
     const { comparisons, original } = previous
     const publicReplay = comparison.baseline.publicEvidenceReplay
@@ -4585,11 +4585,19 @@ export async function apply(ctx) {
     const publicReview = comparisons === rematchComparisons && isLighthouseReviewRematch(record, previous)
     const verifyPersonalDelivery = Boolean(styles || publicReview)
     const evidenceReplay = evidenceReplayView(record.baseline)
+    const baseline = record.baseline && readRematchBaseline(record, previous, signal, { verifyPersonalDelivery, publicReview })
+    const armoryDelivery = styles && previous?.personal && (await baseline)?.armoryDelivery
     const pending = comparisons.armsFor(record).map(arm => readComparisonArm(comparisons, record, arm, signal,
-      { verifyPersonalDelivery, linkedChoicesOnly: publicReview, includeFileCoordinates: evidenceReplay?.publicEvidenceReplay || publicReview }))
-    if (record.baseline) pending.unshift(readRematchBaseline(record, previous, signal, { verifyPersonalDelivery, publicReview }))
+      { verifyPersonalDelivery, linkedChoicesOnly: publicReview || armoryDelivery,
+        includeFileCoordinates: evidenceReplay?.publicEvidenceReplay || publicReview || armoryDelivery }))
+    if (baseline) pending.unshift(baseline)
     const arms = await Promise.all(pending)
     const handoffOutcome = styles && observedHandoffOutcome(record.material, arms, styles)
+    const armoryHandoffOutcome = armoryDelivery && handoffOutcome && arms.every(verifiedEvidenceArm) &&
+      arms[0].materialDelivered && { ...handoffOutcome, arms: handoffOutcome.arms.map((item, index) => {
+        const { sessionId, deliverables } = arms[index]
+        return { ...item, sessionId, deliverables }
+      }) }
     const review = publicReview && arms.every(verifiedEvidenceArm) && arms[0].materialDelivered &&
       observedHandoffOutcome(record.material, arms, ['direct', 'review'])
     const publicReviewOutcome = review && { ...review, arms: review.arms.map((item, index) => {
@@ -4602,7 +4610,7 @@ export async function apply(ctx) {
     }
     const evidenceOutcome = evidenceReplay && observedEvidenceOutcome(arms, publicTaskSources)
     return { arms, ...(previous?.view && { previous: previous.view }), ...(handoffOutcome && { handoffOutcome }),
-      ...(publicReviewOutcome && { publicReviewOutcome }),
+      ...(publicReviewOutcome && { publicReviewOutcome }), ...(armoryHandoffOutcome && { armoryHandoffOutcome }),
       ...evidenceReplay, ...(evidenceOutcome && { evidenceOutcome }) }
   }
 
@@ -4767,7 +4775,7 @@ export async function apply(ctx) {
       if ((strict || verifyEvidence) && !target) return
       const evidence = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
         verifyMaterialProof: strict || verifyEvidence, verifyMaterialDelivery: true, exactMessages: true,
-        linkedChoicesOnly: verifyEvidence, includeWindows: !strict }, receipts)
+        linkedChoicesOnly: verifyEvidence, includeWindows: !strict, includeFileCoordinates: launch.armory === true }, receipts)
       const textBinding = launch.source && isMinimalTrialSource(launch.source) && target.textBinding
       if (textBinding?.tool === 'bash' && evidence.status === 'complete' && !evidence.continuationReason &&
         !evidence.deliverables.length && observedTextHandoff(source.events, evidence.turn, textBinding) &&
@@ -5106,7 +5114,7 @@ export async function apply(ctx) {
       arms: (comparisons === workspaceComparisons ? workspaceComparisonArms : comparisons.arms).map(id => ({ id, status: 'unopened' })) }
     const { id, task, workspaceId, material } = record
     const workspace = material && ctx.get('workspaceRegistry')?.get(workspaceId)
-    const [{ publicReviewOutcome, ...rounds }, materialState] = await Promise.all([
+    const [{ publicReviewOutcome, armoryHandoffOutcome, ...rounds }, materialState] = await Promise.all([
       readComparisonArms(comparisons, record, signal),
       material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
     ])
@@ -5122,6 +5130,7 @@ export async function apply(ctx) {
     const reviewChoiceComparison = canRepeatLighthouseReview && await compareReviewChoices(record, currentReview, signal)
     return { id, task, workspaceId, workspaceTitle: workspace?.title ?? record.workspaceTitle, material, materialState, ...rounds,
       ...(publicReviewOutcome && materialState === 'verified' && { publicReviewOutcome }),
+      ...(armoryHandoffOutcome && materialState === 'verified' && { armoryHandoffOutcome }),
       ...(canRepeatLighthouseReview && { canRepeatLighthouseReview: true }),
       ...(reviewChoiceComparison && { reviewChoiceComparison }),
       ...(record.change && { change: record.change }), ...(record.lesson && { lesson: record.lesson }),

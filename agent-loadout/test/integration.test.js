@@ -4610,6 +4610,25 @@ test('current Armory gear creates one reviewed native task without needing a sav
     assert.deepEqual(paired.arms.map(arm => arm.sessionId), [first.sessionId, rematch.sessionId])
     assert.deepEqual(paired.handoffOutcome.arms.map(item => [item.style, item.choices, item.deliveredCount]),
       [['direct', [], 1], ['review', ['Revise draft'], 0]])
+    const [beforeGear, afterGear] = paired.armoryHandoffOutcome.arms
+    assert.equal(beforeGear.sessionId, first.sessionId)
+    assert.equal(afterGear.sessionId, rematch.sessionId)
+    assert.deepEqual(afterGear.choices, ['Revise draft'])
+    assert.deepEqual(afterGear.deliverables, [])
+    assert.equal(beforeGear.deliverables[0].name, '交接 记录.md')
+    assert.ok(Number.isSafeInteger(beforeGear.deliverables[0].seq))
+    assert.equal(beforeGear.deliverables[0].index, 0)
+    for (const arm of [beforeGear, afterGear]) {
+      assert.equal(arm.canPreserve, true)
+      const preserve = await action('comparison-loadout-preview', { kind: 'rematch', comparisonId: rematch.id, arm: arm.id })
+      assert.equal(preserve.draft.presetId, 'standard')
+      assert.deepEqual(preserve.draft.equipmentIds, arm.id === 'baseline' ? [] : ['review'])
+    }
+    await appendFile(join(workspacePath, material), 'Changed after the rematch.')
+    const archived = await action('rematch-comparison', { comparisonId: rematch.id })
+    assert.equal(archived.armoryHandoffOutcome, undefined)
+    assert.deepEqual(archived.handoffOutcome, paired.handoffOutcome)
+    await writeFile(join(workspacePath, material), content)
     assert.deepEqual(await open(direct, plain.token, launchId), first)
     assert.deepEqual(new Set(await members()), new Set([seed, first.sessionId, second.sessionId, rematch.sessionId]))
   } finally {
