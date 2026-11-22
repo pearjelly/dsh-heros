@@ -26,7 +26,7 @@ import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } 
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
-import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedTextHandoff, panelActivityRecord, toolSourceRecord } from './match-report.js'
+import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
 import { planReviewActivities } from './plan-reviews.js'
@@ -1216,10 +1216,12 @@ export async function apply(ctx) {
       planName: hero.name ?? presetLabels.get(hero.id)?.[0] ?? hero.id, task }
     try {
       const candidate = await plan(draft, ecosystem)
-      const identity = loadoutIdentity(draft, candidate, ecosystem)
+      const canonical = recordedLoadoutDraft(candidate.record, draft.presetId, ecosystem)
+      const identity = comparisonLoadoutIdentity(canonical, candidate, ecosystem)
+      if (!identity) throw new Error('无法核对当前出装的配置。')
       const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, candidate.id, identity])).digest('hex')
       signal?.throwIfAborted()
-      return { view, cwd, digest, draft, candidate, ecosystem, token }
+      return { view, cwd, digest, draft, candidate, ecosystem, token, identity }
     } catch (error) {
       signal?.throwIfAborted()
       return { view, reason: error instanceof Error ? error.message : '无法核对当前出装的配置。' }
@@ -1342,10 +1344,11 @@ export async function apply(ctx) {
       const { planName, material, task, source } = checked.view
       if (source?.heroDeliveryTrial && !heroTrialLive(lighthouseHeroDelivery, presetId, agent)) throw new Error(heroDeliveryChanged)
       if (checked.stockBindings && !stockTrialLive(source.arm, presetId, agent, checked.stockBindings)) throw new Error(stockTransferChanged)
-      const target = source && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
-        ...(isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
+      const armory = kind === 'armory'
+      const target = (source || armory) && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
+        ...(source && isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
-        ...(source && { source, target }), ...(kind === 'armory' && { armory: true }) })
+        ...(target && { target }), ...(source && { source }), ...(armory && { armory }) })
       updates.notify(sessionId)
       return reply
     }
@@ -4076,8 +4079,8 @@ export async function apply(ctx) {
   }
 
   function personalTaskTarget(launch, header) {
-    const { source, target, material, task } = launch ?? {}
-    if (!source || !target || target.presetId !== header.agentPreset || !/^[a-f0-9]{24}$/.test(target.identity)) return
+    const { source, armory, target, material, task } = launch ?? {}
+    if ((!source && armory !== true) || !target || target.presetId !== header.agentPreset || !/^[a-f0-9]{24}$/.test(target.identity)) return
     const current = { ...target, cwd: header.cwd, material, task }
     if (validWorkspaceComparison(current)) return current
   }
@@ -4093,10 +4096,10 @@ export async function apply(ctx) {
     }
   }
 
-  async function checkedPersonalRematchBaseline(selection, signal) {
-    const original = await personalRematchEvidence(selection, signal)
+  async function checkedPersonalRematchBaseline(selection, signal, original) {
+    original ??= await personalRematchEvidence(selection, signal)
     if (!original || !original.canReuse) throw new Error('请选择一局已核验的实战作为原局。')
-    const { target, hero, observed, sessionId, evidenceReplay, standardTrialTask } = original
+    const { target, hero, observed, sessionId, evidenceReplay, stockStandardTask, presentBinding } = original
     const { workspaceId, cwd, material, digest, task, presetId, identity } = target
     const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
     if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
@@ -4108,7 +4111,8 @@ export async function apply(ctx) {
     const preset = ecosystem.presets.find(item => item.id === heroId && !item.broken)
     if (!preset) throw new Error('当前英雄的基础阵容不可用。')
     const { draft, candidate, identity: current } = await verifiedPlanComparisonArm({ presetId, heroId }, ecosystem)
-    if (!matchesLessonIdentity(identity, current, draft, candidate, ecosystem)) {
+    if (!matchesLessonIdentity(identity, current, draft, candidate, ecosystem) ||
+      (presentBinding && !isDeepStrictEqual(presentBinding, retainedRematchTool({ ecosystem, draft, candidate }, candidate)))) {
       throw new Error('本机配置已变化，无法核对这局的原出装。')
     }
     const { kind, comparisonId, arm } = selection
@@ -4118,7 +4122,7 @@ export async function apply(ctx) {
     const view = { workspaceId, workspaceTitle, material, task, baseline: { sessionId, heroName: hero.name } }
     const brief = task.split('\n').slice(2, -1).join('\n').trim()
     signal?.throwIfAborted()
-    return { ecosystem, preset, draft, candidate, baseline, view, observed, standardTrialTask,
+    return { ecosystem, preset, draft, candidate, baseline, view, observed, stockStandardTask, presentBinding,
       fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
   }
 
@@ -4210,8 +4214,8 @@ export async function apply(ctx) {
   }
 
   async function personalHandoffSuggestion(selection, checked, signal) {
-    const { observed, ecosystem, draft, personalReviewRematch, standardTrialTask } = checked
-    const stock = standardTrialTask && draft.equipmentIds.length === 0
+    const { observed, ecosystem, draft, personalReviewRematch, stockStandardTask } = checked
+    const stock = stockStandardTask && draft.equipmentIds.length === 0
     if (observed?.status !== 'complete' || !observed.materialDelivered || observed.continuationReason ||
       draft.presetId !== 'standard' || (!stock && !draft.equipmentIds.includes('present')) ||
       !observed.entries.some(item => item.name === 'present' && item.state === 'completed')) return
@@ -4264,8 +4268,10 @@ export async function apply(ctx) {
     const baseline = personalSuggestedChange?.removeId
       ? { ...view.baseline, choices: comparisonChoices(checked.observed) } : view.baseline
     signal?.throwIfAborted()
+    const guidedReview = checked.presentBinding && personalSuggestedChange?.addId === 'review'
+      || checked.lesson === lighthouseLesson && checked.baseline.kind === 'workspace'
     return { ...view, baseline, equipped, available,
-      ...(checked.lesson === lighthouseLesson && checked.baseline.kind === 'workspace' && reviewAvailable && { suggestedGearId: 'review' }),
+      ...(guidedReview && reviewAvailable && { suggestedGearId: 'review' }),
       ...(personalSuggestedChange && { personalSuggestedChange }) }
   }
 
@@ -4322,7 +4328,7 @@ export async function apply(ctx) {
       (!assembled.equipmentIds.includes(id) || checked.draft.equipmentSources[id] !== assembled.equipmentSources[id]))) {
       throw new Error('这次变更还会影响其他已装备项目或来源。')
     }
-    const stockReview = checked.standardTrialTask && addId === 'review' && removeId === undefined
+    const stockReview = checked.stockStandardTask && addId === 'review' && removeId === undefined
     const retainedDelivery = (evidenceReplay || stockReview) && retainedRematchTool(checked, candidate)
     if ((evidenceReplay || stockReview) && !retainedDelivery) {
       throw new Error('原局的交付工具或来源已变化，请重新核对。')
@@ -4753,8 +4759,8 @@ export async function apply(ctx) {
     if (!source) return
     try {
       const { header, launch } = planTaskDetails(source)
-      if (!launch?.source || !validLessonTaskReference(launch.source)) return
-      const verifyEvidence = isEvidenceLessonSource(launch.source) || isPublicEvidenceReplaySource(launch.source) ||
+      if (!launch || (launch.armory !== true && (!launch.source || !validLessonTaskReference(launch.source)))) return
+      const verifyEvidence = launch.armory === true || isEvidenceLessonSource(launch.source) || isPublicEvidenceReplaySource(launch.source) ||
         isHeroTrialTaskSource(launch.source)
       const { cwd, agentPreset: presetId } = header
       const target = personalTaskTarget(launch, header)
@@ -4762,11 +4768,13 @@ export async function apply(ctx) {
       const evidence = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
         verifyMaterialProof: strict || verifyEvidence, verifyMaterialDelivery: true, exactMessages: true,
         linkedChoicesOnly: verifyEvidence, includeWindows: !strict }, receipts)
-      const textBinding = isMinimalTrialSource(launch.source) && target.textBinding
+      const textBinding = launch.source && isMinimalTrialSource(launch.source) && target.textBinding
       if (textBinding?.tool === 'bash' && evidence.status === 'complete' && !evidence.continuationReason &&
         !evidence.deliverables.length && observedTextHandoff(source.events, evidence.turn, textBinding) &&
         await personalTaskMaterialState(target, signal) === 'verified') evidence.textHandoff = true
-      return { launch, cwd, presetId, evidence, target }
+      const presentBinding = launch.armory === true && presetId === 'standard' && evidence.materialDelivered &&
+        observedMaterialDelivery(source.events, evidence.turn, cwd, launch.material)
+      return { launch, cwd, presetId, evidence, target, ...(presentBinding && { presentBinding }) }
     } finally {
       source[Symbol.dispose]()
     }
@@ -4777,18 +4785,33 @@ export async function apply(ctx) {
     const sessionId = 'session-' + selection.comparisonId
     const original = await observeLessonTask(sessionId, signal, true)
     if (!original) return
-    const { target, evidence, presetId } = original
+    const { target, evidence, presetId, presentBinding, launch } = original
     const record = records.get(presetId)
     const hero = matchHero(presetId, record)
-    const evidenceReplay = isEvidenceLessonSource(original.launch.source)
+    if (launch.armory === true) {
+      const canReuse = evidence.status === 'complete' && Boolean(presentBinding) && verifiedPresentHandoff(evidence) &&
+        !evidence.entries.some(item => item.name === 'ask_user_question')
+      return { sessionId, target, hero, observed: evidence, canReuse, stockStandardTask: canReuse, presentBinding }
+    }
+    const evidenceReplay = isEvidenceLessonSource(launch.source)
     const choices = comparisonChoices(evidence)
     if (evidenceReplay && (original.launch.source.lesson !== evidenceLesson || hero.id !== 'standard' ||
       record?.equipmentIds.length !== 2 || !record.equipmentIds.includes('evidence') || !record.equipmentIds.includes('present'))) return
     const canReuse = evidence.status === 'complete' && (isHeroTrialTaskSource(original.launch.source)
       ? verifiedPresentHandoff(evidence) && evidence.materialDelivered
       : evidenceReplay ? !evidence.continuationReason && choices.length > 0 : evidence.materialDelivered || choices.length > 0)
-    return { sessionId, target, hero, observed: evidence, canReuse, standardTrialTask: isStandardTrialSource(original.launch.source),
+    return { sessionId, target, hero, observed: evidence, canReuse, stockStandardTask: isStandardTrialSource(original.launch.source),
       ...(evidenceReplay && { evidenceReplay }) }
+  }
+
+  async function armoryReviewReference(sessionId, signal) {
+    const reference = { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task' }
+    try {
+      const checked = await checkedPersonalRematchBaseline(reference, signal)
+      if ((await personalHandoffSuggestion(reference, checked, signal))?.addId === 'review') return reference
+    } catch {
+      signal?.throwIfAborted()
+    }
   }
 
   async function readLessonTaskResult({ sessionId, review }, signal) {
@@ -4797,11 +4820,12 @@ export async function apply(ctx) {
     const { launch, cwd, presetId, evidence: observed, target } = resultView
     const { windows = [], ...evidence } = observed
     const choices = comparisonChoices(evidence)
-    const evidenceSource = isEvidenceLessonSource(launch.source)
-    const publicReplay = isPublicEvidenceReplaySource(launch.source)
-    const heroDeliveryTrial = isHeroTrialTaskSource(launch.source)
+    const armory = launch.armory === true
+    const evidenceSource = !armory && isEvidenceLessonSource(launch.source)
+    const publicReplay = !armory && isPublicEvidenceReplaySource(launch.source)
+    const heroDeliveryTrial = !armory && isHeroTrialTaskSource(launch.source)
     const delivered = evidenceSource ? evidence.deliverables?.length > 0 : evidence.materialDelivered
-    const minimalText = isMinimalTrialSource(launch.source)
+    const minimalText = !armory && isMinimalTrialSource(launch.source)
     const deliveryVerified = publicReplay || heroDeliveryTrial
       ? verifiedPresentHandoff(evidence) && (!heroDeliveryTrial || evidence.materialDelivered)
       : (delivered || choices.length > 0) && (!evidenceSource || !evidence.continuationReason)
@@ -4816,23 +4840,59 @@ export async function apply(ctx) {
     ])
     const awards = settled.filter(item => item.kind)
       .map(({ id, name, kind, xp, sourceName }) => ({ id, name, kind, xp, ...(sourceName && { sourceName }) }))
-    const rematchSource = original?.canReuse ? reference : undefined
     const workspace = canContinue && !evidenceSource && ctx.get('workspaceRegistry')?.list()
       .find(item => item.path === cwd && item.sessionIds.includes(sessionId))
     const brief = launch.task.split('\n').slice(2, -1).join('\n').trim()
-    const rebaseline = workspace && brief ? { workspaceId: workspace.id, material: launch.material, brief } : undefined
+    let rematchSource = original?.canReuse ? reference : undefined
+    let rebaseline = !armory && workspace && brief ? { workspaceId: workspace.id, material: launch.material, brief } : undefined
+    let armoryDraft, armoryReason
+    if (armory && rematchSource) {
+      const state = await personalTaskMaterialState(target, signal)
+      if (state !== 'verified') {
+        rematchSource = undefined
+        armoryReason = state === 'changed' ? '材料已变化，请用现在的文件开始新的对照。'
+          : '无法读取所选材料，请核对工作区内的文件路径。'
+        if (workspace?.id === target.workspaceId && brief) {
+          rebaseline = { workspaceId: workspace.id, material: launch.material, brief }
+          armoryDraft = { draft: { presetId, equipmentIds: [], equipmentSources: {}, removedEquipmentIds: [] }, heroName: launch.planName }
+        }
+      } else {
+        try {
+          const checked = await checkedPersonalRematchBaseline(reference, signal, original)
+          if ((await personalHandoffSuggestion(reference, checked, signal))?.addId !== 'review') rematchSource = undefined
+        } catch (error) {
+          signal?.throwIfAborted()
+          rematchSource = undefined
+          if (error instanceof Error) armoryReason = error.message
+        }
+      }
+    }
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
-      receiptIds, ...(awards.length && { awards }), ...(canReview && { canReview }),
-      ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }) }
+      receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
+      ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
+      ...(armoryDraft && { armoryDraft }), ...(armoryReason && { reason: armoryReason }) }
     if (review !== true || !canReview) return result
     try {
-      const [checked, uploaded] = await Promise.all([verifiedLessonTaskSource(launch.source, signal), appearance.index()])
-      if (checked.proof.presetId !== presetId || (isStockTrialSource(launch.source) &&
-        checked.proof.identity !== target?.identity)) throw new Error('本机配置已变化，无法核对这局的原出装。')
+      const uploaded = await appearance.index()
+      let checked, heroName
+      if (armory) {
+        const ecosystem = await discover()
+        const native = matchHero(presetId, records.get(presetId))
+        checked = { ...await verifiedPlanComparisonArm({ presetId, heroId: native.id }, ecosystem), ecosystem }
+        if (!matchesLessonIdentity(target.identity, checked.identity, checked.draft, checked.candidate, ecosystem)) {
+          throw new Error('本机配置已变化，无法核对这局的原出装。')
+        }
+        heroName = native.name
+      } else {
+        checked = await verifiedLessonTaskSource(launch.source, signal)
+        if (checked.proof.presetId !== presetId || (isStockTrialSource(launch.source) &&
+          checked.proof.identity !== target?.identity)) throw new Error('本机配置已变化，无法核对这局的原出装。')
+        heroName = checked.view.heroName
+      }
       const { draft, candidate, ecosystem } = checked
       const art = packageArt(uploaded, ecosystem)
-      const hero = { id: draft.presetId, name: checked.view.heroName, art: art('hero', draft.presetId) }
+      const hero = { id: draft.presetId, name: heroName, art: art('hero', draft.presetId) }
       const gear = recordedComparisonGear(records.get(presetId), draft, ecosystem, art, choices)
       const removed = historicalRemovals(candidate, presetEquipment(ecosystem, draft.presetId), ecosystem)
       const comparison = await compare(draft, ecosystem, candidate)
@@ -6350,6 +6410,13 @@ export async function apply(ctx) {
         if (!savedTask.started) value.planTask = { planName, material, task,
           ...(source && { source }), ...(armory === true && { armory }), ...(savedTask.presetChanged && { presetChanged: true }) }
         else if (source) value.lessonTaskResult = true
+        else if (armory === true && personalTaskTarget(savedTask.launch, savedTask.header)) {
+          value.armoryTaskResult = true
+          if (savedTask.header.agentPreset === 'standard' && !savedTask.presetChanged) {
+            const reference = await armoryReviewReference(sessionId, request.signal)
+            if (reference) value.armoryReview = reference
+          }
+        }
       }
       return Response.json({ ok: true, value: englishRequest(request) ? localizeDisplay(value) : value },
         { headers: { 'Cache-Control': 'no-store' } })

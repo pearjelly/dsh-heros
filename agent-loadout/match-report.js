@@ -501,6 +501,21 @@ export function observedTextHandoff(events, turn, binding) {
     event.data.message.content.some(part => part.type === 'text' && part.text.trim())))
 }
 
+function findOriginalDelivery(body, calls, results, cwd, material) {
+  const presented = new Set(results.filter(({ data }) => calls.get(data.message.toolCallId)?.data.name === 'present')
+    .map(({ data }) => data.message.toolCallId))
+  return body.find(event => event.type === 'deliverables/presented' && presented.has(event.data.callId) &&
+    event.data.files.some(file => typeof file.path === 'string' && resolve(cwd, file.path) === resolve(cwd, material)))
+}
+
+export function observedMaterialDelivery(events, turn, cwd, material) {
+  const body = events.filter(event => event.data?.turn === turn)
+  const calls = new Map(body.filter(event => event.type === 'tool/call').map(event => [event.data.callId, event]))
+  const results = body.filter(event => event.type === 'tool/result' && event.surfaceOp === 'append' && !event.data.message.isError)
+  const original = findOriginalDelivery(body, calls, results, cwd, material)
+  if (original) return recordedHandoffTool(events, calls.get(original.data.callId))
+}
+
 export function observedHeroHandoff(events, turn, cwd, material, contents, bindingArm) {
   const body = events.filter(event => event.data?.turn === turn)
   const calls = new Map(body.filter(event => event.type === 'tool/call').map(event => [event.data.callId, event]))
@@ -513,10 +528,7 @@ export function observedHeroHandoff(events, turn, cwd, material, contents, bindi
     const text = data.message.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
     return fullCard.every(line => text.includes(line))
   })
-  const presented = new Set(results.filter(({ data }) => calls.get(data.message.toolCallId)?.data.name === 'present')
-    .map(({ data }) => data.message.toolCallId))
-  const original = body.find(event => event.type === 'deliverables/presented' && presented.has(event.data.callId) &&
-    event.data.files.some(file => typeof file.path === 'string' && resolve(cwd, file.path) === resolve(cwd, material)))
+  const original = findOriginalDelivery(body, calls, results, cwd, material)
   const summary = body.filter(event => event.type === 'assistant/message' && event.surfaceOp === 'append' &&
     (!read || event.seq > read.seq) &&
     event.data.message.source.kind === 'model').flatMap(({ data }) =>

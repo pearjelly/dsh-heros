@@ -3548,7 +3548,7 @@ window.__ModuleLoader__.load({
               !preview && [t('卸下的装备'), t('证据核验')],
               [t('保留的装备'), rematchGearName(retainedPreview) ?? t('交付物预览')],
             ].filter(Boolean) })),
-          !preview && !reading && !loaded?.error && !needsRefresh && suggestionLabel &&
+          !guidedReview && !preview && !reading && !loaded?.error && !needsRefresh && suggestionLabel &&
             h('aside', { className: 'moba-lighthouse-arm', 'aria-label': t(suggestionLabel) },
               h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t('原局已交付') + ' · ' + options.material), ' ',
                 removeReview ? t('你实际选择了 ') + originalChoices.join(' / ') : t('可以先看草稿，再决定确认交付或退回修改。')),
@@ -5590,7 +5590,7 @@ window.__ModuleLoader__.load({
       }, [request, optionsAction, kind, comparisonId, arm, attempt, language, reference, membership])
 
       const stockTaskLabel = kind === 'hero-trial' && stockTrialTaskLabels[arm]
-      return h(InstallDialog, { title: t(armoryDraft ? armoryTaskLabel : rebaseline ? rebaselineTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
+      return h(InstallDialog, { title: t(rebaseline ? rebaselineTaskLabel : armoryDraft ? armoryTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
         className: stockTaskLabel ? 'moba-lighthouse-comparison moba-stock-trial-task' : 'moba-lighthouse-comparison',
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t('用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
@@ -8594,7 +8594,8 @@ window.__ModuleLoader__.load({
         h(Glyph, { kind: 'flag', size: 16 }), h('span', null, outcome))
     }
 
-    function SettlementRibbon({ receipt, quest, snapshot, controls, onDetails, onGear, onQuest, onDismiss, pending, error }) {
+    function SettlementRibbon({ receipt, quest, snapshot, controls, onDetails, onGear, onQuest, onDismiss, pending, error,
+      taskResultButton, armoryReviewButton }) {
       return h('div', { className: 'moba-settlement-ribbon', role: 'group', 'aria-label': t('本局结算提示'),
         'data-highlight': Boolean(receipt.flag || receipt.comboRepeat || receipt.relay || receipt.promotion || receipt.signatures || quest) },
         receipt.hero ? h(HeroArt, { id: receipt.hero.id, art: receipt.hero.id === snapshot.heroId ? snapshot.heroArt : undefined,
@@ -8619,9 +8620,10 @@ window.__ModuleLoader__.load({
                 onClick: event => onGear(event, item.id) },
                 h(ItemArt, { item }), h('span', null, item.name), h('b', null, xp))
             }))),
-        h('div', { className: 'moba-settlement-commands' },
-          h('button', { type: 'button', className: 'moba-settlement-button', 'aria-controls': controls, onClick: onDetails },
-            t(snapshot.lessonTaskResult ? '查看任务结果' : '查看结算')),
+        h('div', { className: 'moba-settlement-commands', 'data-armory-review': armoryReviewButton ? true : undefined },
+          taskResultButton ?? h('button', { type: 'button', className: 'moba-settlement-button', 'aria-controls': controls,
+            onClick: onDetails }, t('查看结算')),
+          armoryReviewButton,
           quest && h('button', { type: 'button', className: 'moba-settlement-button moba-settlement-review',
             'aria-controls': controls, title: quest.title, onClick: onQuest }, t('验收委托')),
           h('button', { type: 'button', className: 'moba-settlement-hide', 'aria-label': t('隐藏结算提示'), title: t('隐藏结算提示'),
@@ -8916,7 +8918,8 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'moba-text', onClick: onSource }, t('查看原会话')),
               result?.rebaseline && h('button', { ref: rebaselineButton, type: 'button',
                 className: result.rematchSource ? 'moba-text' : 'moba-match-move', 'aria-haspopup': 'dialog',
-                onClick: () => onPersonalFlow({ mode: 'rebaseline', source: result.source, rebaseline: result.rebaseline }) }, t(rebaselineTaskLabel)),
+                onClick: () => onPersonalFlow({ mode: 'rebaseline', source: result.source, armoryDraft: result.armoryDraft,
+                  rebaseline: result.rebaseline }) }, t(rebaselineTaskLabel)),
               result?.canReview && h('button', { ref: reviewButton, type: 'button', className: 'moba-match-move',
                 onClick: () => setReview(true) }, t('核对本次出装'), h(Glyph, { kind: 'arrow', size: 16 })),
               result?.rematchSource && h('button', { ref: rematchButton, type: 'button', className: 'moba-match-move',
@@ -9612,6 +9615,9 @@ window.__ModuleLoader__.load({
       const [profileOpen, setProfileOpen] = useState(false)
       const [action, setAction] = useState(null)
       const [personalFlow, setPersonalFlow] = useState(null)
+      const [armoryReview, setArmoryReview] = useState(null)
+      const armoryReviewTrigger = useRef(null)
+      const taskResultTrigger = useRef(null)
       const [pinPending, setPinPending] = useState('')
       const [pinError, setPinError] = useState('')
       const [receiptPending, setReceiptPending] = useState(false)
@@ -9693,6 +9699,11 @@ window.__ModuleLoader__.load({
       function visitPersonalFlow(nextSessionId, task) {
         setPersonalFlow(null)
         openDraftSession(nextSessionId, task)
+      }
+
+      function closeArmoryReview() {
+        setArmoryReview(null)
+        requestAnimationFrame(() => (armoryReviewTrigger.current ?? taskResultTrigger.current ?? growthTrigger.current)?.focus())
       }
 
       function show(event, target) {
@@ -9925,12 +9936,27 @@ window.__ModuleLoader__.load({
         snapshot.heroRank?.level > 1 && h('small', { key: snapshot.heroRank.level, className: 'moba-dock-level', title: snapshot.heroRank.badge,
           'data-level': snapshot.heroRank.level }, 'Lv.' + snapshot.heroRank.level),
         h('span', null, snapshot.heroName))
+      const taskResult = snapshot?.lessonTaskResult || snapshot?.armoryTaskResult
+      const taskResultButton = taskResult ? h('button', { ref: taskResultTrigger, type: 'button', className: 'moba-settlement-button',
+        'aria-controls': id, onClick: event => show(event, settlementAction) }, t('查看任务结果')) : undefined
+      const armoryReviewButton = snapshot?.armoryTaskResult && snapshot.armoryReview ? h('button', { ref: armoryReviewTrigger,
+        type: 'button', className: 'moba-settlement-button moba-settlement-review', 'aria-haspopup': 'dialog', onClick: () => {
+          if (popover.current?.matches(':popover-open')) popover.current.hidePopover()
+          setArmoryReview(snapshot.armoryReview)
+        } }, t('试试交付前复核')) : undefined
+
       return h(Fragment, null,
         personalFlow?.mode === 'rematch' && h(RematchEditor, { ...personalFlow.source, sourceSessionId: sessionId, request,
           evidenceReplayHint: personalFlow.evidenceReplay, backLabel: '返回任务结果',
           onBack: closePersonalFlow, onClose: closePersonalFlow, onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'rebaseline' && h(PersonalBaselineTask, { source: personalFlow.source, rebaseline: personalFlow.rebaseline,
-          workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
+          armoryDraft: personalFlow.armoryDraft, workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
+        armoryReview && h(RematchEditor, { ...armoryReview, sourceSessionId: sessionId, request,
+          guidedReview: true, backLabel: '返回任务会话', onBack: closeArmoryReview, onClose: closeArmoryReview,
+          onVisit: (next, task) => {
+            if (next === sessionId) closeArmoryReview()
+            else { setArmoryReview(null); openDraftSession(next, task) }
+          } }),
         h('div', { className: 'moba-match-strip', style: { anchorName: anchor } },
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
@@ -9956,10 +9982,10 @@ window.__ModuleLoader__.load({
         showReceipt && h(SettlementRibbon, { key: receipt.id, receipt, quest: questReady, snapshot, controls: id,
           onDetails: event => show(event, settlementAction), onQuest: event => show(event, growthAction),
           onGear: (event, focusGearId) => show(event, { ...settlementAction, focusGearId }),
+          taskResultButton, armoryReviewButton,
           onDismiss: dismissReceipt, pending: receiptPending, error: receiptError?.id === receipt.id ? receiptError.message : undefined }),
-        !showReceipt && snapshot?.lessonTaskResult && h('div', { className: 'moba-settlement-commands moba-lesson-result-entry' },
-          h('button', { type: 'button', className: 'moba-settlement-button', 'aria-controls': id,
-            onClick: event => show(event, settlementAction) }, t('查看任务结果'))),
+        !showReceipt && taskResult && h('div', { className: 'moba-settlement-commands moba-lesson-result-entry',
+          'data-armory-review': armoryReviewButton ? true : undefined }, taskResultButton, armoryReviewButton),
         !showReceipt && openingQuest && h('div', { className: 'moba-settlement-ribbon', role: 'group', 'aria-label': t('本局开局委托') },
           h(Glyph, { kind: 'report', size: 19 }),
           h('div', { className: 'moba-settlement-copy' }, h('strong', null, openingQuest.title),
@@ -10100,7 +10126,7 @@ window.__ModuleLoader__.load({
             onOpenMatch: nextId => { popover.current.hidePopover(); openContinuation(nextId) } })
           : settling ? h(MatchSettlement, { key: JSON.stringify([action.item.id, action.focusGearId]), sessionId, request, version: snapshot?.growthVersion,
             initialId: action.item.id, initialCursors: action.cursors, focusGearId: action.focusGearId, quest: questReady,
-            lessonTaskResult: snapshot?.lessonTaskResult,
+            lessonTaskResult: taskResult,
             onPersonalFlow: beginPersonalFlow, initialPersonalFocus: action.initialPersonalFocus,
             equipped: new Set(shortcuts.map(item => item.id)), onQuest: () => setAction(growthAction),
             onUse: reuseProvenLoadout,
@@ -10293,6 +10319,7 @@ window.__ModuleLoader__.load({
       .moba-settlement-used button:hover { border-color: #ebbe72; }
       .moba-settlement-used button:focus-visible, .moba-settlement .moba-mastery-rank:focus { outline: 2px solid #a0d5ed; outline-offset: -2px; }
       .moba-settlement-commands { display: flex; gap: 4px; align-items: center; }
+      .moba-settlement-commands[data-armory-review] { flex-wrap: wrap; }
       .moba-settlement-commands button { display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 3px 7px; border: 1px solid #6c563a; border-radius: 3px; color: #f1d7a6; background: #232633; font: inherit; white-space: nowrap; cursor: pointer; }
       .moba-settlement-commands button:hover { border-color: #ebbe72; }
       .moba-settlement-commands button:focus-visible { outline: 2px solid #a0d5ed; outline-offset: -2px; }
@@ -10649,6 +10676,7 @@ window.__ModuleLoader__.load({
         .moba-match-dock { gap: 4px; padding: 4px; }
         .moba-settlement-ribbon { grid-template-columns: auto minmax(0, 1fr); column-gap: 7px; }
         .moba-settlement-commands { grid-column: 2; justify-self: end; }
+        .moba-settlement-ribbon .moba-settlement-commands[data-armory-review] { grid-column: 1 / -1; }
         .moba-dock-hero { max-width: 32%; }
         .moba-dock-avatar { width: 28px; height: 28px; }
         .moba-dock-return span, .moba-match-trigger span { display: none; }

@@ -4550,28 +4550,68 @@ test('current Armory gear creates one reviewed native task without needing a sav
     assert.deepEqual(delivered.events.filter(event => event.type === 'tool/call').map(event => event.data.name), ['present'])
     assert.equal(delivered.events.find(event => event.type === 'deliverables/presented').data.files[0].path,
       join(await realpath(workspacePath), material))
-    const turn = send(second)
-    turn.catch(() => {})
-    const questionPath = '/api/loadout-fixture-handoff-question'
-    let question
-    try {
-      for (let i = 0; i < 100 && !question; i++) {
-        question = (await host.request(questionPath, { sessionId: second.sessionId })).question
-        if (!question) await delay(40)
+    const reference = { kind: 'personal', comparisonId: first.sessionId.slice('session-'.length), arm: 'task' }
+    const firstSnapshot = await equipmentIn(host, first.sessionId)
+    assert.equal(firstSnapshot.armoryTaskResult, true)
+    assert.deepEqual(firstSnapshot.armoryReview, reference)
+    const report = await action('lesson-task-result', { sessionId: first.sessionId, review: true })
+    assert.equal(report.armory, true)
+    assert.equal(report.materialDelivered, true)
+    assert.equal(report.hero.id, 'standard')
+    assert.deepEqual(report.rematchSource, reference)
+    const choices = await action('rematch-comparison-options', reference)
+    assert.equal(choices.suggestedGearId, 'review')
+    const pickReview = { ...reference, change: { addId: 'review' } }
+    const checked = await action('rematch-comparison-preview', pickReview)
+    assert.deepEqual(checked.change.added.id, 'review')
+    assert.equal(checked.task, first.task)
+    await appendFile(join(workspacePath, material), 'Changed before replay.')
+    assert.equal((await equipmentIn(host, first.sessionId)).armoryReview, undefined)
+    const stale = await action('lesson-task-result', { sessionId: first.sessionId })
+    assert.equal(stale.rematchSource, undefined)
+    assert.equal(stale.materialDelivered, true)
+    assert.deepEqual(stale.rebaseline, { workspaceId, material, brief: task })
+    assert.equal(stale.armoryDraft.draft.presetId, 'standard')
+    assert.ok((await preview({ ...stale.rebaseline, task: stale.rebaseline.brief, draft: stale.armoryDraft.draft })).token)
+    await action('rematch-comparison-preview', pickReview, 422)
+    await writeFile(join(workspacePath, material), content)
+    const rematchInput = { ...pickReview, token: checked.token, launchId: randomUUID().replaceAll('-', '') }
+    const rematch = await action('rematch-comparison-open', rematchInput)
+    assert.deepEqual(await action('rematch-comparison-open', rematchInput), rematch)
+    assert.equal(rematch.task, first.task)
+    assert.notEqual(rematch.sessionId, second.sessionId)
+    assert.ok(!(await history(rematch.sessionId)).events.some(event => event.type === 'turn/start'))
+
+    async function answerReview(draft, answer) {
+      const turn = send(draft)
+      turn.catch(() => {})
+      const questionPath = '/api/loadout-fixture-handoff-question'
+      let question
+      try {
+        for (let i = 0; i < 100 && !question; i++) {
+          question = (await host.request(questionPath, { sessionId: draft.sessionId })).question
+          if (!question) await delay(40)
+        }
+        assert.deepEqual(question?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
+        assert.ok(!(await history(draft.sessionId)).events.some(event => event.type === 'deliverables/presented'))
+      } finally {
+        if (question) await host.request(questionPath, { sessionId: draft.sessionId, choice: answer })
+        await turn
       }
-      assert.deepEqual(question?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
-      assert.ok(!(await history(second.sessionId)).events.some(event => event.type === 'deliverables/presented'))
-    } finally {
-      if (question) await host.request(questionPath, { sessionId: second.sessionId, choice: 'Revise draft' })
-      await turn
+      return history(draft.sessionId)
     }
-    const revised = await history(second.sessionId)
+    const revised = await answerReview(second, 'Revise draft')
     assert.deepEqual(revised.events.filter(event => event.type === 'tool/call').map(event => event.data.name), ['ask_user_question'])
     assert.ok(!revised.events.some(event => event.type === 'deliverables/presented'))
     assert.equal(await readFile(join(workspacePath, material), 'utf8'), content)
     assert.deepEqual((await catalog()).plans, before.plans)
+    await answerReview(rematch, 'Revise draft')
+    const paired = await action('rematch-comparison', { comparisonId: rematch.id })
+    assert.deepEqual(paired.arms.map(arm => arm.sessionId), [first.sessionId, rematch.sessionId])
+    assert.deepEqual(paired.handoffOutcome.arms.map(item => [item.style, item.choices, item.deliveredCount]),
+      [['direct', [], 1], ['review', ['Revise draft'], 0]])
     assert.deepEqual(await open(direct, plain.token, launchId), first)
-    assert.deepEqual(new Set(await members()), new Set([seed, first.sessionId, second.sessionId]))
+    assert.deepEqual(new Set(await members()), new Set([seed, first.sessionId, second.sessionId, rematch.sessionId]))
   } finally {
     await host?.stop()
     await rm(directory, { recursive: true, force: true })

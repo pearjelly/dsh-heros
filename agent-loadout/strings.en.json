@@ -2397,6 +2397,7 @@
   "正在核对新增的工作区…": "Checking the new workspace…",
   "无法用新添加的文件夹开启此任务。": "The added folder is unavailable for this task.",
   "返回练习会话": "Back to practice conversation",
+  "返回任务会话": "Back to task conversation",
   "材料文件相对路径": "Relative file path",
   "浏览文件": "Browse files",
   "选择材料文件": "Choose a material file",
