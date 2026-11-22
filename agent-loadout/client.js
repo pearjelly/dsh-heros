@@ -1301,6 +1301,65 @@ window.__ModuleLoader__.load({
               t(busy ? '正在准备对局…' : error ? '重试' : evidence ? '开始证据取舍' : '开始换装练习'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
+    function LighthouseReviewStart({ request, onCancel, onOpen }) {
+      const language = useLanguage()
+      const [checked, setChecked] = useState(null)
+      const [attempt, retry] = useState(0)
+      const [opening, setOpening] = useState(false)
+      const [openError, setOpenError] = useState('')
+      const pending = useRef(null)
+      const launchIds = useRef(new Map())
+      const state = checked?.attempt === attempt && checked.language === language ? checked : null
+      const preview = state?.value
+      const sampleLanguage = ({ en: '英文', zh: '中文' })[preview?.sampleLanguage]
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'lighthouse-review-start-preview'
+        request(action, { action }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setChecked({ value, language, attempt }) })
+          .catch(reason => { if (!abort.signal.aborted) setChecked({ error: reason.message, language, attempt }) })
+        return () => abort.abort()
+      }, [request, language, attempt])
+      useEffect(() => () => pending.current?.abort(), [])
+
+      async function start(arm) {
+        if (pending.current || !preview?.token || !preview.routes.includes(arm)) return
+        const abort = pending.current = new AbortController()
+        setOpening(true)
+        setOpenError('')
+        const key = preview.token + ':' + arm
+        if (!launchIds.current.has(key)) launchIds.current.set(key, Array.from(crypto.getRandomValues(new Uint8Array(16)),
+          byte => byte.toString(16).padStart(2, '0')).join(''))
+        try {
+          const action = 'lighthouse-review-start-open'
+          const result = await request(action, { action, arm, token: preview.token, launchId: launchIds.current.get(key) }, abort.signal, language)
+          if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
+        } catch (reason) {
+          if (!abort.signal.aborted) setOpenError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setOpening(false)
+        }
+      }
+
+      const error = openError || state?.error || preview?.reason
+      return h(InstallDialog, { title: t('发起灯塔同题挑战'), className: 'moba-starter-dialog',
+        busy: opening, onCancel, initialFocus: '[data-review-start-intro]',
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onCancel() }) },
+        h('p', { className: 'moba-lighthouse-note', tabIndex: -1, 'data-review-start-intro': true },
+          t('先打一局灯塔交接。完成后，把同一道题发给好友。')),
+        preview && h(LighthouseReviewRoutes, { preview, sampleLanguage, disabled: !preview.token || opening || Boolean(openError), onChoose: start }),
+        !state && h('p', { role: 'status' }, t('正在核对挑战要求…')),
+        error && h('p', { className: 'moba-alert', role: 'alert' }, t(error)),
+        preview?.token && h('p', { className: 'moba-starter-note', role: opening ? 'status' : undefined },
+          t(opening ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。')),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', disabled: opening, onClick: onCancel }, t('返回大厅')),
+          error && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
+            onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对'))))
+    }
+
     function LighthouseChallengeShare({ comparisonId, request, onBack, heroTrial = false, playedHero, reviewSource }) {
       const language = useLanguage()
       const [result, setResult] = useState(null)
@@ -1524,7 +1583,7 @@ window.__ModuleLoader__.load({
         review: '交付前由你确认，或者退回修改。',
       }
       return h(Fragment, null,
-        h('p', { className: 'moba-lighthouse-note' }, t(preview.played === 'direct'
+        preview.played && h('p', { className: 'moba-lighthouse-note' }, t(preview.played === 'direct'
           ? '好友选了直接交付。轮到你接班。' : '好友选了先复核。轮到你接班。')),
         h('fieldset', { className: 'moba-hero-trial-picks', disabled },
           h('legend', null, t('选你的交接打法')),
@@ -7320,6 +7379,8 @@ window.__ModuleLoader__.load({
       const starterEvidenceButton = useRef(null)
       const [challengeTrigger, setChallengeTrigger] = useState(null)
       const challengeButton = useRef(null)
+      const [reviewStartOpen, setReviewStartOpen] = useState(false)
+      const reviewStartButton = useRef(null)
       const starterChallengeButton = useRef(null)
       const [pendingLighthouseOpen, setPendingLighthouseOpen] = useState(false)
       const pendingLighthouseButton = useRef(null)
@@ -8024,6 +8085,14 @@ window.__ModuleLoader__.load({
                 onClick: toggleFullscreen, 'aria-label': fullscreen ? t('退出全屏') : t('全屏备战'),
                 'aria-pressed': fullscreen, title: fullscreen ? t('退出全屏') : t('全屏备战') }, h(Glyph, { kind: 'fullscreen' })))),
           data && h('div', { className: 'moba-lighthouse-entry' },
+            h('div', { className: 'moba-handoff-entry-actions' },
+              h('button', { type: 'button', className: 'moba-roster-open moba-review-start-button', disabled: pending,
+                ref: reviewStartButton, 'aria-haspopup': 'dialog', 'data-review-challenge-start': true,
+                onClick: () => setReviewStartOpen(true) },
+              h(Glyph, { kind: 'team', size: 17 }), h('span', null, t('打一局，邀请好友'))),
+              h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
+                ref: challengeButton, 'aria-haspopup': 'dialog', onClick: () => setChallengeTrigger(challengeButton) },
+              h(Glyph, { kind: 'arrow', size: 17 }), h('span', null, t('加入灯塔挑战')))),
             trialHeroes.length === 2 && h('button', { type: 'button', ref: heroTrialButton, disabled: pending,
               className: 'moba-starter-entry moba-hero-trial-entry', 'aria-haspopup': 'dialog', 'aria-label': t(heroTrialTitle),
               onClick: () => setHeroTrialOpen({ trigger: heroTrialButton }) },
@@ -8045,9 +8114,6 @@ window.__ModuleLoader__.load({
                 ref: resumeHeroTrialButton, 'aria-haspopup': 'dialog', 'aria-description': lastTrialNeed && t(lastTrialNeed.name),
                 onClick: () => setHeroTrialOpen({ trigger: resumeHeroTrialButton, comparisonId: data.lastHeroTrial.id }) },
               h(Glyph, { kind: 'back', size: 17 }), t('继续上一次试玩')),
-              h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
-                ref: challengeButton, 'aria-haspopup': 'dialog', onClick: () => setChallengeTrigger(challengeButton) },
-              h(Glyph, { kind: 'arrow', size: 17 }), t('加入灯塔挑战')),
               data.hasLighthouseRuns === true && h('button', {
                 type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: pendingLighthouseButton, 'aria-haspopup': 'dialog', onClick: () => setPendingLighthouseOpen(true),
@@ -8084,6 +8150,14 @@ window.__ModuleLoader__.load({
             cue('lock')
             setLessonOpen(null)
             setStarterOpen(false)
+            openDraftSession(sessionId, task)
+          } }),
+          reviewStartOpen && h(LighthouseReviewStart, { request, onCancel: () => {
+            setReviewStartOpen(false)
+            requestAnimationFrame(() => reviewStartButton.current?.focus())
+          }, onOpen: (sessionId, task) => {
+            cue('lock')
+            setReviewStartOpen(false)
             openDraftSession(sessionId, task)
           } }),
           challengeTrigger && h(LighthouseChallengeJoin, { request, firstHeroes: trialHeroes.length === 2 ? trialHeroes : undefined, onCancel: () => {
@@ -11208,6 +11282,12 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-entry .moba-lighthouse-entry-button { align-self: stretch; border-color: #607d78; background: #192c33;
         max-inline-size: 12em; text-align: start; }
       .moba-lighthouse-entry-button svg { flex: none; }
+      .moba-handoff-entry-actions { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 14em)); gap: 7px; }
+      .moba-handoff-entry-actions .moba-roster-open { max-inline-size: none; min-inline-size: 0; min-height: 44px;
+        justify-content: flex-start; text-align: start; white-space: normal; }
+      .moba-handoff-entry-actions svg { flex: none; }
+      .moba-handoff-entry-actions .moba-review-start-button { border-color: #a38757; background: #302719; color: #f2dba8; }
+      .moba-review-start-button:hover:not(:disabled) { border-color: var(--gold); background: #46351e; }
       @container (max-width: 620px) {
         .moba-lighthouse-entry { grid-template-columns: minmax(0, 1fr); }
         .moba-lighthouse-entry-actions { display: flex; flex-wrap: wrap; }

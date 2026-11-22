@@ -1895,17 +1895,15 @@ export async function apply(ctx) {
   async function replayReviewReport(selection, signal) {
     const { launchId, kind, comparisonId, arm, code } = selection
     if (!validOpeningId(launchId)) throw new Error('开局请求无效，请重试。')
-    const { local, friend } = await reviewHandoffReport(selection, signal, true)
-    const invitation = encodeLighthouseReviewChallenge(friend.language, local.played)
-    const { routePresets } = await checkReviewChallenge(invitation, signal)
-    if (!routePresets?.review || routePresets.direct === routePresets.review) throw new Error(reviewRoutesUnavailable)
+    const { friend } = await reviewHandoffReport(selection, signal, true)
+    const { routePresets } = await reviewChallengeLoadouts({ sampleLanguage: friend.language }, ['replay'], signal)
+    if (!routePresets?.review) throw new Error(reviewRoutesUnavailable)
     const id = createHash('sha256').update(JSON.stringify(['lighthouse-review-report-replay', kind, comparisonId, arm, code, launchId])).digest('hex').slice(0, 32)
     return openLighthouseLesson({ launchId: id, reviewChallengeArm: 'review' }, friend.language === 'en',
       signal, lighthouseLesson, routePresets.review)
   }
 
-  async function checkReviewChallenge(code, signal) {
-    const { sample, played, language: sampleLanguage } = decodeLighthouseReviewChallenge(code)
+  async function reviewChallengeLoadouts(context, tokenScope, signal) {
     const ecosystem = await discover()
     const routePresets = Object.fromEntries(await Promise.all(workspaceComparisonArms.map(async arm => {
       try {
@@ -1922,20 +1920,40 @@ export async function apply(ctx) {
     })))
     signal?.throwIfAborted()
     const routes = workspaceComparisonArms.filter(arm => routePresets[arm])
-    const view = { kind: 'delivery-review', sample, played, sampleLanguage, task: lighthouseReviewTask(sampleLanguage), routes }
+    const view = { kind: 'delivery-review', ...context, task: lighthouseReviewTask(context.sampleLanguage), routes }
     if (!routes.length || routePresets.direct === routePresets.review) return { preview: { ...view, blocked: true, reason: reviewRoutesUnavailable } }
-    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, code.trim(), routePresets])).digest('hex')
+    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, tokenScope, routePresets])).digest('hex')
     return { preview: { ...view, token }, routePresets }
   }
 
-  async function openReviewChallenge({ code, token, launchId, arm }, signal) {
+  function checkReviewChallenge(code, signal) {
+    const { sample, played, language: sampleLanguage } = decodeLighthouseReviewChallenge(code)
+    return reviewChallengeLoadouts({ sample, played, sampleLanguage }, code.trim(), signal)
+  }
+
+  function checkReviewStart(english, signal) {
+    const sampleLanguage = english ? 'en' : 'zh'
+    return reviewChallengeLoadouts({ sampleLanguage }, ['start', sampleLanguage], signal)
+  }
+
+  async function openCheckedReviewChallenge({ token, launchId, arm }, check, scope, signal) {
     if (!validOpeningId(launchId) || !workspaceComparisonArms.includes(arm) || typeof token !== 'string' ||
       !/^[a-f0-9]{64}$/.test(token)) throw new Error(challengeChanged)
-    const { preview, routePresets } = await checkReviewChallenge(code, signal)
+    const { preview, routePresets } = await check()
     if (preview.blocked || preview.token !== token || !routePresets[arm]) throw new Error(preview.reason ?? challengeChanged)
-    const id = createHash('sha256').update(JSON.stringify(['lighthouse-review-challenge-v1', code.trim(), launchId])).digest('hex').slice(0, 32)
+    const id = createHash('sha256').update(JSON.stringify([...scope, launchId])).digest('hex').slice(0, 32)
     return openLighthouseLesson({ launchId: id, reviewChallengeArm: arm }, preview.sampleLanguage === 'en',
       signal, lighthouseLesson, routePresets[arm])
+  }
+
+  function openReviewChallenge(selection, signal) {
+    return openCheckedReviewChallenge(selection, () => checkReviewChallenge(selection.code, signal),
+      ['lighthouse-review-challenge-v1', selection.code.trim()], signal)
+  }
+
+  function openReviewStart(selection, english, signal) {
+    return openCheckedReviewChallenge(selection, () => checkReviewStart(english, signal),
+      ['lighthouse-review-challenge-start-v1', english ? 'en' : 'zh'], signal)
   }
 
   const invalidShareChoice = '换装选择无效，请重新核对分享码。'
@@ -6992,6 +7010,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-evidence-report-compare') value = await evidenceHandoffReport(selection, request.signal, true)
         else if (selection?.action === 'lighthouse-evidence-repeat') value = await repeatLighthouseEvidence(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-repeat') value = await repeatLighthouseReview(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-review-start-preview') value = (await checkReviewStart(english, request.signal)).preview
+        else if (selection?.action === 'lighthouse-review-start-open') value = await openReviewStart(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-review-challenge-share') value = await shareReviewChallenge(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-report') value = await reviewHandoffReport(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-report-compare') value = await reviewHandoffReport(selection, request.signal, true)

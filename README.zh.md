@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.166.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.167.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -132,7 +132,7 @@ dsh web
 
 **灯塔补给行动** 里也可以玩原有的 **侦察路线** 和 **交付路线**。
 
-灯塔交接通过核验后，在原会话点 **邀请好友同题交接** 并复制邀请。好友从大厅打开 **加入灯塔挑战**，粘贴后核对原题，自己选择 **直接交付** 或 **复核后交付**。两边使用同一张公开补给卡和相同的任务语言。好友在 DSH 手动发送任务，选复核时可以在交付前退回修改。邀请只包含公开样例和你选的打法。
+在大厅点 **打一局，邀请好友**，选 **直接交付** 或 **复核后交付**，再在 DSH 手动发送。结果通过核验后，在原会话点 **邀请好友同题交接** 并复制邀请。好友从大厅打开 **加入灯塔挑战**，粘贴后核对原题，再选自己的打法。两边使用同一张公开补给卡和相同的任务语言。选复核的一方可以在交付前退回修改。邀请只包含公开样例和你选的打法。
 
 两边完成后，从已核验的交接点 **交换交接战报**。复制自己的战报码，粘贴好友的码，对照双方选的打法、复核选择和原件交付。点 **再试一次交付前复核** 会用同一道公开题打开新草稿，可以再做一次决定。交付文件和会话留在自己的 Profile。
 
