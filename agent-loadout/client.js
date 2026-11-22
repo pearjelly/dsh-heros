@@ -1917,6 +1917,7 @@ window.__ModuleLoader__.load({
 
     const lighthouseHandoffReportCodeLimit = 192
     const heroHandoffReportCode = /^DSHR1\.[A-Za-z0-9_-]+$/u
+    const reviewHandoffReportCode = /^DSHR3\.[A-Za-z0-9_-]+$/u
 
     function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal, onPersonalTask }) {
       const language = useLanguage()
@@ -1939,7 +1940,7 @@ window.__ModuleLoader__.load({
       const reviewKind = report.reviewKind
       const shareAction = reviewKind ? 'lighthouse-review-report' : evidence ? 'lighthouse-evidence-report' : 'hero-trial-handoff-report'
       const compareAction = reviewKind || evidence ? shareAction + '-compare' : 'hero-trial-handoff-compare'
-      const codePattern = reviewKind ? /^DSHR3\.[A-Za-z0-9_-]+$/ : evidence ? /^DSHR2\.[A-Za-z0-9_-]+$/ : heroHandoffReportCode
+      const codePattern = reviewKind ? reviewHandoffReportCode : evidence ? /^DSHR2\.[A-Za-z0-9_-]+$/ : heroHandoffReportCode
       const invalidCode = reviewKind ? '灯塔交接战报码无效或版本不受支持。'
         : evidence ? '灯塔取舍战报码无效或版本不受支持。' : '英雄战报码无效或版本不受支持。'
 
@@ -4169,6 +4170,7 @@ window.__ModuleLoader__.load({
     }
 
     function RunComparisonAnchor({ kind, member, sessionId, request, onVisit, consumeDraft, putTask, draftStore, hasTurn, workspaces, onUse }) {
+      const language = useLanguage()
       const config = comparisonKinds[kind]
       const lesson = member?.lesson === lighthouseRematchLesson
       const evidence = member?.lesson === lighthouseEvidenceLesson
@@ -4244,6 +4246,14 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (reviewReportTrigger.current ?? trigger.current)?.focus())
       }
 
+      async function loadReviewReportCode(signal) {
+        const action = 'lighthouse-review-report'
+        const report = await request(action, { action, kind, comparisonId: member.id, arm: member.arm }, signal, language)
+        const code = report?.code
+        return report?.local?.played === reviewInvitation && typeof code === 'string' &&
+          code.length <= lighthouseHandoffReportCodeLimit && reviewHandoffReportCode.test(code) ? code : undefined
+      }
+
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor', 'data-evidence-result': availableEvidenceReplay || undefined,
           'data-delivery-review-result': availableDeliveryReview || undefined, 'data-task-pending': taskPending || undefined,
@@ -4251,6 +4261,10 @@ window.__ModuleLoader__.load({
           h('div', null, h('strong', null, t(title)),
             h('span', null, scenario ? t(scenario.name) : comparisonArmName(comparisonArmConfig(kind, member.arm, evidenceReplay), member))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
+            reviewInvitation && h(LocalCopyButton, { key: member.id + ':' + member.arm, loadText: loadReviewReportCode,
+              label: '复制战报给好友', fieldLabel: '本局战报码', copiedNotice: '战报码已复制。可以发给好友对照。',
+              manualNotice: '已选中战报码。请手动复制并发给好友。', backLabel: '返回练习会话',
+              errorNotice: '这局的战报码暂时不可用。请查看练习记录后重试。' }),
             availableDirectRematch && h('button', { ref: directRematchTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', 'data-review-direct-preview': true,
               onClick: () => setOpenDirectRematch(true) }, t('试试直接交付')),
@@ -4269,7 +4283,7 @@ window.__ModuleLoader__.load({
               onClick: () => setOpenReviewInvitation(true) }, t('邀请好友同题交接')),
             reviewInvitation && h('button', { ref: reviewReportTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', 'data-review-handoff-report': true,
-              onClick: () => setOpenReviewReport(true) }, t('交换交接战报')),
+              onClick: () => setOpenReviewReport(true) }, t('对照好友战报')),
             availableLessonTask && h('button', { ref: lessonTaskTrigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setLessonTaskSource(availableLessonTask) }, t(lessonTaskLabel))),
           taskPending && h(ChallengeTaskDraft, { task: member.task, presetChanged: member.presetChanged,
