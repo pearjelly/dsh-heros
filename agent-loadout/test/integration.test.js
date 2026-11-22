@@ -2621,21 +2621,26 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal(friendMember.reviewChallengeArm, 'review')
     assert.equal(friendMember.firstTaskPending, true)
     assert.equal(friendMember.reviewInvitation, undefined)
-    const friendTurn = send(friend)
-    friendTurn.catch(() => {})
-    let friendQuestion
-    try {
-      for (let count = 0; count < 100 && !friendQuestion; count++) {
-        friendQuestion = (await host.request(questions, { sessionId: friend.sessionId })).question
-        if (!friendQuestion) await delay(40)
+    async function finishFriendReview(attempt, choice) {
+      const turn = send(attempt)
+      turn.catch(() => {})
+      let question
+      try {
+        for (let count = 0; count < 100 && !question; count++) {
+          question = (await host.request(questions, { sessionId: attempt.sessionId })).question
+          if (!question) await delay(40)
+        }
+        assert.deepEqual(question?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
+        assert.equal((await read({ comparisonId: attempt.id })).arms[0].status, 'waiting-choice')
+      } finally {
+        if (question) await host.request(questions, { sessionId: attempt.sessionId, choice })
+        await turn
       }
-      assert.deepEqual(friendQuestion?.options.map(item => item.label), ['Confirm handoff', 'Revise draft'])
-      assert.equal((await read({ comparisonId: friend.id })).arms[0].status, 'waiting-choice')
-    } finally {
-      if (friendQuestion) await host.request(questions, { sessionId: friend.sessionId, choice: 'Revise draft' })
-      await friendTurn
+      return (await read({ comparisonId: attempt.id })).arms[0]
     }
-    const friendResult = (await read({ comparisonId: friend.id })).arms[0]
+    const reviewSource = { kind: 'workspace', comparisonId: friend.id, arm: 'review' }
+    await invoke('lighthouse-review-report', reviewSource, 422)
+    const friendResult = await finishFriendReview(friend, 'Revise draft')
     assert.equal(friendResult.status, 'complete')
     assert.equal(friendResult.materialDelivered, false)
     assert.deepEqual(friendResult.entries[0].choices, ['Revise draft'])
@@ -2650,9 +2655,56 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal((await read({ comparisonId: friendDirect.id })).arms[0].materialDelivered, true)
     assert.equal((await history(friendDirect.sessionId)).events.find(item => item.type === 'deliverables/presented').data.files[0].path,
       join(friendDirectHistory.workspacePath, material))
+    const directSource = { kind: 'workspace', comparisonId: friendDirect.id, arm: 'direct' }
+    const [directReport, reviewReport] = await Promise.all([
+      invoke('lighthouse-review-report', directSource), invoke('lighthouse-review-report', reviewSource),
+    ])
+    function reportFields(code) {
+      assert.match(code, /^DSHR3\./)
+      return JSON.parse(Buffer.from(code.slice(6), 'base64url').toString('utf8'))
+    }
+    assert.deepEqual(reportFields(directReport.code), {
+      sample: 'lighthouse-delivery-review-1-zh', played: 'direct', decision: 'direct', originalAttached: true,
+    })
+    assert.deepEqual(reportFields(reviewReport.code), {
+      sample: 'lighthouse-delivery-review-1-zh', played: 'review', decision: 'revise', originalAttached: false,
+    })
+    assert.equal(reviewReport.local.choiceLabel, 'Revise draft')
+    const compareReview = (source, code, status) => invoke('lighthouse-review-report-compare', { ...source, code }, status)
+    const directComparison = await compareReview(directSource, reviewReport.code)
+    assert.deepEqual(directComparison.local, directReport.local)
+    assert.deepEqual(directComparison.friend, { language: 'zh', played: 'review', decision: 'revise', originalAttached: false })
+    assert.deepEqual((await compareReview(reviewSource, directReport.code)).friend, {
+      language: 'zh', played: 'direct', decision: 'direct', originalAttached: true,
+    })
+    const differentLanguage = 'DSHR3.' + Buffer.from(JSON.stringify({
+      ...reportFields(reviewReport.code), sample: 'lighthouse-delivery-review-1-en',
+    })).toString('base64url')
+    await compareReview(directSource, differentLanguage, 422)
+    await compareReview(directSource, reviewCode, 422)
+    const repeatReport = (code, status) =>
+      invoke('lighthouse-review-report-replay', { ...reviewSource, code, launchId: '7'.repeat(32) }, status)
+    await repeatReport(differentLanguage, 422)
+    const [reviewAgain, sameAgain] = await Promise.all([repeatReport(directReport.code), repeatReport(directReport.code)])
+    assert.deepEqual(sameAgain, reviewAgain)
+    assert.equal(reviewAgain.task, friend.task)
+    const againHistory = await history(reviewAgain.sessionId)
+    assert.notEqual(againHistory.workspaceId, friendDraft.workspaceId)
+    assert.equal(await readFile(join(againHistory.workspacePath, material), 'utf8'), contents[1])
+    assert.ok(noMessages(againHistory))
+    assert.deepEqual(await membership(againHistory.workspaceId), [reviewAgain.sessionId])
+    const confirmedAgain = await finishFriendReview(reviewAgain, 'Confirm handoff')
+    assert.equal(confirmedAgain.materialDelivered, true)
+    assert.deepEqual(confirmedAgain.entries.map(item => item.name), ['ask_user_question', 'present'])
+    const completedAgainReport = await invoke('lighthouse-review-report', { ...reviewSource, comparisonId: reviewAgain.id })
+    assert.deepEqual(reportFields(completedAgainReport.code), {
+      sample: 'lighthouse-delivery-review-1-zh', played: 'review', decision: 'confirm', originalAttached: true,
+    })
+    assert.deepEqual(await invoke('lighthouse-review-report', reviewSource), reviewReport)
     await appendFile(join(friendDraft.workspacePath, material), '\nChanged recipient sample.\n')
     await friendOpen('review', friendId, invitation.token, 422)
     await shareReview('workspace', friend.id, 'review', 422)
+    await compareReview(reviewSource, directReport.code, 422)
 
     const personalPath = join(directory, 'personal')
     await mkdir(personalPath)

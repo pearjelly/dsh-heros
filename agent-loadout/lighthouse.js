@@ -15,6 +15,11 @@ const evidenceDecisionLabels = new Map([
 ])
 export const lighthouseEvidenceChoices = ['gather', 'qualify', 'pause']
 export const lighthouseEvidenceDecision = choices => choices.length === 1 ? evidenceDecisionLabels.get(choices[0]) : undefined
+const reviewDecisionLabels = new Map([
+  ['确认交付', 'confirm'], ['确认交接', 'confirm'], ['confirm handoff', 'confirm'], ['confirm delivery', 'confirm'], ['approve delivery', 'confirm'],
+  ['退回修改', 'revise'], ['请求修改', 'revise'], ['revise draft', 'revise'], ['request changes', 'revise'],
+])
+export const lighthouseReviewDecision = label => reviewDecisionLabels.get(label.normalize('NFKC').trim().toLowerCase()) ?? 'answered'
 const cards = {
   '01-waystation.md': '# Mountain Waystation / 山口驿站\n\nCopper marker · Stone stairs\n\n铜色路标 · 补给在石阶旁\n',
   [supplyCard]: '# North Shore Lighthouse / 北岸灯塔\n\n**Marker / 徽记** · Gold beacon / 金色航标\n\n**Supply point / 补给点** · Second-floor lookout / 二层瞭望台\n\n**Supplies / 可领取** · 2 cans of lamp oil, 1 signal flag / 灯油 × 2、信号旗 × 1\n',

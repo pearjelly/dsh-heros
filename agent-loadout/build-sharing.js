@@ -246,6 +246,36 @@ export function decodeLighthouseReviewChallenge(value) {
   throw new Error(invalidChallenge)
 }
 
+const reviewReportPrefix = 'DSHR3.'
+const invalidReviewReport = '灯塔交接战报码无效或版本不受支持。'
+
+export function encodeLighthouseReviewReport(language, played, decision, originalAttached) {
+  const direct = played === 'direct' && decision === 'direct' && originalAttached === true
+  const reviewed = played === 'review' && ['confirm', 'revise', 'answered'].includes(decision) && typeof originalAttached === 'boolean'
+  if (!Object.hasOwn(reviewChallengeSamples, language) || !(direct || reviewed)) throw new Error(invalidReviewReport)
+  const data = { sample: reviewChallengeSamples[language], played, decision, originalAttached }
+  return reviewReportPrefix + Buffer.from(JSON.stringify(data)).toString('base64url')
+}
+
+export function decodeLighthouseReviewReport(code) {
+  if (typeof code !== 'string' || code.length > 192 || !code.startsWith(reviewReportPrefix)) throw new Error(invalidReviewReport)
+  const payload = code.slice(reviewReportPrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidReviewReport)
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (shape(data, ['sample', 'played', 'decision', 'originalAttached'])) {
+      const { sample, played, decision, originalAttached } = data
+      const language = Object.keys(reviewChallengeSamples).find(key => reviewChallengeSamples[key] === sample)
+      if (language && encodeLighthouseReviewReport(language, played, decision, originalAttached) === code) {
+        return { language, played, decision, originalAttached }
+      }
+    }
+  } catch {
+    // Reports contain only the versioned public sample and its portable outcome.
+  }
+  throw new Error(invalidReviewReport)
+}
+
 const heroReportPrefix = 'DSHR1.'
 const heroReportLimit = 192
 const invalidHeroReport = '英雄战报码无效或版本不受支持。'

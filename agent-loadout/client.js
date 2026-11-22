@@ -1799,23 +1799,25 @@ window.__ModuleLoader__.load({
       const tryHeroButton = useRef(null)
       const share = report.mode === 'share'
       const evidence = report.evidence === true
-      const shareAction = evidence ? 'lighthouse-evidence-report' : 'hero-trial-handoff-report'
-      const compareAction = evidence ? 'lighthouse-evidence-report-compare' : 'hero-trial-handoff-compare'
-      const codePattern = evidence ? /^DSHR2\.[A-Za-z0-9_-]+$/ : heroHandoffReportCode
-      const invalidCode = evidence ? '灯塔取舍战报码无效或版本不受支持。' : '英雄战报码无效或版本不受支持。'
+      const reviewKind = report.reviewKind
+      const shareAction = reviewKind ? 'lighthouse-review-report' : evidence ? 'lighthouse-evidence-report' : 'hero-trial-handoff-report'
+      const compareAction = reviewKind || evidence ? shareAction + '-compare' : 'hero-trial-handoff-compare'
+      const codePattern = reviewKind ? /^DSHR3\.[A-Za-z0-9_-]+$/ : evidence ? /^DSHR2\.[A-Za-z0-9_-]+$/ : heroHandoffReportCode
+      const invalidCode = reviewKind ? '灯塔交接战报码无效或版本不受支持。'
+        : evidence ? '灯塔取舍战报码无效或版本不受支持。' : '英雄战报码无效或版本不受支持。'
 
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => {
-        if (!share) return
+        if (!share && !reviewKind) return
         const abort = new AbortController()
         setResult(null)
         setError('')
-        request(shareAction, { action: shareAction, comparisonId, arm: report.arm }, abort.signal, language)
+        request(shareAction, { action: shareAction, comparisonId, arm: report.arm, ...(reviewKind && { kind: reviewKind }) }, abort.signal, language)
           .then(value => { if (!abort.signal.aborted) setResult(value) })
           .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
         return () => abort.abort()
-      }, [share, shareAction, request, comparisonId, report.arm, language])
-      useEffect(() => { if (!share && result) heading.current?.focus() }, [share, result])
+      }, [share, shareAction, request, comparisonId, report.arm, reviewKind, language])
+      useEffect(() => { if (!share && result?.friend) heading.current?.focus() }, [share, result])
       useEffect(() => {
         if (replyCodeVisible) {
           replyField.current?.focus()
@@ -1824,11 +1826,15 @@ window.__ModuleLoader__.load({
       }, [replyCodeVisible])
       useEffect(() => { if (heroOpenError && !openingRound) tryHeroButton.current?.focus() }, [heroOpenError, openingRound])
 
+      function clearFriend() {
+        setResult(current => reviewKind && current?.local ? { local: current.local, code: current.code } : null)
+      }
+
       async function check(event) {
         event.preventDefault()
         const code = input.trim()
-        if (pending.current || !code) return
-        setResult(null)
+        if (pending.current || !code || reviewKind && !result?.local) return
+        clearFriend()
         setNotice('')
         setReplyCodeVisible(false)
         setHeroOpenError('')
@@ -1842,7 +1848,8 @@ window.__ModuleLoader__.load({
         setBusy(true)
         setError('')
         try {
-          const value = await request(compareAction, { action: compareAction, comparisonId, arm: report.arm, code },
+          const value = await request(compareAction, { action: compareAction, comparisonId, arm: report.arm, code,
+            ...(reviewKind && { kind: reviewKind }) },
             abort.signal, language)
           if (!abort.signal.aborted) setResult(value)
         } catch (reason) {
@@ -1877,8 +1884,9 @@ window.__ModuleLoader__.load({
           repeatLaunchId.current = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
         }
         return openRound(async signal => {
-          const action = 'lighthouse-evidence-repeat'
-          const opened = await request(action, { action, comparisonId, code: input.trim(), launchId: repeatLaunchId.current },
+          const action = reviewKind ? 'lighthouse-review-report-replay' : 'lighthouse-evidence-repeat'
+          const opened = await request(action, { action, comparisonId, code: input.trim(), launchId: repeatLaunchId.current,
+            ...(reviewKind && { kind: reviewKind, arm: report.arm }) },
             signal, language)
           return () => onOpenRepeat(opened.sessionId, opened.task)
         }, setError)
@@ -1903,7 +1911,8 @@ window.__ModuleLoader__.load({
 
       function changeInput(event) {
         setInput(event.target.value)
-        setResult(null)
+        clearFriend()
+        if (reviewKind) repeatLaunchId.current = null
         setError('')
         setNotice('')
         setReplyCodeVisible(false)
@@ -1911,6 +1920,17 @@ window.__ModuleLoader__.load({
       }
 
       function renderSide(side, title, action, readingTool) {
+        if (reviewKind) {
+          const route = fieldPlaybooks.find(item => item.id === side.played)
+          const decision = { confirm: '确认交付', revise: '退回修改', answered: '已作出复核选择' }[side.decision]
+          return h('article', { className: 'moba-lighthouse-arm moba-handoff-report-side',
+            'data-review-handoff-side': side === result?.local ? 'local' : 'friend' },
+            h('header', null, h(Glyph, { kind: route.icon, size: 18 }), h('h4', null, t(title))),
+            h('dl', { className: 'moba-handoff-report-facts' },
+              h('dt', null, t('交接打法')), h('dd', null, t(route.name)),
+              decision && h(Fragment, null, h('dt', null, t('提问卡选择')), h('dd', null, side.choiceLabel ?? t(decision))),
+              h('dt', null, t('补给卡原件')), h('dd', null, t(side.originalAttached ? '已附上' : '未附上'))))
+        }
         if (evidence) return h('article', { className: 'moba-lighthouse-arm moba-handoff-report-side' },
           h('header', null, h(ItemArt, { item: { id: 'evidence' } }), h('h4', null, t(title))),
           h('dl', { className: 'moba-handoff-report-facts' },
@@ -1928,7 +1948,8 @@ window.__ModuleLoader__.load({
           action)
       }
 
-      const title = evidence ? (share ? '分享本局取舍' : '对照好友取舍') : (share ? '分享这局战报' : '对照好友战报')
+      const title = reviewKind ? '交换交接战报'
+        : evidence ? (share ? '分享本局取舍' : '对照好友取舍') : (share ? '分享这局战报' : '对照好友战报')
       const comparison = result?.friend
       const tryHero = comparison && onTryHero && comparison.arm !== result.local.arm && unopenedHeroes?.includes(comparison.arm)
         ? heroTrialHeroes.find(hero => hero.id === comparison.arm) : undefined
@@ -1945,8 +1966,9 @@ window.__ModuleLoader__.load({
           onClick: () => openRound(signal => onTryHero(tryHero.id, signal), setHeroOpenError) }, t(tryHero.trySameTask)),
         openingRound && h('p', { role: 'status', className: 'moba-lighthouse-note' }, t('正在打开试玩会话…')),
         heroOpenError && h('p', { role: 'alert', className: 'moba-alert' }, heroOpenError))
-      const need = !evidence && result && heroTrialNeeds.find(item => item.id === result.need)
-      const note = evidence ? (share ? '取舍码包含公开样例版本、实际选择和是否交付。'
+      const need = !reviewKind && !evidence && result && heroTrialNeeds.find(item => item.id === result.need)
+      const note = reviewKind ? '复制你的交接战报码，也可以粘贴好友的战报码，看两局交出了什么。'
+        : evidence ? (share ? '取舍码包含公开样例版本、实际选择和是否交付。'
         : '粘贴好友的灯塔取舍码，对照同一份缺证样例里各自的选择和交付。') : (share
         ? '战报码只包含公开题目版本、接班需求、出装和是否附上原件。'
         : '粘贴同一题、同一接班需求的战报码，看看两套出装交接得怎么样。')
@@ -1968,16 +1990,18 @@ window.__ModuleLoader__.load({
                 rows: tryHero && result.local.readingTool ? 2 : 3, maxLength: lighthouseHandoffReportCodeLimit + 1,
                 readOnly: busy || openingRound, spellCheck: false,
                 autoComplete: 'off', autoCapitalize: 'off', onChange: changeInput })),
-            (busy || share && !result && !error) && h('p', { role: 'status' }, t('正在核对战报…')),
+            (busy || (share || reviewKind) && !result && !error) && h('p', { role: 'status' }, t('正在核对战报…')),
             error && h('p', { className: 'moba-alert', role: 'alert' }, error),
             result && h('section', { className: 'moba-handoff-outcome' },
-              h('h3', { ref: heading, tabIndex: -1 }, evidence ? t('缺证时，你们怎么选？') :
+              h('h3', { ref: heading, tabIndex: -1 }, reviewKind ? t('同一张卡，两种交接')
+                : evidence ? t('缺证时，你们怎么选？') :
                 h(Fragment, null, t('接班人需要什么？'), ' ', t(need.name))),
-              comparison && result.code && h('div', { className: 'moba-detail-actions' },
+              (comparison || reviewKind) && result.code && h('div', { className: 'moba-detail-actions' },
                 h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: copy },
                   t(evidence ? '复制我的取舍码' : '复制我的战报码')),
-                evidence && onOpenRepeat && h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: openRepeat },
-                  t(openingRound ? '正在打开同题会话…' : '用同一出装再试一局'))),
+                comparison && (evidence || reviewKind) && onOpenRepeat &&
+                h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: openRepeat },
+                  t(openingRound ? '正在打开同题会话…' : reviewKind ? '再试一次交付前复核' : '用同一出装再试一局'))),
               replyCodeVisible && result.code && h('label', null, t(evidence ? '我的取舍码' : '我的战报码'),
                 h('textarea', { ref: replyField, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                   spellCheck: false, onFocus: event => event.currentTarget.select() })),
@@ -1990,7 +2014,8 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-challenge-back', disabled: openingRound, onClick: back }, t('返回')),
             share ? result?.code && h('button', { type: 'button', className: 'moba-start', onClick: copy }, t('复制战报码'))
-              : h('button', { type: 'submit', className: 'moba-start', disabled: busy || openingRound || !input.trim() }, t('对照这两局')))))
+              : h('button', { type: 'submit', className: 'moba-start',
+                disabled: busy || openingRound || !input.trim() || Boolean(reviewKind && !result?.local) }, t('对照这两局')))))
     }
 
     function MinimalDeliveryReplay({ request, comparisonId, onBack, onVisit, backLabel = '返回试玩对照' }) {
@@ -3997,12 +4022,14 @@ window.__ModuleLoader__.load({
       const [openEvidenceReplay, setOpenEvidenceReplay] = useState(false)
       const [openDeliveryReview, setOpenDeliveryReview] = useState(false)
       const [openReviewInvitation, setOpenReviewInvitation] = useState(false)
+      const [openReviewReport, setOpenReviewReport] = useState(false)
       const [draftStatus, setDraftStatus] = useState('')
       const trigger = useRef(null)
       const lessonTaskTrigger = useRef(null)
       const evidenceReplayTrigger = useRef(null)
       const deliveryReviewTrigger = useRef(null)
       const reviewInvitationTrigger = useRef(null)
+      const reviewReportTrigger = useRef(null)
       const availableLessonTask = evidence && member.lessonTaskSource
       const availableEvidenceReplay = evidence && member.canReplayLighthouseEvidence === true
       const availableDeliveryReview = lesson && kind === 'workspace' && member.canTryDeliveryReview === true
@@ -4042,6 +4069,11 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => (reviewInvitationTrigger.current ?? trigger.current)?.focus())
       }
 
+      function closeReviewReport() {
+        setOpenReviewReport(false)
+        requestAnimationFrame(() => (reviewReportTrigger.current ?? trigger.current)?.focus())
+      }
+
       return h(Fragment, null,
         h('div', { className: 'moba-lighthouse-anchor', 'data-evidence-result': availableEvidenceReplay || undefined,
           'data-delivery-review-result': availableDeliveryReview || undefined, 'data-task-pending': taskPending || undefined,
@@ -4060,6 +4092,9 @@ window.__ModuleLoader__.load({
             reviewInvitation && h('button', { ref: reviewInvitationTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', 'data-review-challenge-share': true,
               onClick: () => setOpenReviewInvitation(true) }, t('邀请好友同题交接')),
+            reviewInvitation && h('button', { ref: reviewReportTrigger, type: 'button', 'aria-haspopup': 'dialog',
+              className: 'moba-settlement-button', 'data-review-handoff-report': true,
+              onClick: () => setOpenReviewReport(true) }, t('交换交接战报')),
             availableLessonTask && h('button', { ref: lessonTaskTrigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
               onClick: () => setLessonTaskSource(availableLessonTask) }, t(lessonTaskLabel))),
           taskPending && h(ChallengeTaskDraft, { task: member.task, presetChanged: member.presetChanged,
@@ -4077,6 +4112,9 @@ window.__ModuleLoader__.load({
             : '请手动发送补给卡任务。完成首局后，在练习记录里换一件再试。'))),
         openReviewInvitation && reviewInvitation && h(LighthouseChallengeShare, { comparisonId: member.id, request,
           reviewSource: { kind, arm: member.arm, played: reviewInvitation }, onBack: closeReviewInvitation }),
+        openReviewReport && reviewInvitation && h(LighthouseHandoffReport, { report: { mode: 'compare', reviewKind: kind, arm: member.arm },
+          comparisonId: member.id, request, onBack: closeReviewReport,
+          onOpenRepeat: (next, task) => { setOpenReviewReport(false); onVisit(next, task) } }),
         lessonTaskSource && h(PersonalLoadoutTask, { source: lessonTaskSource, workspaces, request, onBack: closeLessonTask,
           backLabel: '返回练习会话', onVisit: (next, task) => { setLessonTaskSource(null); onVisit(next, task) } }),
         openEvidenceReplay && h(RematchEditor, { kind, comparisonId: member.id, arm: member.arm, sourceSessionId: sessionId, request,
