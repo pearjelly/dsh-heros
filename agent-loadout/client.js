@@ -2024,7 +2024,7 @@ window.__ModuleLoader__.load({
             onClick: open }, t(opening ? '正在打开加装会话…' : '打开加装会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, workspaces, focusReplay, firstHeroes, backLabel = '返回英雄图鉴' }) {
+    function HeroTrial({ request, comparisonId, sessionId, onClose, onVisit, putTask, workspaces, focusReplay, focusArm, firstHeroes, backLabel = '返回英雄图鉴' }) {
       const language = useLanguage()
       const [need, setNeed] = useState('')
       const [activeId, setActiveId] = useState(comparisonId ?? '')
@@ -2215,7 +2215,9 @@ window.__ModuleLoader__.load({
       const finished = value?.arms.length > 0 && value.arms.every(arm => arm.status === 'complete')
       const verifiedHeroes = value?.arms.filter(canReportHeroHandoff) ?? []
       const unopenedHeroes = value?.arms.filter(arm => arm.status === 'unopened' && !arm.sessionId).map(arm => arm.id)
-      const focusSelector = focusReplay && deliveryReplay ? '[data-hero-delivery-recap]'
+      const focusedHero = value?.arms.find(arm => arm.id === focusArm && heroTrialHeroes.some(hero => hero.id === arm.id))
+      const focusSelector = focusedHero ? `[data-comparison-arm="${focusedHero.id}"]`
+        : focusReplay && deliveryReplay ? '[data-hero-delivery-recap]'
         : focusReplay && minimalReplay ? '[data-comparison-arm="minimal-present"]' : '[data-hero-trial-results]'
       return h(Fragment, null, h(InstallDialog, { title: t(heroTrialTitle), busy, onCancel: onClose,
         className: setup ? 'moba-starter-dialog' : 'moba-lighthouse-comparison',
@@ -2283,6 +2285,12 @@ window.__ModuleLoader__.load({
           onVisit: (next, task) => { setReplayOpen(null); setHandoffReport(null); onVisit(next, task) } }),
         personalTask && h(PersonalLoadoutTask, { ...personalTask, workspaces, request,
           onBack: closePersonalTask, onVisit: (next, task) => { setPersonalTask(null); setHandoffReport(null); onVisit(next, task) } }))
+    }
+
+    function PersonalTaskSourceTrial({ source, workspaces, ...props }) {
+      const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
+      return h(HeroTrial, { ...props, comparisonId: source.comparisonId, focusArm: source.arm, workspaces: items,
+        backLabel: '返回任务结果' })
     }
 
     function HeroTrialAnchor({ member, sessionId, request, onVisit, consumeDraft, putTask, draftStore, hasTurn, workspaces }) {
@@ -9108,6 +9116,7 @@ window.__ModuleLoader__.load({
       const rematchButton = useRef(null)
       const rebaselineButton = useRef(null)
       const alternateButton = useRef(null)
+      const sourceTrialButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
       const action = 'lesson-task-result'
       const keepButtons = { original: originalReviewButton, alternate: alternateReviewButton }
@@ -9120,6 +9129,7 @@ window.__ModuleLoader__.load({
       const sourceArm = source && comparisonArmConfig(source.kind, source.arm)
       const sourceLabel = source && [comparisonArmName(sourceArm, source), source.heroName].filter(Boolean).join(' · ')
       const alternateLabel = alternateTaskLabels[result?.alternateTask?.arm]
+      const sourceTrial = !alternateLabel && result?.sourceTrial?.arm === 'standard' ? result.sourceTrial : undefined
       const reviewedRunTools = pairSide && result?.draft && result.materialDelivered === true
         ? [...new Set(result.entries?.filter(entry => entry.type === 'tool' && entry.state === 'completed').map(entry => entry.name))]
         : undefined
@@ -9154,7 +9164,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (review || !current || !initialPersonalFocus || restoredPersonalFocus.current) return
         restoredPersonalFocus.current = true
-        const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton }
+        const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton, 'source-trial': sourceTrialButton }
         const button = buttons[initialPersonalFocus]?.current
         const target = button ?? rebaselineButton.current ?? reviewHeading.current
         target?.focus()
@@ -9193,6 +9203,9 @@ window.__ModuleLoader__.load({
               ].filter(Boolean).join(' · ')),
               alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
+              sourceTrial && h('button', { ref: sourceTrialButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
+                onClick: () => onPersonalFlow({ mode: 'source-trial', source: sourceTrial }) },
+                t('在灯塔试玩标准模式'), h(Glyph, { kind: 'arrow', size: 16 })),
               result.textHandoff && h('p', { className: 'moba-match-action-note' }, t('已记录终端工具完成和助手文字回复。')),
               h(ObservedComparisonCalls, { entries: result.entries }),
               h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
@@ -10246,6 +10259,8 @@ window.__ModuleLoader__.load({
           armoryDraft: personalFlow.armoryDraft, workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'alternate' && h(LessonTaskAlternate, { sessionId, request,
           onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
+        personalFlow?.mode === 'source-trial' && h(PersonalTaskSourceTrial, { source: personalFlow.source, workspaces, sessionId, request,
+          onClose: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         armoryReview && h(RematchEditor, { ...armoryReview, sourceSessionId: sessionId, request,
           guidedReview: true, backLabel: '返回任务会话', onBack: closeArmoryReview, onClose: closeArmoryReview,
           onVisit: (next, task) => {

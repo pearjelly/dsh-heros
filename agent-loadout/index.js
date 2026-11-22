@@ -4194,6 +4194,29 @@ export async function apply(ctx) {
     }
   }
 
+  async function pendingStandardTrial(original, signal) {
+    const { launch, evidence, presentBinding, target } = original
+    const next = alternateHeroSource(launch)
+    if (next?.arm !== 'standard' || !target || !presentBinding ||
+      evidence.status !== 'complete' || !verifiedPresentHandoff(evidence)) return
+    try {
+      const record = heroTrials.read(next.comparisonId)
+      const stock = await readHeroTrialArm(record, next.arm, signal)
+      if (stock.status !== 'unopened' && (stock.status !== 'waiting' || stock.presetChanged || stock.materialState !== 'verified')) return
+      const [checked, materialState] = await Promise.all([
+        verifiedLessonTaskSource(launch.source, signal),
+        personalTaskMaterialState(target, signal),
+      ])
+      if (materialState === 'verified' && checked.proof.sessionId === launch.source.sessionId &&
+        checked.proof.presetId === target.presetId && checked.proof.identity === target.identity &&
+        isDeepStrictEqual(checked.deliveryBinding, presentBinding) && await heroTrialAvailable(checked.ecosystem)) {
+        return { comparisonId: next.comparisonId, arm: next.arm }
+      }
+    } catch {
+      signal?.throwIfAborted()
+    }
+  }
+
   async function openHeroAlternateTask({ sessionId, token }, english, signal) {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error(heroAlternateUnavailable)
     const launchId = createHash('sha256').update(JSON.stringify([planTaskOwner, 'hero-alternate', sessionId])).digest('hex').slice(0, 32)
@@ -4988,6 +5011,7 @@ export async function apply(ctx) {
       canReview && review !== true && heroAlternateTaskOption(sessionId, resultView, signal),
       review !== true && personalHeroPair(sessionId, resultView, signal),
     ])
+    const sourceTrial = !alternateTask && canReview && review !== true && await pendingStandardTrial(resultView, signal)
     const awards = settled.filter(item => item.kind)
       .map(({ id, name, kind, xp, sourceName }) => ({ id, name, kind, xp, ...(sourceName && { sourceName }) }))
     const workspace = canContinue && !evidenceSource && ctx.get('workspaceRegistry')?.list()
@@ -5022,6 +5046,7 @@ export async function apply(ctx) {
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
+      ...(sourceTrial && { sourceTrial }),
       ...(heroPair && { heroPair: personalHeroPairResult(heroPair) }),
       ...(armoryDraft && { armoryDraft }), ...(armoryReason && { reason: armoryReason }) }
     if (review !== true || !canReview) return result

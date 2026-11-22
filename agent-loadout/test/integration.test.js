@@ -1436,7 +1436,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
   }
 })
 
-test('stock heroes use the same Lighthouse card and show which delivery need each native session meets', { timeout: 150_000 }, async () => {
+test('stock heroes use the same Lighthouse card and show which delivery need each native session meets', { timeout: 180_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-stock-hero-trial-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')
@@ -2149,6 +2149,47 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
     assert.deepEqual(await nativeSessions(), [...beforePersonalRematches, ...rematchSessions].sort())
     assert.equal(await readFile(ownPath, 'utf8'), ownContent)
     assert.deepEqual((await host.request(endpoint)).value.plans, before.plans)
+
+    const startingTrial = await create(launchId('6'), 'original')
+    const onlyMinimal = await open(startingTrial.id, 'minimal')
+    await send(onlyMinimal)
+    const fitting = await previewReplay(startingTrial.id)
+    const equipped = await openReplay(startingTrial.id, fitting.token)
+    await send(equipped)
+    const carry = (await equipmentIn(host, equipped.sessionId)).heroTrial.lessonTaskSource
+    const ownInput = { ...carry, workspaceId, material: ownMaterial, task: selection.task }
+    const checkedOwn = await invoke('lesson-task-preview', ownInput)
+    const fromReplay = await invoke('lesson-task-open', { ...ownInput, token: checkedOwn.token, launchId: launchId('c') })
+    assert.equal((await invoke('lesson-task-result', { sessionId: fromReplay.sessionId })).sourceTrial, undefined)
+    await send(fromReplay)
+    const differentTrial = await create(launchId('d'), 'original')
+    assert.equal((await read()).id, differentTrial.id)
+    const lessonResult = () => invoke('lesson-task-result', { sessionId: fromReplay.sessionId })
+    const beforeSourceVisit = await nativeSessions()
+    const sourceHint = { comparisonId: startingTrial.id, arm: 'standard' }
+    assert.deepEqual((await lessonResult()).sourceTrial, sourceHint)
+    assert.equal((await lessonResult()).alternateTask, undefined)
+    assert.equal(byHero(await read(sourceHint.comparisonId), sourceHint.arm).status, 'unopened')
+    assert.deepEqual(await nativeSessions(), beforeSourceVisit)
+    await appendFile(ownPath, '\nEdited after completing the handoff.\n')
+    assert.equal((await lessonResult()).sourceTrial, undefined)
+    await writeFile(ownPath, ownContent)
+    const standardPractice = await open(sourceHint.comparisonId, sourceHint.arm)
+    assert.notEqual(standardPractice.sessionId, fromReplay.sessionId)
+    assert.equal(standardPractice.task, startingTrial.task)
+    assert.ok(!(await history(standardPractice.sessionId)).events.some(event => event.type === 'turn/start'))
+    assert.deepEqual((await lessonResult()).sourceTrial, sourceHint)
+    await send(standardPractice)
+    const stockPractice = await history(standardPractice.sessionId)
+    assert.deepEqual(traceTools(stockPractice).map(event => event.data.name), ['read', 'present'])
+    assert.deepEqual(traceFiles(stockPractice).map(file => file.path), [join(stockPractice.workspacePath, material)])
+    assert.equal((await lessonResult()).sourceTrial, undefined)
+    assert.deepEqual((await lessonResult()).alternateTask, { arm: 'standard' })
+    const privateAlternate = await alternatePreview(fromReplay.sessionId)
+    assert.equal(privateAlternate.material, ownMaterial)
+    assert.equal(privateAlternate.task, fromReplay.task)
+    assert.deepEqual(await nativeSessions(), [...beforeSourceVisit, standardPractice.sessionId].sort())
+    assert.equal((await read()).id, differentTrial.id)
 
     const summary = await create(launchId('b'), 'summary', 200, 'zh')
     assert.equal(summary.task, trial.task)
