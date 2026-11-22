@@ -85,6 +85,8 @@ cmp "$release_dir/SHA256SUMS" "$release_dir/draft/SHA256SUMS"
 gh release edit "$tag" --repo "$repo" --draft=false --latest
 ```
 
+If GitHub cannot look up the draft by tag, list releases with the authenticated CLI and find the draft for the exact tag. Download its two assets by ID with `gh api -H 'Accept: application/octet-stream' "repos/$repo/releases/assets/$asset_id"`. Run the same checksum and manifest comparisons on the downloaded bytes, then publish that draft. [GitHub release assets API](https://docs.github.com/en/rest/releases/assets#get-a-release-asset)
+
 Check that the public release is marked Latest and that both public asset routes serve the tested bytes. [GitHub CLI release commands](https://cli.github.com/manual/gh_release)
 
 ```sh

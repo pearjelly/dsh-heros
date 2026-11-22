@@ -283,7 +283,8 @@ export async function apply(ctx) {
       } else if (latestText === '读取预设工作目录') {
         const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
           .map(block => block.text).join('\n')
-        text = systemText.match(/LEGACY PRESET CWD ([^\r\n]+)/u)?.[1] ?? '工作目录变量未解析'
+        // Newer hosts append a replacement system section after the previous one.
+        text = [...systemText.matchAll(/LEGACY PRESET CWD ([^\r\n]+)/gu)].at(-1)?.[1] ?? '工作目录变量未解析'
       } else if (latestText === '核对队伍任务列表') {
         name = 'team_task_list'
         args = {}
@@ -354,16 +355,18 @@ export async function apply(ctx) {
         latestText?.startsWith('【run_code】抽查批量结果') ||
         (latestText?.startsWith('【run_code】用工具完成任务') && latestText.includes('扫描本地清单'))) {
         name = 'run_code'
-        args = { code: 'return await tools.glob({pattern:"*.txt"})', description: 'Find workspace text files' }
+        args = { code: 'console.log(JSON.stringify(await tools.glob({pattern:"*.txt"})))', description: 'Find workspace text files' }
       } else if (latestText === 'fixture ptc report' || latestText?.startsWith('【run_code】用工具完成任务')) {
         name = 'run_code'
-        args = { code: 'return await tools.quartz_note({})', description: 'Read the fixture note' }
+        args = { code: 'console.log(JSON.stringify(await tools.quartz_note({})))', description: 'Read the fixture note' }
       } else if (latestText === 'fixture ptc partial') {
         name = 'run_code'
-        args = { code: `const first = await tools.glob({pattern:"*.txt"});
+        args = { code: `await (async () => {
+          const first = await tools.glob({pattern:"*.txt"});
           await tools.glob({pattern:"*.md"});
-          try { await tools.quartz_note({}); } catch { return first; }
-          return first;`, description: 'Read available fixture files' }
+          try { await tools.quartz_note({}); } catch {}
+          console.log(JSON.stringify(first));
+        })()`, description: 'Read available fixture files' }
       }
       if (name || sequence) {
         const result = (!sequence || !name) && results.at(-1)

@@ -1125,11 +1125,32 @@ export async function apply(ctx) {
       removedEquipmentIds: (original?.removedEquipmentIds ?? []).map(id => currentEquipmentId(id, ecosystem)) }
   }
 
-  async function verifyRecordedLoadout(presetId, draft, ecosystem) {
+  async function retainedPreviewRecipe(presetId, candidate, ecosystem) {
+    const original = records.get(presetId)
+    const current = candidate.record
+    if (original?.baseId !== 'standard' || !current || !ecosystem.standingByPreset.has(presetId)) return
+    const plugins = current.definition.plugins.filter(row => !isDeepStrictEqual(row,
+      { id: 'tool-cordis', name: '@deepseek-ai/dsh-tool-cordis' }))
+    if (plugins.length !== current.definition.plugins.length - 1 ||
+      !isDeepStrictEqual(original, { ...current, definition: { ...current.definition, id: presetId, plugins } })) return
+    const { getDshRuntimeVersion } = await runtimeModule(ctx, '@deepseek-ai/dsh-app-boot')
+    if (getDshRuntimeVersion() !== '0.2.3-alpha.2') return
+    // The preview adds one tool to Standard. Run the original registered recipe
+    // so a saved plan does not gain a tool that was never part of the plan.
+    return { id: presetId, record: original, inventoryPresetId: presetId }
+  }
+
+  async function verifyRecordedLoadout(presetId, draft, ecosystem, retainPreview = false) {
     const preset = await ctx.agentPresets.resolve(presetId)
     const candidate = await plan(draft, ecosystem)
-    if (preset.broken || candidate.id !== presetId) throw new Error('本机配置已变化，无法核对这局的原出装。')
-    return candidate
+    if (!preset.broken) {
+      if (candidate.id === presetId) return candidate
+      if (retainPreview) {
+        const retained = await retainedPreviewRecipe(presetId, candidate, ecosystem)
+        if (retained) return retained
+      }
+    }
+    throw new Error('本机配置已变化，无法核对这局的原出装。')
   }
 
   function loadoutIdentity(draft, candidate, ecosystem) {
@@ -1146,7 +1167,7 @@ export async function apply(ctx) {
     const original = records.get(saved.presetId)
     if (!original && saved.presetId !== saved.heroId) throw new Error('方案的英雄或阵容当前不可用。')
     const draft = recordedLoadoutDraft(original, saved.heroId, ecosystem)
-    const candidate = await verifyRecordedLoadout(saved.presetId, draft, ecosystem)
+    const candidate = await verifyRecordedLoadout(saved.presetId, draft, ecosystem, true)
     const identity = loadoutIdentity(draft, candidate, ecosystem)
     return { draft, candidate, identity }
   }
@@ -1997,7 +2018,7 @@ export async function apply(ctx) {
     const [ecosystem, uploaded] = await Promise.all([discovered ?? discover(), appearance.index()])
     const art = packageArt(uploaded, ecosystem)
     const candidate = planned ?? await plan(selection, ecosystem)
-    const target = summarizeCapabilities(ecosystem, selection.presetId, {
+    const target = summarizeCapabilities(ecosystem, candidate.inventoryPresetId ?? selection.presetId, {
       record: candidate.record, units: candidate.units, removed: candidate.removed,
     })
     const againstDraft = reference && (plannedReference ?? await plan(reference, ecosystem))
@@ -3855,7 +3876,7 @@ export async function apply(ctx) {
   }
 
   function comparisonLoadoutIdentity(draft, candidate, ecosystem, identity = loadoutIdentity(draft, candidate, ecosystem),
-    capabilities = summarizeCapabilities(ecosystem, draft.presetId, candidate)) {
+    capabilities = summarizeCapabilities(ecosystem, candidate.inventoryPresetId ?? draft.presetId, candidate)) {
     const sources = [...capabilities.keys()].sort().map(id => {
       const { sourceId, timing } = capabilities.get(id)
       return [id, sourceId ?? null, timing ?? null]

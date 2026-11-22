@@ -35,7 +35,8 @@ export async function entryYaml(ctx) {
   const { entryListSchema, applyEntryPatches, parseEntryYaml, stringifyEntryYaml } =
     await import(pathToFileURL(require.resolve(name)).href)
   if (typeof parseEntryYaml === 'function' && typeof stringifyEntryYaml === 'function') {
-    return { parse: parseEntryYaml, dump: stringifyEntryYaml, applyEntryPatches }
+    return { parse: parseEntryYaml, dump: stringifyEntryYaml,
+      applyEntryPatches: (...args) => applyEntryPatches(...args).data }
   }
   const yaml = require('js-yaml')
   return { parse: text => yaml.load(text, { schema: entryListSchema }), dump: yaml.dump, applyEntryPatches }
