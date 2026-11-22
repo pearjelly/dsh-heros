@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.173.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.174.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -145,6 +145,8 @@ After a verified result from a v0.171.0 personal task opened from these cards, t
 When a same-task replay opened in v0.172.0 finishes, its result compares both personal runs. Check the review decision and the actual original-file delivery, or open either conversation from the comparison.
 
 Choose **Keep this loadout** on either personal result card. Check that run's actual choice, delivery and tool calls while naming the plan. From the save confirmation, start a new task with the saved loadout and choose a new file and brief. The plan saves the loadout and the details you enter when naming it.
+
+You can reach the same personal comparison from solo practice. In Lighthouse, deliver the card in Standard mode, add Delivery Review and run the same task. After both runs are verified, choose either loadout from that result. Use your own file and, after the first result, try the other route on the same task.
 
 To return to an unsent friend challenge or review replay, open **Resume a Lighthouse draft** in the lobby. Select the route and task language to reopen the original draft.
 

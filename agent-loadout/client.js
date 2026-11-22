@@ -3354,7 +3354,7 @@ window.__ModuleLoader__.load({
             h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看任务和出装')), workspaceFacts, gearChange, sharedTask))
             : h(Fragment, null, workspaceFacts, gearChange),
           publicReviewOutcome && h(HandoffOutcomeSummary, { outcome: publicReviewOutcome, onVisit, busy: Boolean(launch),
-            onLessonTask: arm => setLessonTask({ id: arm.id, lessonTaskSource: arm.lessonTaskSource, fromSummary: true }) }),
+            onLessonTask: arm => setLessonTask({ id: arm.id, lessonTaskSource: arm.lessonTaskSource, fromSummary: true, handoffStyle: arm.style }) }),
           reviewChoiceComparison && h(ReviewChoiceComparison, { comparison: reviewChoiceComparison, onVisit, busy: Boolean(launch) }),
           previous && h(PreviousComparisonLink, { reference: previous, onOpen: onPrevious, disabled: Boolean(launch) }),
           personal && value.materialState === 'verified' && h('p', { className: 'moba-lighthouse-note' }, t('材料与本组记录的版本一致。')),

@@ -2553,8 +2553,8 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
         ['baseline', 'direct', [], baseline.sessionId], ['rematch', 'review', [answer], attempt.sessionId],
       ])
       assert.deepEqual(outcome.arms.map(side => side.lessonTaskSource), [
-        { kind: 'workspace', comparisonId: baseline.id, arm: 'direct' },
-        { kind: 'rematch', comparisonId: attempt.id, arm: 'rematch' },
+        { kind: 'workspace', comparisonId: baseline.id, arm: 'direct', handoffPairId: attempt.id },
+        { kind: 'rematch', comparisonId: attempt.id, arm: 'rematch', handoffPairId: attempt.id },
       ])
       assert.equal(outcome.arms[0].materialDelivered, true)
       assert.equal(outcome.arms[0].deliveredCount, 1)
@@ -2598,6 +2598,44 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     const confirmedBoard = await invoke('rematch-comparison', { comparisonId: confirmed.id })
     assert.deepEqual(confirmedBoard.reviewChoiceComparison, { current: confirmedSide, other: revisedSide })
     assert.deepEqual(new Set(await membership(lesson.workspaceId)), new Set([baseline.sessionId, confirmed.sessionId, revised.sessionId]))
+
+    const soloSources = (await invoke('rematch-comparison', { comparisonId: revised.id })).publicReviewOutcome.arms
+      .map(side => side.lessonTaskSource)
+    const soloPath = join(directory, 'solo-private')
+    const soloMaterial = '会签 文件.md'
+    await mkdir(soloPath)
+    await writeFile(join(soloPath, soloMaterial), '# Private solo handoff')
+    const soloWorkspace = await host.request(workspace, { presetId: 'standard', workspacePath: soloPath })
+    for (const [index, source] of soloSources.entries()) {
+      const options = await invoke('lesson-task-options', source)
+      assert.equal(options.source.sessionId, [baseline.sessionId, revised.sessionId][index])
+      assert.ok(options.workspaceIds.includes(soloWorkspace.workspaceId))
+      assert.ok(!options.workspaceIds.includes(lesson.workspaceId))
+    }
+    await invoke('lesson-task-options', { ...soloSources[1], handoffPairId: confirmed.id }, 422)
+    const soloFields = { ...soloSources[0], workspaceId: soloWorkspace.workspaceId, material: soloMaterial,
+      task: 'Deliver the personal meeting note.' }
+    const soloPreview = await invoke('lesson-task-preview', soloFields)
+    assert.deepEqual(await membership(soloWorkspace.workspaceId), [soloWorkspace.sessionId])
+    const soloDirect = await invoke('lesson-task-open', { ...soloFields, token: soloPreview.token, launchId: '8'.repeat(32) })
+    assert.ok(noMessages(await history(soloDirect.sessionId)))
+    await send(soloDirect)
+    const soloDirectResult = await invoke('lesson-task-result', { sessionId: soloDirect.sessionId })
+    assert.equal(soloDirectResult.materialDelivered, true)
+    assert.deepEqual(soloDirectResult.handoffAlternate.source, soloSources[1])
+    const soloReplayFields = { ...soloFields, ...soloDirectResult.handoffAlternate.source, handoffAlternateOf: soloDirect.sessionId }
+    const soloReplayPreview = await invoke('lesson-task-preview', soloReplayFields)
+    assert.equal(soloReplayPreview.sameHandoffTask, true)
+    const soloReview = await invoke('lesson-task-open', { ...soloReplayFields, token: soloReplayPreview.token, launchId: '9'.repeat(32) })
+    const inspectSoloReview = () => invoke('lesson-task-result', { sessionId: soloReview.sessionId })
+    assert.equal((await inspectSoloReview()).handoffPair, undefined)
+    const soloResult = await finishFriendReview(soloReview, 'Revise draft', inspectSoloReview)
+    assert.deepEqual(soloResult.handoffPair.arms.map(({ style, sessionId, materialDelivered, choices }) =>
+      [style, sessionId, materialDelivered, choices]), [
+      ['direct', soloDirect.sessionId, true, []], ['review', soloReview.sessionId, false, ['Revise draft']],
+    ])
+    assert.equal((await invoke('lesson-task-result', { sessionId: soloReview.sessionId, review: true, pairSide: 'direct' })).sessionId,
+      soloDirect.sessionId)
 
     const directCode = (await shareReview('workspace', baseline.id, 'direct')).code
     const reviewCode = (await shareReview('rematch', revised.id, 'rematch')).code
@@ -2908,6 +2946,7 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, undefined)
     assert.equal((await first.inspect()).handoffAlternate, undefined)
     assert.equal((await inspectNext()).handoffPair, undefined)
+    assert.deepEqual((await inspectSoloReview()).handoffPair, soloResult.handoffPair)
     await saveSide(directSide.handoffKeep, 'Stale public source', 422)
     const newMaterial = '会签 文件.md'
     const newFile = join(carryPath, newMaterial)
@@ -2968,6 +3007,8 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.notEqual(own.id, baseline.id)
     assert.equal((await read()).id, own.id)
     await appendFile(join(native.workspacePath, material), '\nModified old practice material.\n')
+    assert.equal((await inspectSoloReview()).handoffPair, undefined)
+    await invoke('lesson-task-options', soloSources[0], 422)
     await shareReview('workspace', baseline.id, 'direct', 422)
     await shareReview('rematch', confirmed.id, 'rematch', 422)
     assert.equal((await read(filter)).materialState, 'changed')
@@ -4463,8 +4504,8 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     assert.deepEqual(armOf(reviewProof, 'rematch').lessonTaskSource, reviewSource)
     assert.deepEqual(armOf(reviewProof, 'rematch').entries[0].choices, ['Revise draft'])
     const [directCarry, reviewCarry] = reviewProof.publicReviewOutcome.arms.map(side => side.lessonTaskSource)
-    assert.deepEqual(directCarry, root)
-    assert.deepEqual(reviewCarry, reviewSource)
+    assert.deepEqual(directCarry, { ...root, handoffPairId: review.id })
+    assert.deepEqual(reviewCarry, { ...reviewSource, handoffPairId: review.id })
     const baseOptions = await options(reviewCarry)
     assert.equal(baseOptions.source.sessionId, review.sessionId)
     assert.equal(baseOptions.source.change.added.id, 'review')
@@ -4799,7 +4840,8 @@ test('verified Lighthouse lesson gear carries into a new native task on personal
     await host.stop()
     host = await startHost(env, patch)
     assert.deepEqual(await open(checkedAgain.token), opened)
-    assert.deepEqual(await options(reviewSource), personalOptions)
+    assert.deepEqual(await options(reviewCarry), personalOptions)
+    assert.equal((await options(reviewSource)).source.handoffPairId, undefined)
     assert.deepEqual(await reviewView(), reviewProof)
     assert.deepEqual(await result(opened.sessionId), proved)
     assert.deepEqual(await settlements(), earned)

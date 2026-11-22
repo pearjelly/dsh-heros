@@ -1938,20 +1938,29 @@ export async function apply(ctx) {
     return { material: record.material, arms }
   }
 
-  async function matchedHandoffTaskPair({ handoffPairId, kind, comparisonId, arm }, signal) {
-    if (!comparisonIdValid(handoffPairId)) return
-    const record = workspaceComparisons.read(handoffPairId)
-    if (!record?.reviewReplaySource || ctx.get('workspaceRegistry')?.get(record.workspaceId)?.path !== record.cwd) return
+  async function readHandoffTaskPair(id, signal) {
+    if (!comparisonIdValid(id)) return
+    const challenge = workspaceComparisons.read(id)
+    const record = challenge?.reviewReplaySource ? challenge : rematchComparisons.read(id)
+    if (!record || ctx.get('workspaceRegistry')?.get(record.workspaceId)?.path !== record.cwd) return
+    if (record !== challenge) {
+      if (record.lesson !== lighthouseLesson || await workspaceMaterialState(record, signal) !== 'verified') return
+      return (await readComparisonArms(rematchComparisons, record, signal)).publicReviewOutcome
+    }
     const [direct, materialState] = await Promise.all([
       readComparisonArm(workspaceComparisons, record, 'direct', signal),
       workspaceMaterialState(record, signal),
     ])
-    const pair = await ownReviewPair(record, direct, materialState, signal)
+    return ownReviewPair(record, direct, materialState, signal)
+  }
+
+  async function matchedHandoffTaskPair({ handoffPairId, kind, comparisonId, arm }, signal) {
+    const pair = await readHandoffTaskPair(handoffPairId, signal)
     const selected = pair?.arms.find(side => {
       const source = side.lessonTaskSource
-      return source && source.kind === kind && source.comparisonId === comparisonId && source.arm === arm
+      return source && source.handoffPairId === handoffPairId && source.kind === kind && source.comparisonId === comparisonId && source.arm === arm
     })
-    const alternate = selected && pair.arms.find(side => side.id !== selected.id && side.lessonTaskSource)
+    const alternate = selected && pair.arms.find(side => side.id !== selected.id && side.lessonTaskSource?.handoffPairId === handoffPairId)
     if (selected && alternate) return { selected, alternate }
   }
 
@@ -5016,9 +5025,12 @@ export async function apply(ctx) {
       }) }
     const review = publicReview && arms.every(verifiedEvidenceArm) && arms[0].materialDelivered &&
       observedHandoffOutcome(record.material, arms, ['direct', 'review'])
+    const carryHandoffPair = review && arms.every(arm => arm.lessonTaskSource) &&
+      completedPresentDelivery(arms[0]) && singleReviewAnswer(arms[1])
     const publicReviewOutcome = review && { ...review, arms: review.arms.map((item, index) => {
       const { sessionId, deliverables, lessonTaskSource } = arms[index]
-      return { ...item, sessionId, deliverables, ...(lessonTaskSource && { lessonTaskSource }) }
+      return { ...item, sessionId, deliverables,
+        ...(lessonTaskSource && { lessonTaskSource: carryHandoffPair ? { ...lessonTaskSource, handoffPairId: record.id } : lessonTaskSource }) }
     }) }
     const publicTaskSources = evidenceReplay?.publicEvidenceReplay && previous?.original && {
       baseline: { kind: 'workspace', comparisonId: previous.original.id, arm: 'evidence' },
