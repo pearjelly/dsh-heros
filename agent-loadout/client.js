@@ -5628,7 +5628,7 @@ window.__ModuleLoader__.load({
       return h(PersonalLoadoutTask, { ...props, workspaces: items })
     }
 
-    function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, lessonSource, armoryDraft, workspaces, initialWorkspaceId,
+    function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, fixedPlanRevision, lessonSource, armoryDraft, workspaces, initialWorkspaceId,
       initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange,
       workspaceSetup, addedWorkspace, onWorkspaceAdded, onWorkspaceApplied, workspaceStatus, workspaceError, retryWorkspaces }) {
       const language = useLanguage()
@@ -5708,7 +5708,7 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           let selected = version
-          if (refresh && !personal) {
+          if (refresh && !personal && !fixedPlanRevision) {
             const latest = await request('list', null, abort.signal, language)
             if (abort.signal.aborted) return
             const primary = latest.plans.find(item => item.id === plan.id && !item.broken)
@@ -6079,11 +6079,12 @@ window.__ModuleLoader__.load({
           request, onVisit, onClose: back, onBack: back, backLabel: t('返回方案库') }))
     }
 
-    function BuildPlans({ plans, initialMode, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport,
+    function BuildPlans({ plans, initialMode, initialTaskReference, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport,
       workspaces, workspaceId, onOpenTask, onOpenSource, evidenceSave }) {
       const [editor, setEditor] = useState(initialMode === 'create' ? { mode: 'create' } : null)
       const [sharing, setSharing] = useState(null)
       const [taskPlan, setTaskPlan] = useState(null)
+      const [receiptError, setReceiptError] = useState('')
       const [pairPlan, setPairPlan] = useState(null)
       const [retest, setRetest] = useState(null)
       const [taskOpening, setTaskOpening] = useState(false)
@@ -6100,6 +6101,7 @@ window.__ModuleLoader__.load({
       const shareButton = useRef(null)
       const importButton = useRef(null)
       const taskButton = useRef(null)
+      const receiptBack = useRef(null)
       const pairButton = useRef(null)
       const retestButton = useRef(null)
       const title = useId()
@@ -6123,9 +6125,21 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         const element = dialog.current
         element.showModal()
+        receiptBack.current?.focus()
         return () => element.close()
       }, [])
       useEffect(() => focus.current?.focus(), [editor?.mode])
+      useEffect(() => {
+        if (!initialTaskReference) return
+        const abort = new AbortController()
+        request('list', null, abort.signal).then(latest => {
+          if (abort.signal.aborted) return
+          const current = latest.plans.find(item => !item.broken && planMatchesRevision(item, initialTaskReference))
+          if (current) setTaskPlan({ plan: current })
+          else setReceiptError(t('这份方案已更新或不可用。请从出装方案重新选择。'))
+        }).catch(reason => { if (!abort.signal.aborted) setReceiptError(reason.message) })
+        return () => abort.abort()
+      }, [request, initialTaskReference])
       useEffect(() => {
         if (!retestId) return
         const abort = new AbortController()
@@ -6164,6 +6178,7 @@ window.__ModuleLoader__.load({
 
       function closeTask() {
         if (openingTask.current) return
+        if (initialTaskReference) { close(); return }
         setTaskPlan(null)
         requestAnimationFrame(() => taskButton.current?.focus())
       }
@@ -6210,7 +6225,7 @@ window.__ModuleLoader__.load({
       const subject = mode === 'create' ? current.hero?.name : editor?.target?.name
       const cannotSaveDraft = (mode === 'create' || mode === 'replace') && !canSave
       return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
-        'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan || pairPlan), 'aria-labelledby': title,
+        'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan || initialTaskReference || pairPlan), 'aria-labelledby': title,
         onCancel: event => { event.preventDefault(); if (pairPlan) closePair(); else if (taskPlan) closeTask(); else if (sharing) closeSharing(); else close() },
         onKeyDown: event => {
           if (event.key !== 'Escape') return
@@ -6222,7 +6237,7 @@ window.__ModuleLoader__.load({
           else close()
         } },
         h('header', { className: 'moba-gallery-heading' },
-          h('h2', { id: title }, pairPlan ? t(evidenceRetest ? evidenceRetestLabel : '方案同题对照') : taskPlan ? t('用这套出装开新任务')
+          h('h2', { id: title }, pairPlan ? t(evidenceRetest ? evidenceRetestLabel : '方案同题对照') : (taskPlan || initialTaskReference) ? t('用这套出装开新任务')
             : sharing?.mode === 'export' ? t('分享出装方案') : sharing?.mode === 'import' ? t('导入分享码')
             : mode === 'create' ? t('保存出装方案') : mode === 'edit' ? t('编辑方案')
             : mode === 'replace' ? t('更新方案出装')
@@ -6233,7 +6248,13 @@ window.__ModuleLoader__.load({
           initialWorkspaceId: workspaceId, request, evidenceRetest,
           onBack: closePair, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
           : taskPlan ? h(LoadoutTaskForm, { plan: taskPlan.plan, testedAlternatives: taskPlan.alternatives, planCatalog: taskPlan.catalog,
+            fixedPlanRevision: Boolean(initialTaskReference), backLabel: initialTaskReference ? '返回保存结果' : undefined,
             workspaces, initialWorkspaceId: workspaceId, request, onBack: closeTask, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
+          : initialTaskReference ? h(Fragment, null,
+            receiptError ? h('p', { className: 'moba-alert', role: 'alert' }, receiptError)
+              : h('p', { className: 'moba-empty', role: 'status' }, t('正在核对刚保存的方案…')),
+            h('footer', { className: 'moba-gallery-footer' },
+              h('button', { ref: receiptBack, className: 'moba-roster-open', type: 'button', onClick: closeTask }, t('返回保存结果'))))
           : sharing?.mode === 'export' ? h(ExportPlanShare, { plan: sharing.plan, request, onBack: closeSharing })
           : sharing?.mode === 'import' ? h(ImportPlanShare, { request, hasOpening, onBack: closeSharing,
             onImport: value => { close(); onImport(value) } })
@@ -6971,6 +6992,10 @@ window.__ModuleLoader__.load({
       const [historicalHero, setHistoricalHero] = useState(proven?.draft.presetId ?? returning?.followUp?.heroId ?? '')
       const [journalOpen, setJournalOpen] = useState(false)
       const [planMode, setPlanMode] = useState(proven?.save ? 'create' : '')
+      const [receiptTask, setReceiptTask] = useState(null)
+      const receiptTaskButton = useRef(null)
+      const acknowledgedReceipt = useRef(null)
+      const planReceipt = notice?.savedPlan
       const [armoryTask, setArmoryTask] = useState(null)
       const armoryTaskButton = useRef(null)
       const [followUp, setFollowUp] = useState(returning?.followUp)
@@ -6996,6 +7021,12 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         consumeReturnDraft(returning)
       }, [consumeReturnDraft, returning])
+
+      useEffect(() => {
+        if (planMode || !planReceipt || acknowledgedReceipt.current === planReceipt) return
+        acknowledgedReceipt.current = planReceipt
+        receiptTaskButton.current?.focus()
+      }, [planMode, planReceipt])
 
       useEffect(() => {
         if (!returning?.sessionId) return
@@ -7397,7 +7428,7 @@ window.__ModuleLoader__.load({
         setMatchMode(returning?.sessionId ? 'fresh' : undefined)
       }
 
-      async function planChanged(mode, result) {
+      async function planChanged(mode, result, showReceipt = false) {
         if (mode === 'remove' && comparisonAgainst === 'plan:' + result.id) setComparisonAgainst('')
         try {
           setData(await request('list', null))
@@ -7405,7 +7436,17 @@ window.__ModuleLoader__.load({
           setLoadAttempt(attempt => attempt + 1)
         }
         if (mode === 'create' || mode === 'replace') {
-          setNotice(t('已保存出装方案「') + result.name + '」。')
+          setNotice(showReceipt && mode === 'create'
+            ? { savedPlan: { id: result.id, revision: result.revision, name: result.name } }
+            : t('已保存出装方案「') + result.name + '」。')
+        }
+      }
+
+      function closePlans() {
+        setPlanMode('')
+        if (receiptTask) {
+          setReceiptTask(null)
+          requestAnimationFrame(() => receiptTaskButton.current?.focus())
         }
       }
 
@@ -7747,7 +7788,12 @@ window.__ModuleLoader__.load({
               setError('')
               setLoadAttempt(attempt => attempt + 1)
             } }, t('重试'))),
-          notice && h('p', { className: 'moba-empty', role: 'status' }, notice),
+          planReceipt ? h('div', { className: 'moba-plan-receipt' },
+            h('p', { className: 'moba-empty', role: 'status' }, t('已保存为出装方案「%s」。').replace('%s', () => planReceipt.name)),
+            h('button', { ref: receiptTaskButton, type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+              disabled: pending, onClick: () => setReceiptTask(planReceipt) },
+              t('用这套出装开新任务'), h(Glyph, { kind: 'arrow', size: 16 })))
+            : notice && h('p', { className: 'moba-empty', role: 'status' }, notice),
           openingProblem && h('div', { className: 'moba-alert', role: 'alert' },
             t('新对局已创建，委托未能接下。') + openingProblem.questError,
             h('button', { type: 'button', className: 'moba-text', disabled: pending,
@@ -7804,7 +7850,8 @@ window.__ModuleLoader__.load({
               else if (prepare) prepareEquipmentTrial(item)
             } }),
           journalOpen && h(QuestJournal, { request, onClose: () => setJournalOpen(false), onOpenMatch: openSource }),
-          data && planMode && h(BuildPlans, { initialMode: planMode, request, draft: loadoutDraft(), canSave: canCompare,
+          data && (planMode || receiptTask) && h(BuildPlans, { initialMode: planMode, initialTaskReference: receiptTask,
+            request, draft: loadoutDraft(), canSave: canCompare,
             workspaces: comparableWorkspaces, workspaceId: workspace?.workspaceId,
             onOpenTask: ({ sessionId, task }) => openDraftSession(sessionId, task), onOpenSource: openSource,
             hasOpening: Boolean(opening || openingOpen || followUp || trialTarget || deliveryTarget),
@@ -7818,7 +7865,7 @@ window.__ModuleLoader__.load({
               })), removed: Object.values(build?.removedEquipmentLabels ?? emptyMap),
               removedIds: Object.keys(build?.removedEquipmentLabels ?? emptyMap) }
             }),
-            onClose: () => setPlanMode(''), onChanged: planChanged, onApply: applyPlan, onCompare: showPlanComparison,
+            onClose: closePlans, onChanged: (mode, result) => planChanged(mode, result, true), onApply: applyPlan, onCompare: showPlanComparison,
             onImport: adoptSharedPlan }),
           armoryTask && h(PersonalLoadoutTask, { armoryDraft: armoryTask, workspaces: comparableWorkspaces,
             initialWorkspaceId: workspace?.workspaceId, request, backLabel: '返回配装', onBack: () => {
@@ -11548,6 +11595,8 @@ window.__ModuleLoader__.load({
       .moba-decision-action { margin-inline-start: 8px; color: #f2d8a8; min-height: 26px; font-size: inherit; }
       .moba-capability-kind { color: var(--muted); font-size: 11px; margin-inline-start: 7px; }
       .moba-empty { margin: 8px 0; color: var(--muted); font-size: 13px; }
+      .moba-plan-receipt { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 12px; margin-block-end: 10px; }
+      .moba-plan-receipt p { margin: 0; overflow-wrap: anywhere; }
       .moba-alert { border: 1px solid #9d616c; background: #311c26; color: #ffdade; margin: 0 0 9px; padding: 8px; overflow-wrap: anywhere; font-size: 13px; }
       @keyframes moba-reveal { from { opacity: .65; transform: scale(1.035); } to { opacity: 1; transform: scale(1); } }
       @keyframes moba-equipped { from { box-shadow: inset 0 0 0 3px var(--blue); } to { box-shadow: inset 0 0 0 0 transparent; } }
