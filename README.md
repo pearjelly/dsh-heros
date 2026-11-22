@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.148.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.149.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -42,7 +42,7 @@ In the Armory, use **Choose a loadout** to jump to **Hero roster**. Select a her
 
 ### Compare a friend's trial report
 
-On a verified hero run, choose **Share this round report**, then **Copy report code**. It carries the public sample identifier, handoff need, selected run, and whether the original card was attached. Replies and files stay in your profile.
+In a verified hero session, choose **Copy this round’s report code**. The code is also available from **Share this round report** in the trial comparison. It carries the public sample identifier, handoff need, selected run, and whether the original card was attached. Replies and files stay in your profile.
 
 Choose **Compare a friend's report** on a verified local run with the same public sample, task language, and handoff need. The comparison shows **Verified on this device** for your result and **Shared by your friend** for the outcome supplied by the code.
 
