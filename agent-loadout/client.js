@@ -1739,7 +1739,7 @@ window.__ModuleLoader__.load({
     const lighthouseHandoffReportCodeLimit = 192
     const heroHandoffReportCode = /^DSHR1\.[A-Za-z0-9_-]+$/u
 
-    function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero }) {
+    function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal }) {
       const language = useLanguage()
       const [input, setInput] = useState('')
       const [result, setResult] = useState(null)
@@ -1868,7 +1868,7 @@ window.__ModuleLoader__.load({
         setHeroOpenError('')
       }
 
-      function renderSide(side, title, tryHero) {
+      function renderSide(side, title, action) {
         if (evidence) return h('article', { className: 'moba-lighthouse-arm moba-handoff-report-side' },
           h('header', null, h(ItemArt, { item: { id: 'evidence' } }), h('h4', null, t(title))),
           h('dl', { className: 'moba-handoff-report-facts' },
@@ -1881,16 +1881,23 @@ window.__ModuleLoader__.load({
           h('dl', { className: 'moba-handoff-report-facts' },
             h('dt', null, t('补给卡原件')), h('dd', null, t(side.originalAttached ? '已附上' : '未附上')),
             h('dt', null, t('接班需求')), h('dd', null, t(side.meetsNeed ? '符合' : '未满足'))),
-          tryHero && h('button', { type: 'button', ref: tryHeroButton, className: 'moba-roster-open', disabled: openingRound,
-            onClick: () => openRound(signal => onTryHero(tryHero.id, signal), setHeroOpenError) }, t(tryHero.trySameTask)),
-          tryHero && openingRound && h('p', { role: 'status', className: 'moba-lighthouse-note' }, t('正在打开试玩会话…')),
-          tryHero && heroOpenError && h('p', { role: 'alert', className: 'moba-alert' }, heroOpenError))
+          action)
       }
 
       const title = evidence ? (share ? '分享本局取舍' : '对照好友取舍') : (share ? '分享这局战报' : '对照好友战报')
       const comparison = result?.friend
       const tryHero = comparison && onTryHero && comparison.arm !== result.local.arm && unopenedHeroes?.includes(comparison.arm)
         ? heroTrialHeroes.find(hero => hero.id === comparison.arm) : undefined
+      const replayMinimal = onReplayMinimal && result?.need === 'original' && result.local.arm === 'minimal' &&
+        result.local.originalAttached === false && comparison?.originalAttached === true &&
+        (comparison.arm === 'standard' || comparison.arm === minimalDeliveryReplayArm.id)
+      const localAction = replayMinimal && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+        disabled: openingRound, onClick: event => onReplayMinimal(event.currentTarget) }, t(minimalDeliveryReplayLabel))
+      const friendAction = tryHero && h(Fragment, null,
+        h('button', { type: 'button', ref: tryHeroButton, className: 'moba-roster-open', disabled: openingRound,
+          onClick: () => openRound(signal => onTryHero(tryHero.id, signal), setHeroOpenError) }, t(tryHero.trySameTask)),
+        openingRound && h('p', { role: 'status', className: 'moba-lighthouse-note' }, t('正在打开试玩会话…')),
+        heroOpenError && h('p', { role: 'alert', className: 'moba-alert' }, heroOpenError))
       const need = !evidence && result && heroTrialNeeds.find(item => item.id === result.need)
       const note = evidence ? (share ? '取舍码包含公开样例版本、实际选择和是否交付。'
         : '粘贴好友的灯塔取舍码，对照同一份缺证样例里各自的选择和交付。') : (share
@@ -1905,7 +1912,7 @@ window.__ModuleLoader__.load({
         onKeyDown: event => closeDialogOnEscape(event, back) },
         h('form', { onSubmit: check },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
-            !tryHero && h('p', { className: 'moba-starter-note' }, t(note)),
+            !tryHero && !replayMinimal && h('p', { className: 'moba-starter-note' }, t(note)),
             share && result?.code && h('label', null, t('战报码'),
               h('textarea', { ref: field, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                 spellCheck: false, onFocus: event => event.currentTarget.select() })),
@@ -1927,8 +1934,8 @@ window.__ModuleLoader__.load({
                 h('textarea', { ref: replyField, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                   spellCheck: false, onFocus: event => event.currentTarget.select() })),
               h('div', { className: 'moba-lighthouse-arms moba-handoff-report-grid' },
-                renderSide(result.local, evidence ? '本机核对的取舍' : '本机核对的交接'),
-                comparison && renderSide(comparison, evidence ? '好友分享的取舍' : '好友分享的交接', tryHero)),
+                renderSide(result.local, evidence ? '本机核对的取舍' : '本机核对的交接', localAction),
+                comparison && renderSide(comparison, evidence ? '好友分享的取舍' : '好友分享的交接', friendAction)),
               comparison && h('p', { className: 'moba-lighthouse-note' }, t('可以打开自己的原会话核对细节。好友的交接来自对方提供的战报码。'))),
             notice && h('p', { role: 'status', className: 'moba-empty' }, notice)),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
@@ -2014,14 +2021,13 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
       const [attempt, retry] = useState(0)
-      const [replayOpen, setReplayOpen] = useState(false)
+      const [replayOpen, setReplayOpen] = useState(null)
       const [personalSource, setPersonalSource] = useState(null)
       const [sharing, setSharing] = useState(false)
       const [handoffReport, setHandoffReport] = useState(null)
       const mutation = useRef(false)
       const launchIds = useRef(new Map())
       const taskField = useRef(null)
-      const replayButton = useRef(null)
       const personalButton = useRef(null)
       const shareButton = useRef(null)
       const heading = useRef(null)
@@ -2031,6 +2037,7 @@ window.__ModuleLoader__.load({
       const minimalReplay = value?.minimalReplay
       const deliveryReplay = value?.deliveryReplay
       const recapPersonalSource = deliveryReplay && minimalReplay?.lessonTaskSource
+      const canReplayMinimal = value?.canReplayMinimalDelivery && !minimalReplay
 
       useEffect(() => {
         const abort = new AbortController()
@@ -2127,9 +2134,17 @@ window.__ModuleLoader__.load({
         setNotice('')
       }
 
+      function openReplay(opener, backLabel = '返回试玩对照') {
+        setReplayOpen({ opener, backLabel })
+      }
+
       function closeReplay() {
-        setReplayOpen(false)
-        requestAnimationFrame(() => (replayButton.current ?? heading.current)?.focus())
+        setReplayOpen(null)
+        requestAnimationFrame(() => {
+          const opener = replayOpen?.opener
+          const target = opener?.isConnected ? opener : heading.current
+          target?.focus()
+        })
       }
 
       function openPersonalTask(source, opener) {
@@ -2216,10 +2231,10 @@ window.__ModuleLoader__.load({
               error && h('p', { role: 'alert', className: 'moba-alert' }, error),
               h('div', { className: 'moba-lighthouse-arms' }, value.arms.map(arm => {
                 const config = heroTrialHeroes.find(item => item.id === arm.id)
-                return config && renderArm(arm, config, arm.id === 'minimal' && value.canReplayMinimalDelivery && !minimalReplay &&
+                return config && renderArm(arm, config, arm.id === 'minimal' && canReplayMinimal &&
                   h('div', { className: 'moba-comparison-previous' },
-                    h('button', { ref: replayButton, type: 'button', className: 'moba-roster-open', disabled: busy, 'aria-haspopup': 'dialog',
-                      onClick: () => setReplayOpen(true) }, t(minimalDeliveryReplayLabel))))
+                    h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, 'aria-haspopup': 'dialog',
+                      onClick: event => openReplay(event.currentTarget) }, t(minimalDeliveryReplayLabel))))
               })),
               minimalReplay && h('section', { className: 'moba-handoff-outcome', 'aria-label': t('极简模式加装前后') },
                 h('h3', null, t('极简模式加装前后')),
@@ -2236,12 +2251,13 @@ window.__ModuleLoader__.load({
               error && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
                 onClick: () => { setError(''); retry(count => count + 1) } }, t('重试')),
               !comparisonId && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: reset }, t('另开一组试玩'))))),
-        replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: activeId, onBack: closeReplay,
-          onVisit: (next, task) => { setReplayOpen(false); onVisit(next, task) } }),
         sharing && h(LighthouseChallengeShare, { comparisonId: activeId, request, heroTrial: true,
           playedHero: verifiedHeroes.length === 1 ? verifiedHeroes[0].id : undefined, onBack: closeSharing }),
         handoffReport && h(LighthouseHandoffReport, { report: handoffReport, comparisonId: activeId, request, onBack: closeHandoffReport,
-          unopenedHeroes, onTryHero: (arm, signal) => prepareArmVisit(activeId, arm, signal) }),
+          unopenedHeroes, onTryHero: (arm, signal) => prepareArmVisit(activeId, arm, signal),
+          onReplayMinimal: canReplayMinimal ? opener => openReplay(opener, '返回战报对照') : undefined }),
+        replayOpen && h(MinimalDeliveryReplay, { request, comparisonId: activeId, backLabel: replayOpen.backLabel, onBack: closeReplay,
+          onVisit: (next, task) => { setReplayOpen(null); setHandoffReport(null); onVisit(next, task) } }),
         personalSource && h(PersonalLoadoutTask, { source: personalSource, workspaces, request, backLabel: '返回试玩对照',
           onBack: closePersonalTask, onVisit: (next, task) => { setPersonalSource(null); onVisit(next, task) } }))
     }
