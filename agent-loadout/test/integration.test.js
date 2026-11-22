@@ -2401,7 +2401,7 @@ test('stock heroes use the same Lighthouse card and show which delivery need eac
   }
 })
 
-test('isolated Lighthouse rematch lesson makes the real review choice visible', { timeout: 90_000 }, async () => {
+test('isolated Lighthouse rematch lesson makes the real review choice visible', { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-lighthouse-lesson-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')
@@ -2859,10 +2859,39 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.deepEqual(nextProof.handoffPair.arms[0].deliverables, [])
     assert.deepEqual(nextProof.handoffPair.arms[1].deliverables, nextProof.deliverables)
     assert.equal((await first.inspect()).handoffPair, undefined)
+    const reviewSide = (sessionId, pairSide, status) => invoke('lesson-task-result', { sessionId, review: true, pairSide }, status)
+    const saveSide = (handoffKeep, name, status) => invoke('handoff-pair-plan-save', { ...handoffKeep, name }, status)
+    await invoke('lesson-task-result', { sessionId: next.sessionId, pairSide: 'direct' }, 422)
+    await reviewSide(first.opened.sessionId, 'review', 422)
+    const [directSide, reviewSideResult] = await Promise.all([
+      reviewSide(next.sessionId, 'direct'), reviewSide(next.sessionId, 'review'),
+    ])
+    assert.equal(directSide.sessionId, next.sessionId)
+    assert.equal(reviewSideResult.sessionId, first.opened.sessionId)
+    assert.deepEqual(new Set(directSide.draft.equipmentIds), new Set(['present']))
+    assert.deepEqual(new Set(reviewSideResult.draft.equipmentIds), new Set(['present', 'review']))
+    assert.deepEqual(directSide.entries.map(item => item.name), ['present'])
+    assert.deepEqual(reviewSideResult.entries.map(item => item.choices), [['Revise draft']])
+    assert.deepEqual(reviewSideResult.deliverables, [])
+    assert.equal(reviewSideResult.handoffKeep.sessionId, next.sessionId)
+    await saveSide({ ...directSide.handoffKeep, pairSide: 'review' }, 'Wrong route proof', 422)
+    assert.deepEqual((await catalog()).plans, before.plans)
     await appendFile(carryFile, '\nChanged after the replay.\n')
     assert.equal((await inspectNext()).handoffPair, undefined)
+    await saveSide(reviewSideResult.handoffKeep, 'Stale private review', 422)
+    assert.deepEqual((await catalog()).plans, before.plans)
     await writeFile(carryFile, carryText)
     assert.deepEqual((await inspectNext()).handoffPair, nextProof.handoffPair)
+    const keptDirect = await saveSide(directSide.handoffKeep, 'Private direct result')
+    const keptReview = await saveSide(reviewSideResult.handoffKeep, 'Private review result')
+    assert.equal(keptDirect.presetId, (await history(next.sessionId)).presetId)
+    assert.equal(keptReview.presetId, (await history(first.opened.sessionId)).presetId)
+    const keptIds = [keptDirect.id, keptReview.id].sort()
+    for (const saved of [keptDirect, keptReview]) {
+      for (const localDetail of [carryMaterial, carryBrief, first.opened.sessionId, next.sessionId, 'Revise draft']) {
+        assert.ok(!JSON.stringify(saved).includes(localDetail))
+      }
+    }
     assert.deepEqual((await read({ comparisonId: triedDirect.id })).ownReviewPair, triedBoard.ownReviewPair)
     assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, true)
     assert.equal((await read({ comparisonId: friendDirect.id })).ownReviewPair, undefined)
@@ -2879,6 +2908,23 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.equal((await equipmentIn(host, triedDirect.sessionId)).workspaceComparison.canCompareOwnReview, undefined)
     assert.equal((await first.inspect()).handoffAlternate, undefined)
     assert.equal((await inspectNext()).handoffPair, undefined)
+    await saveSide(directSide.handoffKeep, 'Stale public source', 422)
+    const newMaterial = '会签 文件.md'
+    const newFile = join(carryPath, newMaterial)
+    await writeFile(newFile, '# Next personal handoff')
+    const nextPlanFields = { id: keptReview.id, revision: keptReview.revision, workspaceId: carryWorkspace.workspaceId,
+      material: newMaterial, task: 'Deliver the next handoff note.' }
+    const nextPlanPreview = await invoke('plan-task-preview', nextPlanFields)
+    assert.ok(nextPlanPreview.comparison.gained.some(item => item.id === 'review'))
+    const reused = await invoke('plan-task-open', { ...nextPlanFields, token: nextPlanPreview.token, launchId: '7'.repeat(32) })
+    assert.ok(noMessages(await history(reused.sessionId)))
+    assert.equal((await history(reused.sessionId)).presetId, keptReview.presetId)
+    assert.ok(!reused.task.includes(carryBrief))
+    await finishFriendReview(reused, 'Confirm handoff', async () => ({
+      status: (await host.request(questions, { sessionId: reused.sessionId })).question ? 'waiting-choice' : 'complete',
+    }))
+    const reusedArtifact = (await history(reused.sessionId)).events.find(item => item.type === 'deliverables/presented')
+    assert.equal(reusedArtifact?.data.files[0].path, await realpath(newFile))
     const savedDraft = await friendOpen('review', '5'.repeat(32))
     const staleDraft = await friendOpen('direct', '6'.repeat(32))
     const staleReplay = await history(staleDraft.sessionId)
@@ -2953,9 +2999,10 @@ test('isolated Lighthouse rematch lesson makes the real review choice visible', 
     assert.match(await readFile(join(native.workspacePath, material), 'utf8'), /Modified old practice material/u)
     assert.equal((await read()).id, own.id)
     assert.deepEqual((await invoke('lighthouse-comparison', { prototype: true })).arms.map(arm => arm.id), ['recon', 'delivery'])
-    assert.deepEqual((await catalog()).plans, before.plans)
+    assert.deepEqual((await catalog()).plans.map(plan => plan.id).sort(), keptIds)
     await host.stop()
     host = await startHost({ ...env, DSH_LOADOUT_TEST_WRONG_LIGHTHOUSE_CARD: '1' }, patch)
+    assert.deepEqual((await catalog()).plans.map(plan => plan.id).sort(), keptIds)
     assert.deepEqual(await open(launchId), baseline)
     assert.deepEqual(await open('d'.repeat(32)), fresh)
     assert.deepEqual(await reviewDrafts(), [['delivery-review', savedDraft.sessionId, 'review', 'zh']])

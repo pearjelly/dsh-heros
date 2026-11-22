@@ -2585,20 +2585,22 @@ window.__ModuleLoader__.load({
         h(ObservedChoiceSummary, { choices: outcome.actualChoices ?? empty }))
     }
 
-    function HandoffOutcomeSummary({ outcome, onPreserve, onVisit, onLessonTask, busy, armory, ownReview }) {
+    const handoffStyleLabels = { direct: '直接交付', review: '复核后交付' }
+
+    function HandoffOutcomeSummary({ outcome, onPreserve, preserveRefs, onVisit, onLessonTask, busy, armory, ownReview }) {
       const heading = useId()
       return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading, 'data-armory-handoff': armory || undefined },
         h('h3', { id: heading, tabIndex: onVisit ? -1 : undefined, 'data-public-review-outcome': onVisit && !armory && !ownReview ? true : undefined,
           'data-armory-handoff-outcome': armory || undefined, 'data-own-review-pair': ownReview || undefined },
           t(ownReview === 'personal' ? '同一份个人材料，两种打法' : ownReview ? '我的两局交接' : '两局实测结果')),
         h('div', { className: 'moba-lighthouse-arms' }, outcome.arms.map(arm => {
-          const style = t(arm.style === 'review' ? '复核后交付' : '直接交付')
+          const style = t(handoffStyleLabels[arm.style])
           const files = arm.deliverables ?? empty
           const useLabel = t('用这套出装')
           const source = onVisit && h('button', { type: 'button', className: 'moba-text', disabled: busy,
             'aria-label': t('查看原会话') + ' · ' + style, onClick: () => onVisit(arm.sessionId) }, t('查看原会话'))
           const preserve = arm.canPreserve && onPreserve && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
-            'aria-haspopup': 'dialog', 'data-handoff-preserve': arm.id,
+            ref: preserveRefs?.[arm.id], 'aria-haspopup': preserveRefs ? undefined : 'dialog', 'data-handoff-preserve': arm.id,
             'aria-label': t('保留这套出装') + ' · ' + style, onClick: () => onPreserve(arm.id) }, t('保留这套出装'))
           return h('section', { key: arm.id, className: 'moba-lighthouse-arm', 'aria-label': style },
             h('div', null, h('h4', null, style), !onVisit && h('small', { className: 'moba-lighthouse-arm-hero' },
@@ -2610,7 +2612,7 @@ window.__ModuleLoader__.load({
               : h('p', { className: 'moba-lighthouse-note' }, arm.materialDelivered
                 ? h(Fragment, null, t('所选材料已交付') + ' · ', h('strong', null, outcome.material))
                 : arm.deliveredCount > 0 ? t('其他交付文件') + ' · ' + arm.deliveredCount : t('本局没有交付文件。')),
-            armory ? h('footer', null, source, preserve) : h(Fragment, null,
+            preserveRefs ? h('footer', null, preserve, source) : armory ? h('footer', null, source, preserve) : h(Fragment, null,
               onVisit && h('footer', null, source,
                 arm.lessonTaskSource && onLessonTask && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
                   'aria-label': useLabel + ' · ' + style, 'aria-haspopup': 'dialog',
@@ -6623,15 +6625,17 @@ window.__ModuleLoader__.load({
         event.preventDefault()
         if (saving.current) return
         const { mode, target } = editor
-        if ((mode === 'create' || mode === 'replace') && !canSave) return
+        if (cannotSaveDraft) return
         if (mode !== 'remove' && !name.trim()) return
         saving.current = true
         setBusy(true)
         setError('')
         const tested = mode === 'create' && evidenceSave
-        const action = tested ? 'evidence-replay-plan-save' : mode === 'remove' ? 'plan-remove' : 'plan-save'
+        const handoff = reviewedPair?.handoffKeep
+        const action = handoff ? 'handoff-pair-plan-save' : tested ? 'evidence-replay-plan-save' : mode === 'remove' ? 'plan-remove' : 'plan-save'
         try {
-          const result = await request(action, tested ? { action, ...tested, name, note } : { action, id: target?.id, revision: target?.revision,
+          const result = await request(action, handoff || tested ? { action, ...(handoff || tested), name, note }
+            : { action, id: target?.id, revision: target?.revision,
             ...(mode !== 'remove' && { name, note, ...((mode === 'create' || mode === 'replace') && { draft }) }) })
           await onChanged(mode, result)
           saving.current = false
@@ -6647,9 +6651,10 @@ window.__ModuleLoader__.load({
 
       const mode = editor?.mode
       const subject = mode === 'create' ? current.hero?.name : editor?.target?.name
-      const cannotSaveDraft = (mode === 'create' || mode === 'replace') && !canSave
       const reviewedPair = initialMode === 'create' && mode === 'create' && canSave && pairSaveEvidence &&
         sameReviewedDraft(draft, pairSaveEvidence.draft) ? pairSaveEvidence : undefined
+      const changedHandoff = mode === 'create' && pairSaveEvidence?.handoffKeep && !reviewedPair
+      const cannotSaveDraft = (mode === 'create' || mode === 'replace') && (!canSave || changedHandoff)
       return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
         'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan || initialTaskReference || pairPlan), 'aria-labelledby': title,
         onCancel: event => { event.preventDefault(); if (pairPlan) closePair(); else if (taskPlan) closeTask(); else if (sharing) closeSharing(); else close() },
@@ -6690,14 +6695,13 @@ window.__ModuleLoader__.load({
               h(Fragment, null,
                 (mode === 'create' || mode === 'replace') && h('div', { className: 'moba-plan-save-preview' },
                   h('strong', null, subject), h(PlanEquipment, { items: current.items, removed: current.removed }),
-                  reviewedPair && h(Fragment, null,
-                    h('p', { className: 'moba-plan-note' }, t(heroPersonalPairSides[reviewedPair.side].label)),
-                    h(HeroPersonalRunEvidence, { originalAttached: true, tools: reviewedPair.tools }))),
+                  reviewedPair && h(ReviewedPairEvidence, { evidence: reviewedPair, showLabel: true })),
                 h('label', null, t('方案名称'), h('input', { type: 'text', ref: focus, required: true, maxLength: 48,
                   value: name, disabled: busy, onChange: event => setName(event.target.value) })),
                 h('label', null, t('适用情形（选填）'), h('textarea', { value: note, rows: 3, maxLength: 240,
                   disabled: busy, onChange: event => setNote(event.target.value) }))),
-            cannotSaveDraft && h('p', { className: 'moba-alert', role: 'status' }, t('请先处理当前阵容中无法装配的装备。')),
+            cannotSaveDraft && h('p', { className: 'moba-alert', role: 'status' }, t(changedHandoff
+              ? '本机配置已变化，无法核对这局的原出装。' : '请先处理当前阵容中无法装配的装备。')),
             error && h('p', { className: 'moba-alert', role: 'alert' }, error)),
           h('footer', { className: 'moba-gallery-footer' },
             h('button', { className: 'moba-text', type: 'button', disabled: busy,
@@ -9335,10 +9339,20 @@ window.__ModuleLoader__.load({
       alternate: { label: '换装局', action: '查看换装局会话' },
     }
 
-    function HeroPersonalRunEvidence({ originalAttached, tools }) {
+    function HeroPersonalRunEvidence({ originalAttached, tools, deliveredCount }) {
+      const delivery = originalAttached ? t('已交付所选材料。') : deliveredCount === undefined ? t('未核验所选材料的附件。')
+        : deliveredCount ? t('其他交付文件') + ' · ' + deliveredCount : t('本局没有交付文件。')
       return h(Fragment, null,
-        h('p', { className: 'moba-lighthouse-note' }, t(originalAttached ? '已交付所选材料。' : '未核验所选材料的附件。')),
+        h('p', { className: 'moba-lighthouse-note' }, delivery),
         tools?.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('实测工具调用'), ' · ', h('code', null, tools.join(' · '))))
+    }
+
+    function ReviewedPairEvidence({ evidence, showLabel }) {
+      const { side, choices, deliveredCount, originalAttached, tools, handoffKeep } = evidence
+      const label = handoffKeep ? handoffStyleLabels[side] : heroPersonalPairSides[side].label
+      return h(Fragment, null, showLabel && h('p', { className: 'moba-plan-note' }, t(label)),
+        handoffKeep && h(ObservedChoiceSummary, { choices }),
+        h(HeroPersonalRunEvidence, { originalAttached, tools, deliveredCount }))
     }
 
     function HeroPersonalPairResult({ pair, onOpenMatch, onKeep, keepButtons }) {
@@ -9371,6 +9385,8 @@ window.__ModuleLoader__.load({
       const reviewButton = useRef(null)
       const originalReviewButton = useRef(null)
       const alternateReviewButton = useRef(null)
+      const directReviewButton = useRef(null)
+      const handoffReviewButton = useRef(null)
       const returnFocus = useRef('')
       const rematchButton = useRef(null)
       const rebaselineButton = useRef(null)
@@ -9379,8 +9395,9 @@ window.__ModuleLoader__.load({
       const sourceTrialButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
       const action = 'lesson-task-result'
-      const keepButtons = { original: originalReviewButton, alternate: alternateReviewButton }
-      const pairSide = heroPersonalPairSides[review] ? review : undefined
+      const keepButtons = { original: originalReviewButton, alternate: alternateReviewButton, direct: directReviewButton, review: handoffReviewButton }
+      const pairLabel = handoffStyleLabels[review] ?? heroPersonalPairSides[review]?.label
+      const pairSide = pairLabel ? review : undefined
       const pane = review || 'result'
       const cached = state[pane]
       const current = cached && cached.version === version && cached.retry === retry && cached.language === language ? cached : null
@@ -9391,9 +9408,12 @@ window.__ModuleLoader__.load({
       const alternateLabel = alternateTaskLabels[result?.alternateTask?.arm]
       const handoffAlternate = result?.handoffAlternate
       const sourceTrial = !alternateLabel && result?.sourceTrial?.arm === 'standard' ? result.sourceTrial : undefined
-      const reviewedRunTools = pairSide && result?.draft && result.materialDelivered === true
-        ? [...new Set(result.entries?.filter(entry => entry.type === 'tool' && entry.state === 'completed').map(entry => entry.name))]
-        : undefined
+      const reviewedEvidence = pairSide && result?.draft && (result.handoffKeep || result.materialDelivered === true) && {
+        side: pairSide, originalAttached: result.materialDelivered === true, draft: result.draft,
+        tools: [...new Set(result.entries?.filter(entry => entry.type === 'tool' && entry.state === 'completed').map(entry => entry.name))],
+        ...(result.handoffKeep && { handoffKeep: result.handoffKeep, deliveredCount: result.deliverables?.length ?? 0,
+          choices: [...new Set(result.entries?.flatMap(entry => entry.name === 'ask_user_question' && entry.state === 'completed' ? entry.choices ?? [] : []))] }),
+      }
 
       useEffect(() => {
         const abort = new AbortController()
@@ -9453,11 +9473,12 @@ window.__ModuleLoader__.load({
         result && h(Fragment, null,
           !review && result.heroPair && h(HeroPersonalPairResult, { pair: result.heroPair, onOpenMatch, onKeep: keepPairLoadout, keepButtons }),
           !review && result.handoffPair && h('div', { 'data-personal-handoff-pair': true },
-            h(HandoffOutcomeSummary, { outcome: result.handoffPair, ownReview: 'personal', onVisit: onOpenMatch })),
-          pairSide ? h('p', { className: 'moba-match-action-note' }, [t(heroPersonalPairSides[pairSide].label), result.hero?.name].filter(Boolean).join(' · '))
+            h(HandoffOutcomeSummary, { outcome: result.handoffPair, ownReview: 'personal', onVisit: onOpenMatch,
+              onPreserve: keepPairLoadout, preserveRefs: keepButtons })),
+          pairSide ? h('p', { className: 'moba-match-action-note' }, [t(pairLabel), result.hero?.name].filter(Boolean).join(' · '))
             : sourceLabel && h('p', { className: 'moba-match-action-note' }, t('练习出装') + ' · ' + sourceLabel),
           review ? result.draft && h(Fragment, null,
-            reviewedRunTools && h(HeroPersonalRunEvidence, { originalAttached: true, tools: reviewedRunTools }),
+            reviewedEvidence && h(ReviewedPairEvidence, { evidence: reviewedEvidence }),
             h(PlanEquipment, { items: result.gear ?? empty, removed: result.removed ?? empty }),
             h(SharedPlanCapabilities, { comparison: result.comparison }))
             : h(Fragment, null,
@@ -9483,7 +9504,7 @@ window.__ModuleLoader__.load({
           review ? h(Fragment, null,
             h('button', { type: 'button', className: 'moba-text', onClick: returnToResult }, t('返回任务结果')),
             h('button', { type: 'button', className: 'moba-match-move', disabled: !result?.draft,
-              onClick: () => onUse(result, true, reviewedRunTools && { side: pairSide, tools: reviewedRunTools, draft: result.draft }) }, t('保存为方案')))
+              onClick: () => onUse(result, true, reviewedEvidence) }, t('保存为方案')))
             : h(Fragment, null,
               h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(sessionId) }, t('查看原会话')),
               result?.rebaseline && h('button', { ref: rebaselineButton, type: 'button',
@@ -11209,10 +11230,11 @@ window.__ModuleLoader__.load({
       .moba-lesson-result .moba-settlement-footer button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
       .moba-lesson-result [data-hero-personal-pair] { --ink: #f3e9d2; --muted: #cdc4b7; --line: #564532; margin: 0; }
       .moba-lesson-result [data-personal-handoff-pair] { --ink: #f3e9d2; --muted: #cdc4b7; --line: #564532; }
-      .moba-lesson-result [data-hero-personal-pair] .moba-lighthouse-arm { gap: 5px; }
-      .moba-lesson-result [data-hero-personal-pair] footer:has(.moba-roster-open) { display: grid;
+      .moba-lesson-result [data-personal-handoff-pair] > .moba-handoff-outcome { margin: 0; }
+      .moba-lesson-result :is([data-hero-personal-pair], [data-personal-handoff-pair]) .moba-lighthouse-arm { gap: 5px; }
+      .moba-lesson-result :is([data-hero-personal-pair], [data-personal-handoff-pair]) footer:has(.moba-roster-open) { display: grid;
         grid-template-columns: auto minmax(0, 1fr); align-items: center; justify-content: stretch; }
-      .moba-lesson-result [data-hero-personal-pair] footer .moba-text { white-space: normal; text-align: start; }
+      .moba-lesson-result :is([data-hero-personal-pair], [data-personal-handoff-pair]) footer .moba-text { white-space: normal; text-align: start; }
       .moba-lesson-result-files li > div { display: flex; flex-wrap: wrap; align-items: baseline; min-width: 0; gap: 3px 8px; }
       .moba-lesson-result-awards h4, .moba-session-settlement-title { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
       .moba-lesson-result-awards ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }

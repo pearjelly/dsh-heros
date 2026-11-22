@@ -5250,6 +5250,8 @@ export async function apply(ctx) {
       (style === 'direct' ? evidence.materialDelivered && completedPresentDelivery(evidence) : Boolean(singleReviewAnswer(evidence)))
   }
 
+  const personalLoadoutUnavailable = '这局还没有可复用出装的实战记录。'
+
   async function personalHandoffAlternate(sessionId, { launch, target, evidence }, signal) {
     if (!launch.source?.handoffPairId || !target ||
       !ctx.get('workspaceRegistry')?.get(target.workspaceId)?.sessionIds.includes(sessionId)) return
@@ -5279,30 +5281,71 @@ export async function apply(ctx) {
     if (sameHandoffSource(alternate?.source, source)) return sessionId
   }
 
-  async function personalHandoffPair(sessionId, { launch, target, evidence }, alternate, signal) {
+  async function personalHandoffPair(sessionId, current, alternate, signal) {
+    const { launch, target } = current
     const sourceId = launch.handoffAlternateOf
     if (!alternate || typeof sourceId !== 'string' || !heroAlternateSessionId.test(sourceId) || sourceId === sessionId) return
     const original = await observeLessonTask(sourceId, signal, true)
     if (!sameHandoffTask(original?.target, target) || !sameHandoffSource(original.launch.source, alternate.source) ||
       !completedPersonalHandoff(original.evidence, alternate.style)) return
-    const currentStyle = alternate.style === 'direct' ? 'review' : 'direct'
-    function side(id, style, result) {
-      const { materialDelivered, deliverables } = result
-      return { id: style, style, sessionId: id, materialDelivered, deliverables,
-        deliveredCount: deliverables.length, choices: comparisonChoices(result) }
+    return [{ sessionId: sourceId, style: alternate.style, result: original },
+      { sessionId, style: alternate.style === 'direct' ? 'review' : 'direct', result: current }]
+  }
+
+  function personalHandoffPairResult(arms) {
+    return { material: arms[0].result.target.material, arms: arms.map(({ sessionId, style, result }) => {
+      const { materialDelivered, deliverables } = result.evidence
+      return { id: style, style, sessionId, materialDelivered, deliverables, canPreserve: true,
+        deliveredCount: deliverables.length, choices: comparisonChoices(result.evidence) }
+    }) }
+  }
+
+  async function verifiedPersonalHandoffSide(sessionId, result, pairSide, signal) {
+    const alternate = result && await personalHandoffAlternate(sessionId, result, signal)
+    const arms = alternate && await personalHandoffPair(sessionId, result, alternate, signal)
+    const picked = arms && arms.find(item => item.style === pairSide)
+    if (!picked) throw new Error(personalLoadoutUnavailable)
+    const { launch, presetId, target, evidence } = picked.result
+    const checked = await verifiedLessonTaskSource(launch.source, signal)
+    if (checked.proof.presetId !== presetId || checked.proof.identity !== target.identity) {
+      throw new Error('本机配置已变化，无法核对这局的原出装。')
     }
-    return { material: target.material, arms: [side(sourceId, alternate.style, original.evidence), side(sessionId, currentStyle, evidence)] }
+    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, sessionId, pairSide, picked.sessionId,
+      target.digest, target.identity, evidence.turn, evidence.materialDelivered, comparisonChoices(evidence), evidence.deliverables])).digest('hex')
+    return { ...picked, checked, keep: { sessionId, pairSide, token } }
+  }
+
+  async function savePersonalHandoffPlan({ sessionId, pairSide, token, name, note }, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    if ((pairSide !== 'direct' && pairSide !== 'review') || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+      throw new Error(personalLoadoutUnavailable)
+    }
+    const picked = await verifiedPersonalHandoffSide(sessionId, await observeLessonTask(sessionId, signal), pairSide, signal)
+    if (picked.keep.token !== token) throw new Error(personalLoadoutUnavailable)
+    const { result, checked } = picked
+    return buildPlans.write({ name, note }, checked.draft.presetId, async () => {
+      if (await personalTaskMaterialState(result.target, signal) !== 'verified') throw new Error(personalLoadoutUnavailable)
+      signal?.throwIfAborted()
+      return { presetId: result.presetId, heroId: checked.draft.presetId, heroName: checked.view.heroName }
+    })
   }
 
   async function readLessonTaskResult({ sessionId, review, pairSide }, signal) {
     const pairReview = pairSide !== undefined
-    const cannotReuse = '这局还没有可复用出装的实战记录。'
-    if (pairReview && (review !== true || (pairSide !== 'original' && pairSide !== 'alternate'))) throw new Error(cannotReuse)
+    const handoffReview = pairSide === 'direct' || pairSide === 'review'
+    if (pairReview && (review !== true || (!handoffReview && pairSide !== 'original' && pairSide !== 'alternate'))) {
+      throw new Error(personalLoadoutUnavailable)
+    }
     let resultView = await observeLessonTask(sessionId, signal)
-    if (pairReview) {
+    let handoff
+    if (handoffReview) {
+      handoff = await verifiedPersonalHandoffSide(sessionId, resultView, pairSide, signal)
+      sessionId = handoff.sessionId
+      resultView = handoff.result
+    } else if (pairReview) {
       const pair = resultView && await personalHeroPair(sessionId, resultView, signal)
       const picked = pair?.[pairSide]
-      if (!picked?.result.presentBinding) throw new Error(cannotReuse)
+      if (!picked?.result.presentBinding) throw new Error(personalLoadoutUnavailable)
       sessionId = picked.sessionId
       resultView = picked.result
     }
@@ -5368,7 +5411,7 @@ export async function apply(ctx) {
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
       ...(handoffAlternate && { handoffAlternate }),
-      ...(handoffPair && { handoffPair }),
+      ...(handoffPair && { handoffPair: personalHandoffPairResult(handoffPair) }),
       ...(sourceTrial && { sourceTrial }),
       ...(heroPair && { heroPair: personalHeroPairResult(heroPair) }),
       ...(armoryDraft && { armoryDraft }), ...(armoryReason && { reason: armoryReason }) }
@@ -5376,7 +5419,10 @@ export async function apply(ctx) {
     try {
       const uploaded = await appearance.index()
       let checked, heroName
-      if (armory) {
+      if (handoff) {
+        checked = handoff.checked
+        heroName = checked.view.heroName
+      } else if (armory) {
         const ecosystem = await discover()
         const native = matchHero(presetId, records.get(presetId))
         checked = { ...await verifiedPlanComparisonArm({ presetId, heroId: native.id }, ecosystem), ecosystem }
@@ -5402,7 +5448,7 @@ export async function apply(ctx) {
       const removed = historicalRemovals(candidate, presetEquipment(ecosystem, draft.presetId), ecosystem)
       const comparison = await compare(draft, ecosystem, candidate)
       signal?.throwIfAborted()
-      return { ...result, sessionId, hero, draft, gear, removed, comparison }
+      return { ...result, sessionId, hero, draft, gear, removed, comparison, ...(handoff && { handoffKeep: handoff.keep }) }
     } catch (error) {
       signal?.throwIfAborted()
       return { ...result, reason: error instanceof Error ? error.message : '本机配置已变化，无法核对这局的原出装。' }
@@ -7182,6 +7228,10 @@ export async function apply(ctx) {
         else if (selection?.action === 'comparison-loadout-preview') value = await comparisonLoadout(selection, request.signal)
         else if (selection?.action === 'evidence-replay-plan-save') {
           value = publicBuildPlan(await saveEvidenceReplayPlan(selection, request.signal))
+          updates.notify()
+        }
+        else if (selection?.action === 'handoff-pair-plan-save') {
+          value = publicBuildPlan(await savePersonalHandoffPlan(selection, request.signal))
           updates.notify()
         }
         else if (selection?.action === 'lesson-task-options') value = await lessonTaskOptions(selection, request.signal)

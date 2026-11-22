@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.172.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.173.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -145,6 +145,8 @@ dsh web
 在 v0.171.0 从结果卡开的个人任务通过核验后，可以用另一套打法再试一次。表单会带入刚才的文件和任务说明，核对另一套实测出装后再打开草稿并手动发送。
 
 在 v0.172.0 发起的同题复赛通过核验后，可以在结果页对照两局的复核选择和实际原件，也可以打开各自的原会话。
+
+两张个人战报卡都可点 **保留这套出装**。核对所选一局的实际选择、交付和工具调用后，为方案命名。保存确认会提供开新任务的入口，再选一份材料并填写任务。方案保存出装和命名时填写的信息。
 
 好友挑战或复核复赛还没发送时，回大厅点 **继续未发送的灯塔对局**，按打法和任务语言找回原草稿。
 
