@@ -9166,6 +9166,8 @@ window.__ModuleLoader__.load({
                 t(result.status === 'unavailable' ? '暂不可核对' : comparisonArmStates[result.status] ?? result.status),
                 result.turn && t('第 ') + result.turn + t(' 回合'),
               ].filter(Boolean).join(' · ')),
+              alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
+                onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
               result.textHandoff && h('p', { className: 'moba-match-action-note' }, t('已记录终端工具完成和助手文字回复。')),
               h(ObservedComparisonCalls, { entries: result.entries }),
               h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
@@ -9178,8 +9180,6 @@ window.__ModuleLoader__.load({
               onClick: () => onUse(result, true) }, t('保存为方案')))
             : h(Fragment, null,
               h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(sessionId) }, t('查看原会话')),
-              alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
-                onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
               result?.rebaseline && h('button', { ref: rebaselineButton, type: 'button',
                 className: result.rematchSource ? 'moba-text' : 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'rebaseline', source: result.source, armoryDraft: result.armoryDraft,
