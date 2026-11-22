@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.144.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.145.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -47,6 +47,8 @@ On a verified hero run, choose **Share this round report**, then **Copy report c
 Choose **Compare a friend's report** on a verified local run with the same public sample, task language, and handoff need. The comparison shows **Verified on this device** for your result and **Shared by your friend** for the outcome supplied by the code.
 
 Choose **Copy my report code** in the comparison and send it to your friend. The two handoffs stay on screen while you copy.
+
+If your friend played a different stock hero and you haven't played it on this board, you can try it from their result. The plugin opens a separate DSH draft with the same task and a fresh copy of the supply card. Send it manually when you are ready.
 
 ### Use Standard on your own task
 
