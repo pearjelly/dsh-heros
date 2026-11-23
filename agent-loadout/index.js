@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { link, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { englishStrings, englishText, localizeDisplay } from './localization.js'
@@ -26,6 +26,7 @@ import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } 
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
+import { observedWebSource, webSourceHostVersion, webSourceModule, webSourceOldVersion, webSourceTask, webSourceUrl, webSourceVersion } from './web-source-practice.js'
 import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, panelActivityRecord, toolSourceRecord } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
@@ -49,6 +50,9 @@ const validOpeningId = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id)
 const teamworkRecord = 'plugin:dsh-agent-loadout/teamwork'
 const planTaskRecord = 'plugin:dsh-agent-loadout/plan-task'
 const planTaskSessionPrefix = 'session-a076'
+const webSourceUnavailable = '本机暂时无法装配原生网页读取。'
+const webSourceDirectory = 'web-source-practice'
+const webSourceChanged = '试玩出装已变化，请重新核对。'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
 const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).digest('hex')
@@ -1326,6 +1330,7 @@ export async function apply(ctx) {
     lesson: { input: requestedLessonTask, check: checkLessonTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
     armory: { input: requestedArmoryTask, check: checkArmoryTask, unavailable: '当前 DSH 无法用当前出装开启任务。' },
     alternate: { input: requestedHeroAlternateTask, check: checkHeroAlternateTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
+    'web-source': { input: requestedWebSourcePractice, check: checkWebSourcePractice, unavailable: webSourceUnavailable },
   }
 
   async function openReviewedTask(selection, english, signal, kind = 'plan') {
@@ -1334,6 +1339,7 @@ export async function apply(ctx) {
     if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
       throw new Error('请先核对新任务的材料和出装。')
     }
+    const webPractice = kind === 'web-source'
     const { input: readInput, check, unavailable } = reviewedTaskKinds[kind]
     const input = await readInput(selection, english, signal)
     const controller = ctx.get('sessionController')
@@ -1353,24 +1359,30 @@ export async function apply(ctx) {
       const checked = await check(input, signal)
       if (checked.token !== token) throw new Error('材料、任务或出装已变化，请重新核对。')
       const { presetId, verifyLive: verify } = await prepare(checked.draft, checked.candidate)
-      if (kind !== 'plan') {
+      if (kind === 'plan') buildPlans.read(input.id, input.revision)
+      else if (!webPractice) {
         const target = await readPersonalTaskMaterial(input.workspaceId, input.material, signal)
         if (target.digest !== checked.digest || target.workspace.path !== checked.cwd) {
           throw new Error('材料、任务或出装已变化，请重新核对。')
         }
-      } else buildPlans.read(input.id, input.revision)
-      const workspace = registry.get(input.workspaceId)
-      if (workspace?.path !== checked.cwd) throw new Error('请选择一个现有的工作区。')
+      }
+      const cwd = webPractice ? join(await realpath(directory), webSourceDirectory, sessionId) : checked.cwd
+      if (webPractice) {
+        await mkdir(cwd, { recursive: true, mode: 0o700 })
+        if (await realpath(cwd) !== cwd) throw new Error(webSourceUnavailable)
+      }
+      const workspace = webPractice ? await registry.create(cwd, 'Web Research Practice · 网页检索试玩') : registry.get(input.workspaceId)
+      if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
       signal?.throwIfAborted()
       if (closed) throw new Error('配装服务正在关闭，请重试。')
       if (existing) {
         if (existing.launch || existing.started || existing.header.isSeeded || existing.inheritedEventCount !== 0 ||
-          existing.header.cwd !== checked.cwd || existing.header.agentPreset !== presetId) {
+          existing.header.cwd !== cwd || existing.header.agentPreset !== presetId) {
           throw new Error('已有会话与核对过的出装任务不一致。')
         }
         if (!workspace.sessionIds.includes(sessionId)) await workspace.attachSession(sessionId)
       } else {
-        const opened = await controller.create({ sessionId, workspaceId: input.workspaceId, agentPreset: presetId })
+        const opened = await controller.create({ sessionId, workspaceId: workspace.id, agentPreset: presetId })
         if (opened.sessionId !== sessionId) throw new Error('新对局的会话标识已变化，请重新开局。')
       }
       let agent = ctx.get('agents')?.get(sessionId)
@@ -1383,11 +1395,12 @@ export async function apply(ctx) {
       const { planName, material, task, source } = checked.view
       if (source?.heroDeliveryTrial && !heroTrialLive(lighthouseHeroDelivery, presetId, agent)) throw new Error(heroDeliveryChanged)
       if (checked.stockBindings && !stockTrialLive(source.arm, presetId, agent, checked.stockBindings)) throw new Error(stockTransferChanged)
+      const webSourcePractice = webPractice && liveWebSourceBinding(agent, presetId, workspace.id, checked.webToolId)
       const armory = kind === 'armory'
       const target = (source || armory) && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
         ...(source && isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
-      appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, material, task,
-        ...(target && { target }), ...(source && { source }), ...(armory && { armory }),
+      appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, task,
+        ...(material !== undefined && { material }), ...(target && { target }), ...(source && { source }), ...(armory && { armory }), ...(webSourcePractice && { webSourcePractice }),
         ...(checked.handoffAlternateOf && { handoffAlternateOf: checked.handoffAlternateOf }),
         ...(kind === 'alternate' && { alternateOf: input.alternateOf }) })
       updates.notify(sessionId)
@@ -1403,6 +1416,98 @@ export async function apply(ctx) {
       currentEcosystem ?? discover(), runtimeModule(ctx, '@deepseek-ai/dsh-app-boot'),
     ])
     return { ecosystem, sources: buildShareSources(ctx, ecosystem, boot), runtime: boot.getDshRuntimeVersion() }
+  }
+
+  function requestedWebSourcePractice(_selection, english) {
+    const task = webSourceTask(english)
+    const hash = createHash('sha256').update(task).digest('hex')
+    return { task, hash }
+  }
+
+  async function checkWebSourcePractice({ task, hash }, signal) {
+    if (!toolRuntime || !ctx.get('sessionController')?.resolveAgent || !ctx.get('workspaceRegistry')?.create) {
+      throw new Error(webSourceUnavailable)
+    }
+    const { ecosystem, sources } = await shareEnvironment()
+    const preset = ecosystem.presets.find(item => item.id === 'minimal')
+    if (!preset || preset.broken || sources.hero('minimal')?.owner.package !== '@deepseek-ai/dsh-web-app') {
+      throw new Error(webSourceUnavailable)
+    }
+    const baseline = [...summarizeCapabilities(ecosystem, 'minimal', {}).values()]
+      .filter(item => item.kind === 'tool').map(item => item.name)
+    if (!baseline.includes('bash') || baseline.includes('web_fetch')) throw new Error(webSourceUnavailable)
+    const draft = { presetId: 'minimal', equipmentIds: ['web'], equipmentSources: {}, removedEquipmentIds: [] }
+    const { candidate, choices } = await plannedGrowth(draft, { ecosystem })
+    const fetches = choices.filter(item => item.kind === 'tool' && item.name === 'web_fetch' && !item.timing)
+    if (fetches.length !== 1) throw new Error(webSourceUnavailable)
+    const webToolId = fetches[0].id
+    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, hash, candidate.id, webToolId])).digest('hex')
+    signal?.throwIfAborted()
+    return { token, draft, candidate, webToolId, view: { planName: '网页检索', task } }
+  }
+
+  async function previewWebSourcePractice(english, signal) {
+    const checked = await checkWebSourcePractice(requestedWebSourcePractice(null, english), signal)
+    return { token: checked.token, oldVersion: webSourceOldVersion, version: webSourceVersion,
+      hostVersion: webSourceHostVersion }
+  }
+
+  function liveWebSourceBinding(agent, presetId, workspaceId, expectedToolId) {
+    const scope = agent && toolRuntime?.scopeOf(agent.ctx)
+    const definition = scope && ctx.tools.get('web_fetch', scope)
+    const origins = ctx.get('agentLoadoutToolOrigins')
+    const origin = definition && origins?.get(definition, scope)
+    if (origin?.moduleName !== webSourceModule) throw new Error(webSourceChanged)
+    const { id, sourceId } = dispatchedToolDetails(ctx, scope, definition, agent.ctx, records.get(presetId)?.definition.plugins)
+    if (id !== expectedToolId || !sourceId) throw new Error(webSourceChanged)
+    return { id, sourceId, workspaceId, presetId }
+  }
+
+  async function readWebSourcePractice({ sessionId }, signal) {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return null
+    const source = await observePlanTask(sessionId, signal, 'all')
+    if (!source) return null
+    try {
+      const { header, launch, started } = planTaskDetails(source)
+      const binding = launch?.webSourcePractice
+      const workspace = binding && ctx.get('workspaceRegistry')?.get(binding.workspaceId)
+      if (!workspace || header.cwd !== workspace.path || !workspace.sessionIds.includes(sessionId) ||
+        header.agentPreset !== binding.presetId) return null
+      if (!started) return { status: 'waiting' }
+      const outcome = await comparisonEvidence(source, {
+        cwd: header.cwd, task: launch.task, presetId: binding.presetId, exactMessages: true,
+      }, receipts)
+      const { status, turn } = outcome
+      if (status !== 'complete') return { status }
+      const verified = observedWebSource(source.events, turn, binding)
+      const decisionDirectory = join(directory, 'web-source-decisions')
+      const decision = await readFile(join(decisionDirectory, sessionId + '.json'), 'utf8').then(JSON.parse).catch(error => {
+        if (error.code !== 'ENOENT') throw error
+      })
+      return { status, verified, ...(verified && { url: webSourceUrl, version: webSourceVersion, hostVersion: webSourceHostVersion }),
+        ...(decision?.sessionId === sessionId && (decision.choice === 'pending' || verified && decision.choice === 'use-current') &&
+          { choice: decision.choice }) }
+    } finally {
+      source[Symbol.dispose]()
+    }
+  }
+
+  async function chooseWebSourcePractice({ sessionId, choice }, signal) {
+    const view = await readWebSourcePractice({ sessionId }, signal)
+    if (closed || view?.status !== 'complete' || !['pending', 'use-current'].includes(choice) ||
+      choice === 'use-current' && !view.verified) throw new Error('请先核对本次试玩的原文。')
+    if (view.choice === choice) return view
+    const directoryPath = join(directory, 'web-source-decisions')
+    signal?.throwIfAborted()
+    try {
+      await saveEntry(directoryPath, sessionId, { sessionId, choice }, { exclusive: true })
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+      const existing = await readWebSourcePractice({ sessionId }, signal)
+      if (existing?.choice === choice) return existing
+      throw new Error('这次试玩已经记录了选择。')
+    }
+    return { ...view, choice }
   }
 
   function heroTrialToolFit(arm, names) {
@@ -4262,7 +4367,9 @@ export async function apply(ctx) {
 
   async function personalTaskPathFilter() {
     const profileDirectory = await realpath(directory)
-    return path => !lighthousePracticeContains(profileDirectory, path)
+    const webPractice = join(profileDirectory, webSourceDirectory)
+    return path => !lighthousePracticeContains(profileDirectory, path) &&
+      path !== webPractice && !path.startsWith(webPractice + sep)
   }
 
   async function personalWorkspaceIds(signal) {
@@ -7112,8 +7219,9 @@ export async function apply(ctx) {
         }
       }
       if (savedTask?.launch) {
-        const { planName, material, task, source, armory } = savedTask.launch
-        if (!savedTask.started) value.planTask = { planName, material, task,
+        const { planName, material, task, source, armory, webSourcePractice } = savedTask.launch
+        if (webSourcePractice && savedTask.started) value.webSourcePractice = true
+        if (!savedTask.started) value.planTask = { planName, material, task, ...(webSourcePractice && { webSourcePractice: true }),
           ...(source && { source }), ...(armory === true && { armory }), ...(savedTask.presetChanged && { presetChanged: true }) }
         else if (source) value.lessonTaskResult = true
         else if (armory === true && personalTaskTarget(savedTask.launch, savedTask.header)) {
@@ -7292,6 +7400,10 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-combo-preview') value = await previewQuestCombo(selection)
         else if (selection?.action === 'growth-open') value = await startWithQuest(selection, request.signal)
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
+        else if (selection?.action === 'web-source-preview') value = await previewWebSourcePractice(english, request.signal)
+        else if (selection?.action === 'web-source-open') value = await openReviewedTask(selection, english, request.signal, 'web-source')
+        else if (selection?.action === 'web-source-result') value = await readWebSourcePractice(selection, request.signal)
+        else if (selection?.action === 'web-source-choice') value = await chooseWebSourcePractice(selection, request.signal)
         else if (selection?.action === 'hero-trial-create') value = await createHeroTrial(selection, english, request.signal)
         else if (selection?.action === 'hero-trial-open') value = await openComparisonArm(heroTrials, selection, english, request.signal)
         else if (selection?.action === 'hero-trial-open-from-task') value = await openStandardFromPersonal(selection, english, request.signal)
