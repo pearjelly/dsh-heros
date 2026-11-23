@@ -508,15 +508,17 @@ function comparisonQuestions(value, state) {
   })
 }
 
-function activeComparisonQuestions(asks, body, live, projection) {
+function activeComparisonQuestions(asks, body, live, projection, includeBindings) {
   const active = new Map((projection?.active ?? []).filter(call => asks.has(call.callId)).map(call => [call.callId, call]))
   const results = new Set(body.filter(event => event.type === 'tool/result').map(event => event.data.message.toolCallId))
   return [...asks].flatMap(([callId, call]) => {
     const item = active.get(callId)
-    if (item) return comparisonQuestions(item.questions, item.state)
+    const questions = (value, state) => comparisonQuestions(value, state).map(question =>
+      includeBindings ? { ...question, callId, callSeq: call.seq } : question)
+    if (item) return questions(item.questions, item.state)
     if (!live || results.has(callId) || typeof call.data.arguments !== 'string' || call.data.arguments.length > 32_000) return []
     try {
-      return comparisonQuestions(JSON.parse(call.data.arguments)?.questions, 'open')
+      return questions(JSON.parse(call.data.arguments)?.questions, 'open')
     } catch {
       return []
     }
@@ -567,7 +569,7 @@ function answeredComparisonTurns(events, after, asks, live, presetId, verifyMate
 
 export async function comparisonEvidence(source, { cwd, presetId, task, material, verifyMaterialDelivery,
   verifyMaterialProof = true, exactMessages = !verifyMaterialProof, linkedChoicesOnly = false,
-  includeQuestions = Boolean(material), includeToolCoordinates, includeWindows, includeFileCoordinates, allowOwnInput = false,
+  includeQuestions = Boolean(material), includeQuestionBindings = false, includeToolCoordinates, includeWindows, includeFileCoordinates, allowOwnInput = false,
   includeTaskFingerprint = false, includeTaskText = false, includeWorkflowDecisions = false }, receipts) {
   const unavailable = reason => ({ status: 'unavailable', reason })
   if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
@@ -613,7 +615,7 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
   const asks = new Map(includeQuestions ? body.filter(event => event.type === 'tool/call' && event.data.name === 'ask_user_question')
     .map(event => [event.data.callId, event]) : [])
   const projection = source.projections?.values.userQuestions
-  const pendingQuestions = activeComparisonQuestions(asks, body, live && end < 0, projection)
+  const pendingQuestions = activeComparisonQuestions(asks, body, live && end < 0, projection, includeQuestionBindings)
   const followUps = end >= 0 && asks.size ? answeredComparisonTurns(events, end + 1, asks, live, presetId, verifyMaterialProof, exactMessages) : { turns: [] }
   const turns = [[start, end], ...followUps.turns]
   // A settled projection includes replies outside the accepted turns. Only use linked replies in this task.

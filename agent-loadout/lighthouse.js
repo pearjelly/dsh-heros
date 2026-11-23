@@ -88,6 +88,11 @@ export function lighthouseEvidenceTask(english, scenario) {
     : `阅读北岸灯塔补给卡。一条调度消息说还为下一班准备了${claim}。先核对所选补给卡实际支持哪些说法，再建议本次交接内容。准备好交接稿时，另存一份并在当前对话交付。`
 }
 
+export function isLighthouseEvidenceWorkspace(directory, path) {
+  const folder = relative(directory, path)
+  return folder.startsWith(evidencePrefix) && openingId.test(folder.slice(evidencePrefix.length))
+}
+
 export async function lighthouseEvidenceLesson(directory, registry, launchId, english, scenario) {
   if (typeof launchId !== 'string' || !openingId.test(launchId)) throw new Error('开局请求无效，请重试。')
   const path = join(directory, evidencePrefix + launchId)

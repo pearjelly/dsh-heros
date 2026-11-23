@@ -1411,6 +1411,12 @@ test('field playbooks preview read-only and add a real handoff decision to the s
 
     const practice = async (phase, fields = {}, status) =>
       (await host.request(endpoint, { action: 'lighthouse-combined-start-' + phase, ...fields }, status)).value
+    const pendingLighthouse = async (before, status) =>
+      (await host.request(endpoint, { action: 'lighthouse-combined-pending', before }, status)).value
+    const resumeLighthouse = async ({ sessionId, resumeToken }, status) =>
+      (await host.request(endpoint, { action: 'lighthouse-combined-resume', sessionId, resumeToken }, status)).value
+    await pendingLighthouse('invalid cursor', 422)
+    assert.deepEqual(await pendingLighthouse(), { runs: [] })
     const practiceDirectories = () => readdir(join(env.DSH_HOME, 'profiles', 'web', 'agent-loadouts'))
       .then(names => names.filter(name => name.startsWith('lighthouse-evidence-')))
       .catch(error => { if (error.code === 'ENOENT') return []; throw error })
@@ -1430,6 +1436,14 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const practiceHistory = await host.request('/api/loadout-fixture-history?sessionId=' + practiceDraft.sessionId)
     assert.equal(practiceHistory.workspaceId, practiceDraft.workspaceId)
     assert.ok(!practiceHistory.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    const { runs: [draftRun] } = await pendingLighthouse()
+    assert.deepEqual(draftRun, {
+      sessionId: practiceDraft.sessionId, kind: 'original', status: 'waiting', sampleLanguage: 'zh',
+      openedAt: draftRun.openedAt, resumeToken: draftRun.resumeToken,
+    })
+    assert.match(draftRun.resumeToken, /^[a-f0-9]{64}$/)
+    assert.deepEqual(await resumeLighthouse(draftRun), { sessionId: practiceDraft.sessionId })
+    assert.deepEqual(await host.request('/api/loadout-fixture-history?sessionId=' + practiceDraft.sessionId), practiceHistory)
     const practiceCreated = await practiceDirectories()
     assert.equal(practiceCreated.length, practiceBefore.length + 1)
     const sampleDirectory = practiceCreated.find(name => !practiceBefore.includes(name))
@@ -1445,7 +1459,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       (await host.request(endpoint, { action: 'lighthouse-combined-personal-draft', sessionId }, status)).value
     const native = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
     const questions = '/api/loadout-fixture-handoff-question'
-    async function choose(sessionId, questionId, choice) {
+    async function choose(sessionId, questionId, choice, beforeAnswer) {
       let question
       for (let attempt = 0; attempt < 100; attempt++) {
         question = (await host.request(questions, { sessionId })).question
@@ -1453,6 +1467,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
         await delay(30)
       }
       assert.equal(question?.id, questionId)
+      await beforeAnswer?.()
       await host.request(questions, { sessionId, choice })
     }
 
@@ -1461,7 +1476,15 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await personalDraft(sessionId, 422)
     const originalTurn = host.request(turnEndpoint, { sessionId, text: task })
     originalTurn.catch(() => {})
-    await choose(sessionId, 'fixture-lighthouse-evidence', '暂缓提交')
+    await choose(sessionId, 'fixture-lighthouse-evidence', '暂缓提交', async () => {
+      await resumeLighthouse(draftRun, 422)
+      const { runs: [waiting] } = await pendingLighthouse()
+      assert.ok(waiting, 'The native Evidence question must appear in pending Lighthouse runs.')
+      assert.equal(waiting.sessionId, sessionId)
+      assert.equal(waiting.kind, 'original')
+      assert.equal(waiting.status, 'waiting-choice')
+      assert.deepEqual(await resumeLighthouse(waiting), { sessionId })
+    })
     await originalTurn
     const original = await result(sessionId)
     const originalNative = await native(sessionId)
@@ -1470,6 +1493,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(original.workflowDecisions, [{ gearId: 'evidence', choices: ['暂缓提交'] }])
     assert.deepEqual(original.deliverables, [])
     assert.equal(original.lighthouseReplay, true)
+    assert.deepEqual(await pendingLighthouse(), { runs: [] })
     const carried = await personalDraft(sessionId)
     assert.deepEqual(carried, { draft: both.draft, heroName: '标准模式' })
     assert.deepEqual(await practiceDirectories(), practiceCreated)
@@ -1493,11 +1517,31 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.notEqual(next.sessionId, sessionId)
     assert.equal(next.task, task)
     assert.ok(!(await native(next.sessionId)).events.some(event => event.type === 'user/message'))
+    const { runs: [replayDraftRun] } = await pendingLighthouse()
+    assert.equal(replayDraftRun.sessionId, next.sessionId)
+    assert.equal(replayDraftRun.kind, 'replay')
+    assert.equal(replayDraftRun.status, 'waiting')
     const newTurn = host.request(turnEndpoint, { sessionId: next.sessionId, text: next.task })
     newTurn.catch(() => {})
-    await choose(next.sessionId, 'fixture-lighthouse-evidence', '降级推荐')
-    await choose(next.sessionId, 'fixture-delivery-review', 'Confirm handoff')
+    let beforeReview
+    await choose(next.sessionId, 'fixture-lighthouse-evidence', '降级推荐', async () => {
+      const { runs: [waiting] } = await pendingLighthouse()
+      assert.equal(waiting.status, 'waiting-choice')
+      assert.deepEqual(await resumeLighthouse(waiting), { sessionId: next.sessionId })
+      beforeReview = waiting
+    })
+    let reviewWaiting
+    await choose(next.sessionId, 'fixture-delivery-review', 'Confirm handoff', async () => {
+      await resumeLighthouse(beforeReview, 422)
+      const { runs: [waiting] } = await pendingLighthouse()
+      assert.equal(waiting.status, 'waiting-choice')
+      assert.notEqual(waiting.resumeToken, beforeReview.resumeToken)
+      assert.deepEqual(await resumeLighthouse(waiting), { sessionId: next.sessionId })
+      reviewWaiting = waiting
+    })
     await newTurn
+    await resumeLighthouse(reviewWaiting, 422)
+    assert.deepEqual(await pendingLighthouse(), { runs: [] })
     const observed = await result(next.sessionId)
     assert.equal(observed.lighthouseReplay, true)
     assert.deepEqual(observed.workflowDecisions, [
@@ -1540,6 +1584,8 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(ownOpening.task, ownPreview.task)
     assert.equal(ownOpening.workspaceId, personalWorkspace)
     assert.ok(!(await native(ownOpening.sessionId)).events.some(event => event.type === 'user/message'))
+    await resumeLighthouse({ ...draftRun, sessionId: ownOpening.sessionId }, 422)
+    assert.deepEqual(await pendingLighthouse(), { runs: [] })
     assert.deepEqual(await native(sessionId), originalNative)
     const before = await history(directSession)
     const liveComparison = await preview('review', { sourceSessionId: directSession })

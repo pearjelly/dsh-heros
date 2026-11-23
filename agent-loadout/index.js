@@ -18,7 +18,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceChoices, lighthouseEvidenceDecision, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseEvidenceTask, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroDelivery, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseRematchTask, lighthouseReviewDecision, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { isLighthouseEvidenceWorkspace, lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceChoices, lighthouseEvidenceDecision, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseEvidenceTask, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroDelivery, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseRematchTask, lighthouseReviewDecision, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -1941,23 +1941,24 @@ export async function apply(ctx) {
     }
   }
 
-  function webPilotPageBoundary(before, unavailable) {
+  function planTaskPageBoundary(before, unavailable) {
     if (before === undefined) return
     const fields = typeof before === 'string' && /^(\d{1,16}):(session-a076[a-f0-9]{28})$/.exec(before)
     if (!fields || !Number.isSafeInteger(Number(fields[1]))) throw new Error(unavailable)
     return { createdAt: Number(fields[1]), id: fields[2] }
   }
 
-  async function webPilotRunPage({ registry, root, previous, exclude }, signal, readRun) {
-    const order = (a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)
+  function webPilotRunPage({ registry, root, previous, exclude }, signal, readRun) {
     const candidates = registry.list().flatMap(workspace => {
       const id = basename(workspace.path)
-      if (id !== exclude && webPilotWorkspace(workspace, root, id)) {
-        const candidate = { id, createdAt: Date.parse(workspace.createdAt) || 0 }
-        if (!previous || order(candidate, previous) > 0) return [candidate]
-      }
-      return []
-    }).sort(order)
+      return id !== exclude && webPilotWorkspace(workspace, root, id) ? [{ id, createdAt: Date.parse(workspace.createdAt) || 0 }] : []
+    })
+    return planTaskRunPage(candidates, previous, signal, readRun)
+  }
+
+  async function planTaskRunPage(candidates, previous, signal, readRun) {
+    const order = (a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)
+    candidates = candidates.filter(candidate => !previous || order(candidate, previous) > 0).sort(order)
     const runs = []
     const limit = Math.min(candidates.length, 48)
     let inspected = 0
@@ -1975,7 +1976,7 @@ export async function apply(ctx) {
   }
 
   async function webPilotReplays({ sessionId, before, includeWaitingChoices }, signal) {
-    const previous = webPilotPageBoundary(before, webPilotReplayUnavailable)
+    const previous = planTaskPageBoundary(before, webPilotReplayUnavailable)
     const reference = await webPilotReplayParent(sessionId, signal)
     return webPilotRunPage({ ...reference, previous, exclude: sessionId }, signal,
       async id => (await readWebPilotReplay(id, reference, signal, { includeWaitingChoices: includeWaitingChoices === true }))?.run)
@@ -2013,7 +2014,7 @@ export async function apply(ctx) {
   }
 
   async function webPilotPending({ before, includeWaitingChoices }, signal) {
-    const previous = webPilotPageBoundary(before, '找不到这页试玩草稿。')
+    const previous = planTaskPageBoundary(before, '找不到这页试玩草稿。')
     const registry = ctx.get('workspaceRegistry')
     const root = await webPilotPracticeRoot()
     if (!registry || !root) return { runs: [] }
@@ -2040,7 +2041,7 @@ export async function apply(ctx) {
 
   async function findWebPilotReports({ code, before }, signal) {
     const friend = decodeWebPilotReport(code)
-    const previous = webPilotPageBoundary(before, '找不到这页网页试玩战报。')
+    const previous = planTaskPageBoundary(before, '找不到这页网页试玩战报。')
     const registry = ctx.get('workspaceRegistry')
     const root = await webPilotPracticeRoot()
     if (!registry || !root) return { friend, runs: [] }
@@ -3521,6 +3522,85 @@ export async function apply(ctx) {
       'lighthouse-combined-replay-v1', sessionId, current.preview.token, original.target.digest, original.workflowDecisions,
     ])).digest('hex')
     return { ...current, original, preview: { ...current.preview, token, workflowDecisions: original.workflowDecisions } }
+  }
+
+  const combinedLighthousePendingChanged = '这局灯塔试玩已变化，请重新核对。'
+
+  function combinedLighthouseLanguage(task) {
+    return ['en', 'zh'].find(value => task === planTaskPrompt({
+      material: lighthouseHeroMaterial, task: lighthouseEvidenceTask(value === 'en', 'gap'),
+    }, value === 'en').task)
+  }
+
+  async function pendingCombinedLighthouseRun(sessionId, registry, root, signal) {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return
+    const source = await observePlanTask(sessionId, signal, 'all')
+    if (!source) return
+    try {
+      const { header, launch, started, presetChanged } = planTaskDetails(source)
+      const target = personalTaskTarget(launch, header)
+      if (header.parentSession || target?.lighthouseCombined !== true || !isLighthouseEvidenceWorkspace(root, header.cwd)) return
+      const workspace = registry.get(target.workspaceId)
+      const sampleLanguage = combinedLighthouseLanguage(target.task)
+      if (workspace?.path !== header.cwd || !workspace.sessionIds.includes(sessionId) || !sampleLanguage ||
+        await personalTaskMaterialState(target, signal) !== 'verified') return
+      const openedAt = header.createdAt
+      if (!Number.isFinite(new Date(openedAt).getTime())) return
+      let status = presetChanged ? 'loadout-changed' : 'waiting'
+      let callIds = []
+      if (started) {
+        if (presetChanged) return
+        const outcome = await comparisonEvidence(source, {
+          cwd: header.cwd, presetId: header.agentPreset, task: target.task, material: target.material,
+          exactMessages: true, includeQuestions: true, includeQuestionBindings: true,
+        }, receipts)
+        if (outcome.status !== 'waiting-choice' || outcome.materialState !== 'verified') return
+        const ecosystem = await discover()
+        const agent = source.source === 'live' && ctx.get('agents')?.get(sessionId)
+        const liveCalls = agent ? toolRecords.activity(agent.session).calls : []
+        callIds = [...new Set(outcome.pendingQuestions.flatMap(({ callId, callSeq }) => {
+          const tool = source.events.findLast(event => event.type === toolSourceRecord && event.ignorable === true &&
+            event.data.callSeq === callSeq)
+          const live = liveCalls.find(item => item.seq === callSeq && item.name === 'ask_user_question' && item.state === 'running')
+          const sourceId = tool?.data.blocked ? undefined : tool?.data.sourceId ?? live?.sourceId
+          return nativeWorkflowAskSource(header.agentPreset, ecosystem, sourceId) ? [callId] : []
+        }))].sort()
+        if (!callIds.length) return
+        status = 'waiting-choice'
+      }
+      const run = { sessionId, kind: target.lighthouseReplayOf ? 'replay' : 'original', status, openedAt, sampleLanguage }
+      const resumeToken = createHash('sha256').update(JSON.stringify([run, target.identity, target.digest, callIds])).digest('hex')
+      return { ...run, resumeToken }
+    } finally {
+      source[Symbol.dispose]()
+    }
+  }
+
+  async function combinedLighthousePracticeRoot() {
+    return realpath(directory).catch(error => {
+      if (error.code !== 'ENOENT') throw error
+    })
+  }
+
+  async function combinedLighthousePending({ before }, signal) {
+    const previous = planTaskPageBoundary(before, '找不到这页灯塔试玩记录。')
+    const registry = ctx.get('workspaceRegistry')
+    const root = await combinedLighthousePracticeRoot()
+    if (!registry || !root) return { runs: [] }
+    const candidates = new Map(registry.list().filter(workspace => isLighthouseEvidenceWorkspace(root, workspace.path))
+      .flatMap(workspace => workspace.sessionIds.filter(id => heroAlternateSessionId.test(id))
+        .map(id => [id, { id, createdAt: Date.parse(workspace.createdAt) || 0 }])))
+    return planTaskRunPage([...candidates.values()], previous, signal, id => pendingCombinedLighthouseRun(id, registry, root, signal))
+  }
+
+  async function resumeCombinedLighthouse({ sessionId, resumeToken }, signal) {
+    if (typeof resumeToken !== 'string' || !/^[a-f0-9]{64}$/.test(resumeToken)) throw new Error(combinedLighthousePendingChanged)
+    const registry = ctx.get('workspaceRegistry')
+    const root = await combinedLighthousePracticeRoot()
+    const pending = registry && root && await pendingCombinedLighthouseRun(sessionId, registry, root, signal)
+    if (pending?.resumeToken !== resumeToken) throw new Error(combinedLighthousePendingChanged)
+    signal?.throwIfAborted()
+    return { sessionId }
   }
 
   function openReviewStart(selection, english, signal) {
@@ -6764,18 +6844,23 @@ export async function apply(ctx) {
     return { items, ...(last && inspected < matches.length && { before: `${last.createdAt}:${last.kind}:${last.id}` }) }
   }
 
+  function nativeWorkflowAskSource(presetId, ecosystem, sourceId) {
+    if (!ecosystem || !sourceId) return false
+    const units = ecosystem.unitsByPreset.get(presetId) ?? []
+    const askModule = equipmentById.get('evidence').requires
+    const profileEntry = ecosystem.profileSources.get(sourceId)?.entry
+    return units.some(unit => unit.id === sourceId && unit.modules.includes(askModule)) ||
+      Boolean(profileEntry && moduleReference(profileEntry).moduleName === askModule)
+  }
+
   function observedComparisonWorkflows(entries = [], presetId, ecosystem) {
     const original = records.get(presetId)
     const equipped = new Set(ecosystem ? original?.equipmentIds?.map(id => currentEquipmentId(id, ecosystem)) ?? [] : [])
-    const units = ecosystem?.unitsByPreset.get(presetId) ?? []
-    const askModule = equipmentById.get('evidence').requires
     const decisions = new Map()
     const tools = entries.map(({ workflowCandidate, ...entry }) => {
       if (!workflowCandidate || !equipped.has(workflowCandidate.gearId)) return entry
       const { sourceId, gearId, choice } = workflowCandidate
-      const profileEntry = ecosystem.profileSources.get(sourceId)?.entry
-      if (!units.some(unit => unit.id === sourceId && unit.modules.includes(askModule)) &&
-        (!profileEntry || moduleReference(profileEntry).moduleName !== askModule)) return entry
+      if (!nativeWorkflowAskSource(presetId, ecosystem, sourceId)) return entry
       if (!decisions.has(gearId)) decisions.set(gearId, new Set())
       decisions.get(gearId).add(choice)
       return { ...entry, workflowDecision: { gearId, choice } }
@@ -6799,9 +6884,7 @@ export async function apply(ctx) {
     const { target, evidence } = result ?? {}
     if (target?.lighthouseCombined !== true || evidence?.status !== 'complete' || evidence.materialState !== 'verified' ||
       evidence.continuationReason || !workflowDecisions.some(item => item.gearId === 'evidence')) return
-    const language = ['en', 'zh'].find(value => target.task === planTaskPrompt({
-      material: lighthouseHeroMaterial, task: lighthouseEvidenceTask(value === 'en', 'gap'),
-    }, value === 'en').task)
+    const language = combinedLighthouseLanguage(target.task)
     const workspace = ctx.get('workspaceRegistry')?.get(target.workspaceId)
     if (!language || !workspace?.sessionIds.includes(sessionId) ||
       await personalTaskMaterialState(target, signal) !== 'verified') return
@@ -8980,6 +9063,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-combined-replay-preview') value = (await checkCombinedLighthouseReplay(selection.sessionId, request.signal)).preview
         else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, true)
         else if (selection?.action === 'lighthouse-combined-personal-draft') value = await readCombinedLighthousePersonalDraft(selection.sessionId, request.signal)
+        else if (selection?.action === 'lighthouse-combined-pending') value = await combinedLighthousePending(selection, request.signal)
+        else if (selection?.action === 'lighthouse-combined-resume') value = await resumeCombinedLighthouse(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-preview') value = await previewLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-open') value = await openLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-challenge-share') value = await shareReviewChallenge(selection, request.signal)

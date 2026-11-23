@@ -2921,24 +2921,119 @@ window.__ModuleLoader__.load({
     }
 
     const lighthouseCombinedTitle = '一局两道选择'
+    const lighthousePendingTitle = '灯塔试玩记录'
+    const lighthousePendingUnavailable = '找不到这页灯塔试玩记录。'
+    const lighthousePendingChanged = '这局灯塔试玩已变化，请重新核对。'
+    const lighthousePendingActions = {
+      waiting: ['等待发送任务', '继续草稿'],
+      'waiting-choice': ['等待你的选择', '回到提问'],
+      'loadout-changed': ['出装已变化，可在原会话恢复。', '查看原会话'],
+    }
 
-    function LighthouseReviewStart({ request, onCancel, onOpen, startCombined = false }) {
+    function useLighthousePending(request, enabled, language) {
+      const [page, setPage] = useState(null)
+      const [query, setQuery] = useState(null)
+      const current = enabled && page?.language === language ? page : null
+      const loading = enabled && (!current || current.query !== query)
+      useEffect(() => {
+        if (!enabled) return
+        const abort = new AbortController()
+        const before = query?.language === language ? query.before : undefined
+        const action = 'lighthouse-combined-pending'
+        request(action, { action, ...(before && { before }) }, abort.signal, language).then(value => {
+          if (abort.signal.aborted) return
+          if (!Array.isArray(value?.runs) || value.runs.some(run => typeof run?.sessionId !== 'string' || !run.sessionId ||
+            !['original', 'replay'].includes(run.kind) || !Object.hasOwn(lighthousePendingActions, run.status) ||
+            !['en', 'zh'].includes(run.sampleLanguage) || typeof run.resumeToken !== 'string' || !run.resumeToken ||
+            !['number', 'string'].includes(typeof run.openedAt) || !Number.isFinite(new Date(run.openedAt).getTime())) ||
+            value.nextBefore !== undefined && (typeof value.nextBefore !== 'string' || !value.nextBefore || value.nextBefore === before)) {
+            throw new Error(t(lighthousePendingUnavailable))
+          }
+          setPage(previous => ({ query, language, nextBefore: value.nextBefore,
+            runs: Array.from(new Map([...(before && previous?.language === language ? previous.runs : empty), ...value.runs]
+              .map(run => [run.sessionId, run])).values()) }))
+        }).catch(reason => {
+          if (!abort.signal.aborted) setPage(previous => ({ query, language, nextBefore: before,
+            runs: before && previous?.language === language ? previous.runs : empty,
+            error: reason.message || t(lighthousePendingUnavailable) }))
+        })
+        return () => abort.abort()
+      }, [request, enabled, language, query])
+      const runs = current?.runs ?? empty
+      return { runs, loading, nextBefore: current?.nextBefore, error: loading ? undefined : current?.error,
+        waitingChoice: runs.some(run => run.status === 'waiting-choice'), read: before => setQuery({ before, language }) }
+    }
+
+    function LighthousePendingRuns({ page, busy, failure, onResume, onRefresh }) {
       const language = useLanguage()
-      const [combined, setCombined] = useState(startCombined)
+      const id = useId()
+      const first = useRef(null)
+      const more = useRef(null)
+      const focusAfterMore = useRef(false)
+      const clock = new Intl.DateTimeFormat(language, { dateStyle: 'short', timeStyle: 'short' })
+      useLayoutEffect(() => {
+        if (page.loading || !focusAfterMore.current) return
+        focusAfterMore.current = false
+        if (!page.nextBefore && document.activeElement === document.body) first.current?.focus()
+      }, [page.loading, page.nextBefore])
+
+      return h('div', { className: 'moba-lighthouse-combined-fields moba-lighthouse-pending-fields' },
+        page.runs.length > 0 && h('ul', { className: 'moba-history-list' }, page.runs.map((run, index) => {
+          const openedAt = new Date(run.openedAt)
+          const description = id + '-run-' + index
+          const [status, action] = lighthousePendingActions[run.status]
+          return h('li', { className: 'moba-history-entry', key: run.sessionId, 'data-lighthouse-pending-status': run.status },
+            h('header', { id: description },
+              h('h3', null, t(run.kind === 'replay' ? '复赛' : '原局')),
+              h('time', { dateTime: openedAt.toISOString() }, clock.format(openedAt)),
+              run.sampleLanguage !== language && h('small', null, t(run.sampleLanguage === 'en' ? '英文' : '中文')),
+              h('small', { className: 'moba-history-state', 'data-state': run.status }, t(status))),
+            h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-resume-action', ref: index === 0 ? first : undefined,
+              'aria-describedby': description, 'aria-disabled': busy || page.loading, onClick: () => {
+                if (!busy && !page.loading) onResume(run)
+              } }, t(action)))
+        })),
+        page.loading && h('p', { role: 'status' }, t('正在核对灯塔试玩记录…')),
+        !page.loading && !page.runs.length && !failure && !page.error &&
+          h('p', { role: 'status' }, t(page.nextBefore ? '可查看更早的灯塔试玩。' : '没有可继续的灯塔试玩。')),
+        (failure || page.error) && h('p', { className: 'moba-alert', role: 'alert' }, failure || page.error),
+        (failure || page.error) && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy || page.loading,
+          onClick: onRefresh }, t('重新核对')),
+        page.nextBefore && h('button', { type: 'button', className: 'moba-roster-open', ref: more, 'aria-disabled': busy || page.loading,
+          onClick: () => {
+            if (busy || page.loading) return
+            focusAfterMore.current = document.activeElement === more.current
+            page.read(page.nextBefore)
+          } }, t('加载更多记录')))
+    }
+
+    function LighthouseReviewStart({ request, onCancel, onOpen, startCombined = false, pendingRuns, canStartCombined }) {
+      const language = useLanguage()
+      const [step, setStep] = useState(() => !startCombined ? 'routes' : pendingRuns.loading ? 'checking'
+        : pendingRuns.runs.length || pendingRuns.nextBefore || pendingRuns.error ? 'pending' : 'combined')
       const [checked, setChecked] = useState(null)
       const [attempt, retry] = useState(0)
       const [opening, setOpening] = useState(false)
       const [openError, setOpenError] = useState('')
+      const [resumeError, setResumeError] = useState('')
+      const dialog = useRef(null)
       const pending = useRef(null)
       const launchIds = useRef(new Map())
       const combinedEntry = useRef(null)
       const combinedIntro = useRef(null)
       const returningFromCombined = useRef(false)
+      const returningToRuns = useRef(false)
+      const combined = step === 'combined'
+      const showRuns = step === 'checking' || step === 'pending'
       const state = checked?.attempt === attempt && checked.language === language && checked.combined === combined ? checked : null
       const preview = state?.value
       const sampleLanguage = ({ en: '英文', zh: '中文' })[preview?.sampleLanguage]
 
       useEffect(() => {
+        if (step === 'checking' && !pendingRuns.loading) setStep(pendingRuns.runs.length || pendingRuns.nextBefore || pendingRuns.error ? 'pending' : 'combined')
+      }, [step, pendingRuns.loading, pendingRuns.runs.length, pendingRuns.nextBefore, pendingRuns.error])
+      useEffect(() => {
+        if (showRuns) return
         const abort = new AbortController()
         const action = combined ? 'lighthouse-combined-start-preview' : 'lighthouse-review-start-preview'
         request(action, { action }, abort.signal, language)
@@ -2950,7 +3045,7 @@ window.__ModuleLoader__.load({
           })
           .catch(reason => { if (!abort.signal.aborted) setChecked({ error: reason.message, language, attempt, combined }) })
         return () => abort.abort()
-      }, [request, language, attempt, combined])
+      }, [request, language, attempt, combined, showRuns])
       useEffect(() => () => pending.current?.abort(), [])
       useLayoutEffect(() => {
         if (combined) combinedIntro.current?.focus()
@@ -2965,7 +3060,50 @@ window.__ModuleLoader__.load({
         returningFromCombined.current = !value
         setOpenError('')
         setChecked(null)
-        setCombined(value)
+        setStep(value ? 'combined' : 'routes')
+      }
+
+      function cancel() {
+        if (pending.current) return
+        if (startCombined) dialog.current?.close()
+        onCancel()
+      }
+
+      function startFromRuns() {
+        returningToRuns.current = true
+        setOpenError('')
+        setChecked(null)
+        setStep('combined')
+      }
+
+      function refreshRuns() {
+        setResumeError('')
+        pendingRuns.read()
+      }
+
+      async function resume(run) {
+        if (pending.current) return
+        const abort = pending.current = new AbortController()
+        setOpening(true)
+        setResumeError('')
+        try {
+          const action = 'lighthouse-combined-resume'
+          const result = await request(action, { action, sessionId: run.sessionId, resumeToken: run.resumeToken }, abort.signal, language)
+          if (result?.sessionId !== run.sessionId) throw new Error(t(lighthousePendingChanged))
+          if (!abort.signal.aborted) {
+            dialog.current?.close()
+            onOpen(run.sessionId)
+          }
+        } catch (reason) {
+          if (!abort.signal.aborted) {
+            setResumeError(reason.message || t(lighthousePendingChanged))
+            pendingRuns.read()
+            dialog.current?.querySelector('.moba-lighthouse-pending-back')?.focus()
+          }
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setOpening(false)
+        }
       }
 
       async function start(arm) {
@@ -2991,14 +3129,30 @@ window.__ModuleLoader__.load({
       }
 
       const error = openError || state?.error || preview?.reason
+      if (showRuns) {
+        const initialFocus = returningToRuns.current ? '.moba-lighthouse-pending-new'
+          : '.moba-lighthouse-resume-action, .moba-lighthouse-pending-back'
+        return h(InstallDialog, { title: t(lighthousePendingTitle), className: 'moba-starter-dialog moba-lighthouse-combined-start moba-lighthouse-pending',
+          busy: opening, dialogRef: dialog, onCancel: cancel, initialFocus,
+          onKeyDown: event => closeDialogOnEscape(event, cancel) },
+          h(LighthousePendingRuns, { page: pendingRuns, busy: opening, failure: resumeError, onResume: resume, onRefresh: refreshRuns }),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-pending-back',
+              'aria-disabled': opening, onClick: cancel }, t('返回大厅')),
+            canStartCombined && h('button', { type: 'button', className: 'moba-start moba-lighthouse-pending-new',
+              disabled: opening, onClick: startFromRuns }, t('开一局新的灯塔试玩'))))
+      }
       if (combined) {
         const back = () => {
           if (pending.current) return
-          if (startCombined) onCancel()
+          if (returningToRuns.current) {
+            setStep('pending')
+            pendingRuns.read()
+          } else if (startCombined) cancel()
           else switchPractice(false)
         }
         return h(InstallDialog, { title: t(lighthouseCombinedTitle), className: 'moba-starter-dialog moba-lighthouse-combined-start',
-          busy: opening, onCancel: back, initialFocus: '[data-review-start-intro]',
+          busy: opening, dialogRef: dialog, onCancel: back, initialFocus: '[data-review-start-intro]',
           onKeyDown: event => closeDialogOnEscape(event, back) },
           h('div', { className: 'moba-lighthouse-combined-fields' },
             h('p', { className: 'moba-lighthouse-note', ref: combinedIntro, tabIndex: -1, 'data-review-start-intro': true },
@@ -3017,7 +3171,8 @@ window.__ModuleLoader__.load({
             preview?.token && h('p', { className: 'moba-starter-note', role: opening ? 'status' : undefined },
               t(opening ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。'))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
-            h('button', { type: 'button', className: 'moba-roster-open', disabled: opening, onClick: back }, t(startCombined ? '返回大厅' : '返回交接试玩')),
+            h('button', { type: 'button', className: 'moba-roster-open', disabled: opening, onClick: back },
+              t(returningToRuns.current ? '返回灯塔试玩记录' : startCombined ? '返回大厅' : '返回交接试玩')),
             error && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
               onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
             h('button', { type: 'button', className: 'moba-start', disabled: opening || !preview?.token || Boolean(error),
@@ -10470,6 +10625,10 @@ window.__ModuleLoader__.load({
       const webPracticeHint = !canPracticeWebPilot ? '旧表只列 RC，预览版能用吗？'
         : webPilotPending.hasWaitingChoice ? '有选择待继续' : webPilotPending.runs.length ? '继续草稿或新开试玩'
           : '同题加装证据核验，补证、降级推荐还是暂缓提交？'
+      const canStartCombined = presets.some(preset => preset.id === 'standard' && !preset.broken)
+      const lighthousePending = useLighthousePending(request, Boolean(data), language)
+      const lighthouseCombinedHint = lighthousePending.waitingChoice ? '回到提问或开新局'
+        : lighthousePending.runs.length ? '继续灯塔试玩或开新局' : '调度说有两节备用电池，补给卡能证明吗？'
       const WebPracticeDialog = webPractice?.kind === 'pilot' ? WebPilotPractice : WebSourcePractice
       const roles = data?.roles ?? emptyMap
       const savedBuilds = labelSavedBuilds(data?.saved ?? empty)
@@ -11030,12 +11189,12 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'moba-roster-open moba-choose-loadout', disabled: pending, onClick: chooseLoadout },
               h(Glyph, { kind: 'team', size: 17 }), t('去配装'))),
           data && h('div', { className: 'moba-lighthouse-entry' },
-            presets.some(preset => preset.id === 'standard' && !preset.broken) && h('button', { type: 'button',
+            (canStartCombined || lighthousePending.runs.length > 0 || lighthousePending.nextBefore) && h('button', { type: 'button',
               className: 'moba-starter-entry moba-lighthouse-case-entry', disabled: pending, ref: combinedStartButton,
               'aria-haspopup': 'dialog', onClick: () => setReviewStartOpen('combined') },
               h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'flag', size: 20 })),
               h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t(lighthouseCombinedTitle)),
-                h('span', null, t('调度说有两节备用电池，补给卡能证明吗？'))),
+                h('span', null, t(lighthouseCombinedHint))),
               h(Glyph, { kind: 'arrow', size: 18 })),
             h('div', { className: 'moba-handoff-entry-actions' },
               h('button', { type: 'button', className: 'moba-roster-open moba-review-start-button', disabled: pending,
@@ -11115,14 +11274,17 @@ window.__ModuleLoader__.load({
             if (task === undefined) openDraftSession(sessionId)
             else openDraftSession(sessionId, task)
           } }),
-          reviewStartOpen && h(LighthouseReviewStart, { request, startCombined: reviewStartOpen === 'combined', onCancel: () => {
+          reviewStartOpen && h(LighthouseReviewStart, { request, startCombined: reviewStartOpen === 'combined',
+            pendingRuns: lighthousePending, canStartCombined, onCancel: () => {
             const trigger = reviewStartOpen === 'combined' ? combinedStartButton : reviewStartButton
             setReviewStartOpen('')
-            requestAnimationFrame(() => trigger.current?.focus())
+            if (reviewStartOpen === 'combined') trigger.current?.focus()
+            else requestAnimationFrame(() => trigger.current?.focus())
           }, onOpen: (sessionId, task) => {
             cue('lock')
             setReviewStartOpen('')
-            openDraftSession(sessionId, task)
+            if (task === undefined) openDraftSession(sessionId)
+            else openDraftSession(sessionId, task)
           } }),
           challengeJoin && h(LighthouseChallengeJoin, { request, initialInput: challengeJoin.input,
             firstHeroes: trialHeroes.length === 2 ? trialHeroes : undefined,
@@ -15552,6 +15714,10 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-combined-start[open] { display: flex; flex-direction: column; overflow: clip; }
       .moba-lighthouse-combined-start > :is(h2, .moba-starter-actions) { flex: none; }
       .moba-lighthouse-combined-fields { min-block-size: 0; overflow: auto; padding: 2px; }
+      .moba-lighthouse-pending-fields .moba-history-entry { grid-template-columns: minmax(0, 1fr) minmax(0, min(46%, 10rem)); align-items: center; }
+      .moba-lighthouse-pending-fields .moba-history-entry header { display: grid; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
+      .moba-lighthouse-pending-fields .moba-history-entry small { color: var(--muted); }
+      .moba-lighthouse-pending-fields button { min-block-size: 44px; min-inline-size: 0; white-space: normal; overflow-wrap: anywhere; }
       .moba-lighthouse-combined-replay { box-sizing: border-box; }
       .moba-lighthouse-combined-replay :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
       .moba-lighthouse-combined-choices li { overflow-wrap: anywhere; }
