@@ -5966,8 +5966,64 @@ window.__ModuleLoader__.load({
         onBack: path.length ? returnToNewer : onBack })
     }
 
+    function PersonalWorkflowPlanSave({ comparisonId, request, dialogRef, onBack }) {
+      const language = useLanguage()
+      const formId = useId()
+      const [arm, setArm] = useState('')
+      const [name, setName] = useState('')
+      const [note, setNote] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [savedName, setSavedName] = useState('')
+      const pending = useRef(null)
+      const receipt = useRef(null)
+      const valid = Boolean(arm && name.trim())
+
+      useEffect(() => () => pending.current?.abort(), [])
+      useLayoutEffect(() => { if (savedName) receipt.current?.focus() }, [savedName])
+
+      async function save(event) {
+        event.preventDefault()
+        if (pending.current || !valid || savedName) return
+        const abort = pending.current = new AbortController()
+        setBusy(true)
+        setError('')
+        try {
+          const action = 'plan-personal-workflow-save'
+          const plan = await request(action, { action, comparisonId, arm, name: name.trim(), note: note.trim() }, abort.signal, language)
+          if (!abort.signal.aborted) setSavedName(plan.name)
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setBusy(false)
+        }
+      }
+
+      return h(InstallDialog, { title: t('保留一套出装'), dialogRef, busy,
+        className: 'moba-starter-dialog moba-lighthouse-combined-start moba-lighthouse-combined-replay moba-web-pilot-save',
+        initialFocus: '.moba-lighthouse-mode-options input', onCancel: onBack,
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onBack() }) },
+        h('form', { className: 'moba-lighthouse-combined-fields', id: formId, onSubmit: save },
+          savedName ? h('p', { role: 'status', tabIndex: -1, ref: receipt }, t('已保存为出装方案「%s」。').replace('%s', () => savedName))
+            : h(Fragment, null,
+              h(LighthouseLoadoutChoices, { heading: '出装', options: { baseline: '原局', rematch: '复赛' },
+                descriptions: { baseline: '证据核验 + 交付前复核 + 交付物预览', rematch: '交付物预览 + 交付前复核' },
+                picked: arm, disabled: busy, onChoose: setArm }),
+              h('div', { className: 'moba-plan-fields' },
+                h('label', null, t('方案名称'), h('input', { value: name, maxLength: 48, required: true, disabled: busy,
+                  onChange: event => setName(event.target.value) })),
+                h('label', null, t('适用情形（选填）'), h('textarea', { value: note, rows: 2, maxLength: 240, disabled: busy,
+                  onChange: event => setNote(event.target.value) })),
+                error && h('p', { className: 'moba-alert', role: 'alert' }, error)))),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: onBack }, t(savedName ? '返回' : '取消')),
+          !savedName && h('button', { type: 'submit', form: formId, className: 'moba-start', disabled: busy || !valid },
+            t(busy ? '正在保存…' : '保存方案'))))
+    }
+
     function ComparisonBoard({ kind, request, comparisonId, sessionId, onClose, onVisit, putTask, canViewPrevious, lessonHint, evidenceReplayHint, publicEvidenceReplayHint,
-      personalWorkflowReplayHint,
+      personalWorkflowReplayHint, testedWorkflowSessionId,
       workspaces = empty, initialWorkspaceId, onUse, onEvidenceSaved, onEvidenceNoteSaved, onHistory, onBack, backLabel, onPrevious,
       focusArm, focusPrevious, testedSourceArm, closeLabel }) {
       const language = useLanguage()
@@ -5988,12 +6044,16 @@ window.__ModuleLoader__.load({
       const [lessonLaunch, setLessonLaunch] = useState(null)
       const [challengeShareId, setChallengeShareId] = useState('')
       const [evidenceReport, setEvidenceReport] = useState('')
+      const [workflowSave, setWorkflowSave] = useState(null)
       const starting = useRef(false)
       const launchIds = useRef(new Map())
       const returnFocus = useRef('')
       const taskField = useRef(null)
       const workspaceForm = useRef(null)
       const personalReplayDialog = useRef(null)
+      const workflowReplayFields = useRef(null)
+      const workflowSaveDialog = useRef(null)
+      const workflowKeep = useRef(null)
       const [selectedWorkspaceId, setWorkspaceId] = useState(initialWorkspaceId ?? '')
       const [material, setMaterial] = useState('')
       const [customBrief, setBrief] = useState()
@@ -6021,8 +6081,11 @@ window.__ModuleLoader__.load({
       }, [request, scope, language, attempt, config.action])
 
       const value = view?.scope === scope ? view.result : undefined
-      const personalWorkflowReplay = kind === 'rematch' && (value?.personalWorkflowReplay ?? personalWorkflowReplayHint) === true
-      const personalWorkflowPair = personalWorkflowReplay && value?.personalWorkflowPair
+      const personalWorkflowReplay = kind === 'rematch' && (testedWorkflowSessionId ||
+        (value?.personalWorkflowReplay ?? personalWorkflowReplayHint) === true)
+      const workflowPair = personalWorkflowReplay && value?.personalWorkflowReplay === true && value.personalWorkflowPair
+      const testedWorkflowSide = testedSourceArm === 'baseline' ? workflowPair?.previous : workflowPair?.current
+      const personalWorkflowPair = (!testedWorkflowSessionId || testedWorkflowSide?.sessionId === testedWorkflowSessionId) && workflowPair
       const publicEvidenceReplay = kind === 'rematch' && (value?.publicEvidenceReplay ?? publicEvidenceReplayHint) === true
       const evidenceReplay = publicEvidenceReplay || kind === 'rematch' && (value?.evidenceReplay ?? evidenceReplayHint)
       const handoff = kind === 'rematch' && !evidenceReplay ? value?.handoffOutcome : undefined
@@ -6154,6 +6217,22 @@ window.__ModuleLoader__.load({
         setNoteTarget(null)
       }
 
+      function openWorkflowSave() {
+        const scrollTop = workflowReplayFields.current?.scrollTop ?? 0
+        personalReplayDialog.current?.close()
+        setWorkflowSave({ comparisonId: value.id, scrollTop })
+      }
+
+      function closeWorkflowSave() {
+        workflowSaveDialog.current?.close()
+        const dialog = personalReplayDialog.current
+        if (dialog && !dialog.open) dialog.showModal()
+        const trigger = workflowKeep.current ?? dialog?.querySelector('.moba-lighthouse-close')
+        trigger?.focus({ preventScroll: true })
+        if (workflowReplayFields.current) workflowReplayFields.current.scrollTop = workflowSave.scrollTop
+        setWorkflowSave(null)
+      }
+
       if (noteTarget) return h(EvidenceRetestNote, { ...noteTarget, request,
         onCancel: closeRetestNote, onSaved: plan => {
           setSavedNoteArm(noteTarget.arm)
@@ -6212,26 +6291,32 @@ window.__ModuleLoader__.load({
           const dismiss = onBack ?? onClose
           dismiss()
         }
-        return h(InstallDialog, { title: t('同题复赛'),
+        const visibleSave = personalWorkflowPair && !testedWorkflowSessionId
+        return h(Fragment, null, h(InstallDialog, { title: t(testedWorkflowSessionId ? '回看当时的对照' : '同题复赛'),
           className: 'moba-starter-dialog moba-lighthouse-combined-start moba-lighthouse-combined-replay',
           dialogRef: personalReplayDialog,
           initialFocus: personalWorkflowPair ? '[data-personal-workflow-pair]' : '.moba-lighthouse-close',
           onCancel: close, onKeyDown: event => closeDialogOnEscape(event, close) },
-          h('div', { className: 'moba-lighthouse-combined-fields' },
+          h('div', { className: 'moba-lighthouse-combined-fields', ref: workflowReplayFields },
             error && h('p', { className: 'moba-alert', role: 'alert' }, error, ' ',
               h('button', { type: 'button', className: 'moba-text', onClick: refresh }, t('刷新对照'))),
             !error && value === undefined && h('p', { className: 'moba-empty', role: 'status' }, t('正在读取对照…')),
             materialWarning && h('p', { className: 'moba-alert', role: 'status' }, t(materialWarning)),
-            personalWorkflowPair ? h(LighthouseDecisionPair, { pair: personalWorkflowPair, personalPair: true, onOpenMatch: id => {
-              personalReplayDialog.current?.close()
-              onVisit(id)
-            } })
+            personalWorkflowPair ? h(LighthouseDecisionPair, { pair: personalWorkflowPair, personalPair: true,
+              savedWorkflowArm: testedWorkflowSessionId ? testedSourceArm : undefined, onOpenMatch: id => {
+                personalReplayDialog.current?.close()
+                onVisit(id)
+              } })
               : value !== undefined && h('p', { className: 'moba-lighthouse-note', role: 'status' },
                 t(running ? comparisonArmStates[replay.status] : '两局结果暂不可核对。')),
             value?.id && h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看任务和出装')),
               workspaceFacts, gearChange, sharedTask)),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
-            h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-close', onClick: close }, t('关闭同题对照'))))
+            h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-close', onClick: close }, closeLabel ?? t('关闭同题对照')),
+            visibleSave && h('button', { type: 'button', className: 'moba-start', ref: workflowKeep,
+              'aria-haspopup': 'dialog', onClick: openWorkflowSave }, t('保留一套出装')))),
+          workflowSave && h(PersonalWorkflowPlanSave, { comparisonId: workflowSave.comparisonId, request,
+            dialogRef: workflowSaveDialog, onBack: closeWorkflowSave }))
       }
       return h(InstallDialog, { title: t(joinedReview || ownReviewPair ? '灯塔同题交接' : comparisonTitle(kind, lessonMarker, evidenceReplay, publicEvidenceReplay)),
         className: 'moba-lighthouse-comparison' + (publicEvidenceReplay || canShareEvidenceReport ? ' moba-public-evidence-comparison' : ''),
@@ -9628,6 +9713,7 @@ window.__ModuleLoader__.load({
       const suspendedLibrary = useRef(null)
       const webPilot = plan.hasWebPilotOrigin === true
       const handoff = plan.hasHandoffOrigin === true
+      const personalWorkflow = plan.hasPersonalWorkflowOrigin === true
       const source = state?.source
       const singleRun = webPilot && (source?.received === true || source?.personal === true)
       const hasSavedComparison = source?.personal === true && source.hasComparison === true
@@ -9658,13 +9744,16 @@ window.__ModuleLoader__.load({
       async function open() {
         if (pending.current) return
         const abort = pending.current = new AbortController()
-        const action = webPilot ? 'plan-web-pilot-origin' : handoff ? 'plan-handoff-origin' : 'plan-evidence-origin'
+        const action = personalWorkflow ? 'plan-personal-workflow-origin' : webPilot ? 'plan-web-pilot-origin'
+          : handoff ? 'plan-handoff-origin' : 'plan-evidence-origin'
         setState({ loading: true })
         try {
           const source = await request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
           if (abort.signal.aborted) return
-          const valid = webPilot
-            ? source?.status === 'ready' && ((source.received === true || source.personal === true)
+          const valid = personalWorkflow
+            ? typeof source?.comparisonId === 'string' && source.comparisonId && typeof source.sessionId === 'string' &&
+              source.sessionId && ['baseline', 'rematch'].includes(source.arm)
+            : webPilot ? source?.status === 'ready' && ((source.received === true || source.personal === true)
               ? typeof source.sessionId === 'string' && source.sessionId && Object.hasOwn(webPilotArms, source.arm)
               : source.comparison?.runs?.some(run => run.arm === source.arm))
             : source?.sessionId && (handoff ? Object.hasOwn(handoffStyleLabels, source.style)
@@ -9672,7 +9761,7 @@ window.__ModuleLoader__.load({
           if (!valid) {
             throw new Error(t('这份方案的实测来源已不可查看。'))
           }
-          if (webPilot && source.personal === true && source.hasComparison === true) suspendLibrary()
+          if (personalWorkflow || (webPilot && source.personal === true && source.hasComparison === true)) suspendLibrary()
           setState({ source })
         } catch (reason) {
           if (!abort.signal.aborted) setState({ error: reason.message })
@@ -9712,7 +9801,7 @@ window.__ModuleLoader__.load({
       }
 
       function back() {
-        if (singleRun) {
+        if (singleRun || personalWorkflow) {
           pending.current?.abort()
           pending.current = null
           singleRunDialog.current?.close()
@@ -9721,7 +9810,7 @@ window.__ModuleLoader__.load({
         }
         setPair(null)
         setState(null)
-        if (!singleRun) requestAnimationFrame(() => trigger.current?.focus())
+        if (!singleRun && !personalWorkflow) requestAnimationFrame(() => trigger.current?.focus())
       }
 
       function visit(sessionId) {
@@ -9729,11 +9818,11 @@ window.__ModuleLoader__.load({
         pairDialog.current?.close()
         singleRunDialog.current?.close()
         suspendedLibrary.current = null
-        onVisit(sessionId, webPilot || sessionId === source.sessionId
+        onVisit(sessionId, personalWorkflow || webPilot || sessionId === source.sessionId
           ? { id: plan.id, revision: plan.revision, name: plan.name } : undefined)
       }
 
-      const dialogHost = hasSavedComparison && libraryDialog.current?.parentElement
+      const dialogHost = (personalWorkflow || hasSavedComparison) && libraryDialog.current?.parentElement
       const singleOrigin = singleRun && h(InstallDialog, { title: t('此方案保存自这局'), dialogRef: singleRunDialog,
           className: 'moba-starter-dialog moba-web-pilot-handoff moba-web-pilot-received-origin',
           onCancel: back, initialFocus: '.moba-web-pilot-received-origin-back',
@@ -9751,11 +9840,14 @@ window.__ModuleLoader__.load({
               'aria-disabled': Boolean(pair?.loading), onClick: viewSavedComparison }, t(webPilotSavedComparisonTitle))))
 
       return h(Fragment, null,
-        h('button', { type: 'button', className: handoff || webPilot ? 'moba-roster-open moba-plan-source-action' : 'moba-roster-open',
+        h('button', { type: 'button', className: handoff || webPilot || personalWorkflow ? 'moba-roster-open moba-plan-source-action' : 'moba-roster-open',
           ref: trigger, disabled: Boolean(state?.loading), 'aria-haspopup': 'dialog', onClick: open }, t('查看实战来源')),
         state?.loading && h('p', { className: 'moba-plan-note', role: 'status' }, t('正在核对实战来源…')),
         state?.error && h('p', { className: 'moba-alert', role: 'alert' }, state.error),
-        source && (singleRun ? (dialogHost ? createPortal(singleOrigin, dialogHost) : singleOrigin)
+        source && (personalWorkflow ? dialogHost && createPortal(h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId,
+          testedSourceArm: source.arm, testedWorkflowSessionId: source.sessionId, personalWorkflowReplayHint: true,
+          request, onVisit: visit, onClose: back, closeLabel: t('返回方案库') }), dialogHost)
+          : singleRun ? (dialogHost ? createPortal(singleOrigin, dialogHost) : singleOrigin)
           : webPilot ? h(WebPilotComparison, { comparison: source.comparison, savedPlan: { name: plan.name, arm: source.arm }, onCancel: back, onVisit: visit })
           : handoff ? h(HandoffSourceDialog, { source, planName: plan.name, onBack: back, onVisit: visit })
             : h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId, testedSourceArm: source.arm, evidenceReplayHint: true,
@@ -10133,7 +10225,7 @@ window.__ModuleLoader__.load({
       const startWebTask = plan?.hasWebPilotOrigin && h('button', { className: 'moba-start moba-plan-web-start', type: 'button',
         ref: webTaskButton, 'aria-haspopup': 'dialog', disabled: Boolean(plan.broken), onClick: () => setWebTaskPlan(plan) },
         t(webPlanTaskLabel), h(Glyph, { kind: 'arrow', size: 16 }))
-      const sourceInHeader = plan?.hasHandoffOrigin || plan?.hasWebPilotOrigin
+      const sourceInHeader = plan?.hasHandoffOrigin || plan?.hasWebPilotOrigin || plan?.hasPersonalWorkflowOrigin
       const testedSource = plan && (sourceInHeader || plan.hasEvidenceOrigin) && onOpenSource &&
         h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request, libraryDialog: dialog,
           onVisit: (sessionId, reference) => { close(); onOpenSource(sessionId, reference) } })
@@ -13146,7 +13238,7 @@ window.__ModuleLoader__.load({
         })))
     }
 
-    function LighthouseDecisionPair({ pair, scenarioPair, personalPair, onOpenMatch, onCarry, carryButtons }) {
+    function LighthouseDecisionPair({ pair, scenarioPair, personalPair, savedWorkflowArm, onOpenMatch, onCarry, carryButtons }) {
       const heading = useId()
       const sides = [pair.previous, pair.current]
       const columns = scenarioPair ? ['关键证据缺失', '证据齐全'] : ['原局', '复赛']
@@ -13158,7 +13250,9 @@ window.__ModuleLoader__.load({
         scenarioPair && h('p', { className: 'moba-match-action-note' }, t('两局沿用同一份补给卡和出装。')),
         personalPair && h('p', { className: 'moba-lighthouse-note' }, t('只卸下证据核验')),
         h('table', { 'aria-labelledby': heading },
-          h('thead', null, h('tr', null, h('td'), columns.map(label => h('th', { key: label, scope: 'col' }, t(label))))),
+          h('thead', null, h('tr', null, h('td'), columns.map((label, i) => h('th', { key: label, scope: 'col' }, t(label),
+            savedWorkflowArm === (i === 0 ? 'baseline' : 'rematch') &&
+              h('span', { className: 'moba-web-pilot-saved-side' }, t('此方案的出装')))))),
           h('tbody', null,
             scenarioPair && h('tr', null, h('th', { scope: 'row' }, t('待核对的说法')),
               h('td', null, t('两节备用电池')), h('td', null, t('两罐灯油'))),
@@ -13191,6 +13285,7 @@ window.__ModuleLoader__.load({
             h('span', null, h('strong', null, t(side === 'previous' ? '用原局出装做我的任务' : '用复赛出装做我的任务')),
               h('small', null, t(lighthouseCarryModeLabels[pair[side].mode]))), h(Glyph, { kind: 'arrow', size: 16 })))),
         h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')),
+        savedWorkflowArm && h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.current.sessionId) }, t('打开复赛会话')),
         scenarioPair && onCarry && h('div', { className: 'moba-lesson-result-options' },
           h('button', { type: 'button', className: 'moba-match-move moba-lighthouse-carry-side',
             ref: carryButtons.shared, 'aria-haspopup': 'dialog', onClick: () => onCarry('shared') },

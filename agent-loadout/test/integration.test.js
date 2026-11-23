@@ -2204,6 +2204,9 @@ test('private personal workflow removes only Evidence Check and compares the exa
     const previewReplay = (fields = {}, status) => call('rematch-comparison-preview', { ...request, change: { removeId: 'evidence' }, ...fields }, status)
     const openReplay = (fields, status) => call('rematch-comparison-open', { ...request, change: { removeId: 'evidence' }, ...fields }, status)
     const readReplay = comparisonId => call('rematch-comparison', { comparisonId })
+    const saveWorkflow = (comparisonId, arm, name, note, status) =>
+      call('plan-personal-workflow-save', { comparisonId, arm, name, note }, status)
+    const savedSource = ({ id, revision }, status) => call('plan-personal-workflow-origin', { id, revision }, status)
     await previewReplay({}, 422)
     async function choose(sessionId, expectedId, choice) {
       const endpoint = '/api/loadout-fixture-handoff-question'
@@ -2264,6 +2267,8 @@ test('private personal workflow removes only Evidence Check and compares the exa
     assert.equal(waiting.personalWorkflowPair, undefined)
     assert.equal(waiting.arms.find(item => item.id === 'rematch').status, 'waiting')
     assert.equal(waiting.arms.find(item => item.id === 'rematch').canReuse, false)
+    await saveWorkflow(opened.id, 'baseline', 'Still waiting', '', 422)
+    await saveWorkflow(opened.id, 'rematch', 'Still waiting', '', 422)
     const child = await native(opened.sessionId)
     assert.equal(child.workspaceId, workspaceId)
     assert.notEqual(child.presetId, primaryNative.presetId)
@@ -2296,16 +2301,90 @@ test('private personal workflow removes only Evidence Check and compares the exa
     assert.deepEqual(await native(primary.sessionId), primaryNative)
     assert.equal(await readFile(join(directory, 'qualified-handoff.md'), 'utf8'), primaryFile)
     await call('lighthouse-combined-handoff-report', { sessionId: opened.sessionId }, 422)
+
+    const revised = await openReplay({ ...opening, launchId: '5'.repeat(32) })
+    const reviseTurn = host.request(turnEndpoint, { sessionId: revised.sessionId, text: revised.task })
+    reviseTurn.catch(() => {})
+    await choose(revised.sessionId, 'fixture-delivery-review', 'Revise draft')
+    await reviseTurn
+    const savedComparison = await readReplay(revised.id)
+    assert.deepEqual(savedComparison.personalWorkflowPair.current.workflowDecisions, [{ gearId: 'review', choices: ['Revise draft'] }])
+    assert.deepEqual(savedComparison.personalWorkflowPair.current.deliverables, [])
+    await saveWorkflow(revised.id, 'review', 'Wrong arm', '', 422)
+    await saveWorkflow(primary.sessionId.slice('session-'.length), 'baseline', 'Wrong scope', '', 422)
+    const keptOriginal = await saveWorkflow(revised.id, 'baseline', 'Check then review', 'Use when evidence is missing.')
+    const keptReplay = await saveWorkflow(revised.id, 'rematch', 'Review alone', 'Retest a completed draft.')
+    const kept = [[keptOriginal, 'baseline', primary.sessionId], [keptReplay, 'rematch', revised.sessionId]]
+    assert.equal(keptOriginal.presetId, primaryNative.presetId)
+    assert.equal(keptReplay.presetId, child.presetId)
+    await saveWorkflow(revised.id, 'rematch', 'Review alone', 'Repeat click.', 422)
+    const store = join(env.DSH_HOME, 'profiles', 'web', 'agent-loadouts', 'plans')
+    const assertSaved = async () => {
+      for (const [plan, arm, sessionId] of kept) {
+        assert.equal(plan.hasPersonalWorkflowOrigin, true)
+        assert.equal(plan.personalWorkflowOrigin, undefined)
+        assert.equal(plan.hasEvidenceOrigin, undefined)
+        assert.deepEqual(await savedSource(plan), { comparisonId: revised.id, arm, sessionId })
+        const stored = JSON.parse(await readFile(join(store, plan.id + '.json'), 'utf8'))
+        assert.deepEqual(stored.personalWorkflowOrigin, { comparisonId: revised.id, arm })
+        const recipe = await call('plan-share-export', { id: plan.id, revision: plan.revision })
+        assert.ok(recipe.code?.startsWith('DSHH1.'), JSON.stringify(recipe))
+        const portable = Buffer.from(recipe.code.slice('DSHH1.'.length), 'base64url').toString('utf8')
+        for (const localValue of [revised.id, sessionId, material, primary.task, plan.note, 'Revise draft']) {
+          assert.ok(!portable.includes(localValue), localValue)
+        }
+      }
+    }
+    await assertSaved()
+    const renamed = await call('plan-save', { id: keptOriginal.id, revision: keptOriginal.revision,
+      name: 'Check evidence then review', note: keptOriginal.note })
+    assert.equal(renamed.hasPersonalWorkflowOrigin, true)
+    await savedSource(keptOriginal, 422)
+    kept[0][0] = renamed
+
+    const nextDirectory = join(directory, 'next-workspace')
+    const nextMaterial = '会签 文件.md'
+    const nextBytes = '# New weekday shift\nSign the updated handoff summary.\n'
+    await mkdir(nextDirectory)
+    await writeFile(join(nextDirectory, nextMaterial), nextBytes)
+    const newWorkspace = await host.request('/api/loadout-fixture-session', { presetId: 'standard', workspacePath: nextDirectory })
+    const { workspaceId: nextWorkspaceId } = await native(newWorkspace.sessionId)
+    const plannedFields = { id: keptReplay.id, revision: keptReplay.revision, workspaceId: nextWorkspaceId,
+      material: nextMaterial, task: 'Review the new weekday shift notes.' }
+    let planned
     try {
       await appendFile(file, '\nMaterial changed after both rounds.\n')
       await openReplay(opening, 422)
       assert.equal((await readReplay(opened.id)).personalWorkflowPair, undefined)
+      await savedSource(keptReplay, 422)
+      await saveWorkflow(revised.id, 'rematch', 'Stale receipt', '', 422)
+      const checkedPlan = await call('plan-task-preview', plannedFields)
+      assert.deepEqual(checkedPlan.gear.map(item => item.id).sort(), ['present', 'review'])
+      planned = await call('plan-task-open', { ...plannedFields, token: checkedPlan.token, launchId: '6'.repeat(32) })
     } finally {
       await writeFile(file, originalBytes)
     }
+    assert.equal(planned.workspaceId, nextWorkspaceId)
+    assert.notEqual(planned.workspaceId, workspaceId)
+    assert.match(planned.task, /new weekday shift notes/)
+    assert.doesNotMatch(planned.task, /备用充电器|配装 台账/)
+    const plannedDraft = await native(planned.sessionId)
+    assert.ok(!plannedDraft.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    assert.equal(plannedDraft.presetId, keptReplay.presetId)
+    const plannedTurn = host.request(turnEndpoint, { sessionId: planned.sessionId, text: planned.task })
+    plannedTurn.catch(() => {})
+    await choose(planned.sessionId, 'fixture-delivery-review', 'Confirm handoff')
+    await plannedTurn
+    const delivery = (await native(planned.sessionId)).events.find(event => event.type === 'deliverables/presented')
+    assert.equal(basename(delivery.data.files[0].path), nextMaterial)
+    assert.equal(await readFile(join(nextDirectory, nextMaterial), 'utf8'), nextBytes)
+
     await host.stop()
     host = await startHost(env, patch)
     assert.deepEqual((await readReplay(opened.id)).personalWorkflowPair, compared.personalWorkflowPair)
+    await assertSaved()
+    const cards = (await host.request(endpoint)).value.plans
+    assert.ok(kept.every(([plan]) => cards.find(card => card.id === plan.id)?.hasPersonalWorkflowOrigin === true))
     assert.deepEqual(await native(primary.sessionId), primaryNative)
     assert.equal(await readFile(file, 'utf8'), originalBytes)
   } finally {

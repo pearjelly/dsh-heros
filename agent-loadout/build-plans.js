@@ -26,7 +26,7 @@ function metadata({ name, note = '' }) {
   return { name: name.trim(), note: note.trim() }
 }
 
-function evidenceOrigin(value) {
+function comparisonOrigin(value) {
   if (comparisonIdValid(value?.comparisonId) && (value.arm === 'baseline' || value.arm === 'rematch')) {
     return { comparisonId: value.comparisonId, arm: value.arm }
   }
@@ -89,16 +89,19 @@ export async function openBuildPlans(directory, saveEntry, warnings) {
         throw new Error('Invalid build plan')
       }
       const { evidenceOrigin: storedOrigin, handoffOrigin: storedHandoff, webPilotOrigin: storedPilot,
-        webPilotSaveRequest: storedSave, ...plan } = record
-      const origin = evidenceOrigin(storedOrigin)
+        personalWorkflowOrigin: storedWorkflow, webPilotSaveRequest: storedSave, ...plan } = record
+      const origin = comparisonOrigin(storedOrigin)
       const handoff = handoffOrigin(storedHandoff)
       const pilot = webPilotOrigin(storedPilot)
+      const workflow = comparisonOrigin(storedWorkflow)
       const saveRequest = webPilotSaveRequest(storedSave)
       const fields = metadata(plan)
       if ((storedOrigin !== undefined && !origin) || (storedHandoff !== undefined && !handoff) ||
-        (storedPilot !== undefined && !pilot) || (storedSave !== undefined && !saveRequest)) warnings.push(file)
+        (storedPilot !== undefined && !pilot) || (storedWorkflow !== undefined && !workflow) ||
+        (storedSave !== undefined && !saveRequest)) warnings.push(file)
       plans.set(id, { ...plan, ...fields, ...(origin && { evidenceOrigin: origin }), ...(handoff && { handoffOrigin: handoff }),
-        ...(pilot && { webPilotOrigin: pilot }), ...(saveRequest && { webPilotSaveRequest: saveRequest }) })
+        ...(pilot && { webPilotOrigin: pilot }), ...(workflow && { personalWorkflowOrigin: workflow }),
+        ...(saveRequest && { webPilotSaveRequest: saveRequest }) })
     } catch {
       warnings.push(file)
     }
@@ -137,14 +140,15 @@ export async function openBuildPlans(directory, saveEntry, warnings) {
       }
       const target = current && !updating ? current : await resolveDraft()
       const { presetId, heroId, heroName } = target
-      const origin = evidenceOrigin(target.evidenceOrigin)
+      const origin = comparisonOrigin(target.evidenceOrigin)
       const handoff = handoffOrigin(target.handoffOrigin)
       const pilot = webPilotOrigin(target.webPilotOrigin)
+      const workflow = comparisonOrigin(target.personalWorkflowOrigin)
       const request = saveRequest ?? current?.webPilotSaveRequest
       const record = { id: current?.id ?? randomUUID(), revision: randomUUID(), ...fields,
         presetId, heroId, heroName, updatedAt: Date.now(), ...(origin && { evidenceOrigin: origin }),
         ...(handoff && { handoffOrigin: handoff }), ...(pilot && { webPilotOrigin: pilot }),
-        ...(request && { webPilotSaveRequest: request }) }
+        ...(workflow && { personalWorkflowOrigin: workflow }), ...(request && { webPilotSaveRequest: request }) }
       await saveEntry(directory, record.id, record)
       plans.set(record.id, record)
       return record

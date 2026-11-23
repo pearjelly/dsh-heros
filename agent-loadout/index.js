@@ -828,9 +828,9 @@ export async function apply(ctx) {
       : '方案的英雄或阵容当前不可用。'
   }
 
-  function publicBuildPlan({ evidenceOrigin, handoffOrigin, webPilotOrigin, webPilotSaveRequest, ...plan }) {
+  function publicBuildPlan({ evidenceOrigin, handoffOrigin, webPilotOrigin, webPilotSaveRequest, personalWorkflowOrigin, ...plan }) {
     return { ...plan, ...(evidenceOrigin && { hasEvidenceOrigin: true }), ...(handoffOrigin && { hasHandoffOrigin: true }),
-      ...(webPilotOrigin && { hasWebPilotOrigin: true }),
+      ...(personalWorkflowOrigin && { hasPersonalWorkflowOrigin: true }), ...(webPilotOrigin && { hasWebPilotOrigin: true }),
       ...(webPilotOrigin?.received && { hasReceivedWebPilotOrigin: true }) }
   }
 
@@ -6880,10 +6880,9 @@ export async function apply(ctx) {
     return { sessionId, workflowDecisions, deliverables, outcomeIds: workflowOutcomeIds(workflowDecisions) }
   }
 
-  async function readPersonalWorkflowComparison(record, signal) {
-    let checked
+  async function readPersonalWorkflowComparison(record, signal, checked) {
     try {
-      checked = await checkStoredRematch(record, signal)
+      checked ??= await checkStoredRematch(record, signal)
     } catch {
       signal?.throwIfAborted()
     }
@@ -7658,6 +7657,51 @@ export async function apply(ctx) {
       signal?.throwIfAborted()
       return { ...result, reason: error instanceof Error ? error.message : '本机配置已变化，无法核对这局的原出装。' }
     }
+  }
+
+  const personalWorkflowPlanUnavailable = '这份方案的实测来源已不可查看。'
+
+  function personalWorkflowPlanSide({ comparisonId, arm }) {
+    const record = rematchComparisons.read(comparisonId)
+    if (!record?.baseline?.personalWorkflowReplay || (arm !== 'baseline' && arm !== 'rematch')) {
+      throw new Error(personalWorkflowPlanUnavailable)
+    }
+    const pinned = arm === 'baseline' ? record.baseline : record.loadout
+    return { record, arm, pinned }
+  }
+
+  async function verifiedPersonalWorkflowPlanRun({ record, arm }, signal) {
+    const checked = await checkStoredRematch(record, signal).catch(() => {
+      signal?.throwIfAborted()
+    })
+    if (!checked || !isDeepStrictEqual(record.baseline, checked.record.baseline) ||
+      !isDeepStrictEqual(record.loadout, checked.record.loadout)) throw new Error(personalWorkflowPlanUnavailable)
+    const { personalWorkflowPair } = await readPersonalWorkflowComparison(record, signal, checked)
+    const selected = arm === 'baseline' ? personalWorkflowPair?.previous : personalWorkflowPair?.current
+    if (!selected || await workspaceMaterialState(record, signal) !== 'verified') throw new Error(personalWorkflowPlanUnavailable)
+    signal?.throwIfAborted()
+    return selected
+  }
+
+  async function savePersonalWorkflowPlan({ comparisonId, arm, name, note }, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    const source = personalWorkflowPlanSide({ comparisonId, arm })
+    const { presetId, heroId, heroName } = source.pinned
+    return buildPlans.write({ name, note }, heroId, async () => {
+      await verifiedPersonalWorkflowPlanRun(source, signal)
+      return { presetId, heroId, heroName, personalWorkflowOrigin: { comparisonId, arm } }
+    })
+  }
+
+  async function readPlanPersonalWorkflowOrigin({ id, revision }, signal) {
+    const plan = buildPlans.read(id, revision)
+    if (!plan.personalWorkflowOrigin) throw new Error(personalWorkflowPlanUnavailable)
+    const source = personalWorkflowPlanSide(plan.personalWorkflowOrigin)
+    if (source.pinned.presetId !== plan.presetId || source.pinned.heroId !== plan.heroId) throw new Error(personalWorkflowPlanUnavailable)
+    const { sessionId } = await verifiedPersonalWorkflowPlanRun(source, signal)
+    buildPlans.read(id, revision)
+    signal?.throwIfAborted()
+    return { ...plan.personalWorkflowOrigin, sessionId }
   }
 
   async function saveEvidenceReplayPlan({ comparisonId, arm, name, note }, signal) {
@@ -9515,6 +9559,13 @@ export async function apply(ctx) {
         else if (selection?.action === 'evidence-replay-plan-save') {
           value = publicBuildPlan(await saveEvidenceReplayPlan(selection, request.signal))
           updates.notify()
+        }
+        else if (selection?.action === 'plan-personal-workflow-save') {
+          value = publicBuildPlan(await savePersonalWorkflowPlan(selection, request.signal))
+          updates.notify()
+        }
+        else if (selection?.action === 'plan-personal-workflow-origin') {
+          value = await readPlanPersonalWorkflowOrigin(selection, request.signal)
         }
         else if (selection?.action === 'handoff-pair-plan-save') {
           value = publicBuildPlan(await savePersonalHandoffPlan(selection, request.signal))
