@@ -2430,9 +2430,11 @@ export async function apply(ctx) {
         return { personal, view: { status: 'unavailable' } }
       }
       if (outcome.status !== 'complete') return { personal, view: { status: outcome.status } }
-      const { choices, custom, files } = webPilotHandoffOutcome(source.events, outcome.windows, -1, { includeFiles: true })
+      const { choices, custom, files, questionAsked } = webPilotHandoffOutcome(source.events, outcome.windows, -1,
+        { includeFiles: true, includeQuestionAsked: true })
       const view = { status: 'complete', ...observedPersonalWebReads(source.events, outcome.windows, binding),
         ...(choices?.length && { choice: choices.join(' / ') }), ...((custom || choices?.length) && { choiceRecorded: true }),
+        ...(questionAsked && { questionAsked: true }),
         deliverables: files }
       return { personal, view, taskFingerprint: outcome.taskFingerprint, ...(outcome.taskText && { taskText: outcome.taskText }) }
     } finally {
@@ -2538,9 +2540,9 @@ export async function apply(ctx) {
     const current = { sessionId, observed }
     const pair = observed.personal.binding.arm === 'standard' ? [current, opponent] : [opponent, current]
     const runs = await Promise.all(pair.map(async ({ sessionId, observed }) => {
-      const { reads, choice, choiceRecorded, deliverables } = observed.view
+      const { reads, choice, choiceRecorded, questionAsked, deliverables } = observed.view
       const canSavePlan = await canSaveWebPilotPersonalPlan(observed, signal)
-      return { sessionId, arm: observed.personal.binding.arm, reads, choice, choiceRecorded, deliverables,
+      return { sessionId, arm: observed.personal.binding.arm, reads, choice, choiceRecorded, questionAsked, deliverables,
         ...(canSavePlan && { canSavePlan: true }) }
     }))
     return { runs }

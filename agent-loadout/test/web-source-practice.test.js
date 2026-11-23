@@ -110,21 +110,37 @@ test('Web practice handoff reports carry only canonical outcomes from linked nat
   const first = { startSeq: 0, endSeq: 9, turn: 1 }
   const followUp = { startSeq: 10, endSeq: 16, turn: 2 }
   assert.deepEqual(webPilotHandoffOutcome(events, [first], 2), { delivered: false })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first], 2, { includeQuestionAsked: true }), { delivered: false })
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: true })
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2, { includeAnswerSeq: true }),
     { choices: [], custom: true, answerSeq: 12, delivered: true })
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2, { includeFiles: true }),
     { choices: [], custom: true, delivered: true, files: ['private.md'] })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2, { includeQuestionAsked: true }),
+    { choices: [], custom: true, delivered: true, questionAsked: true })
   events[15].sourceEventSeqs = [4]
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: false })
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2, { includeFiles: true }),
     { choices: [], custom: true, delivered: false, files: [] })
   const immediate = result(8, 1, 'ask', 3)
+  events[3].data.arguments = JSON.stringify({ questions: [{ id: 'choice' }] })
   immediate.data.message.content = [{ type: 'text', text: JSON.stringify({
     answers: [{ id: 'choice', selected: [], custom: 'private free text'.repeat(1_200) }],
   }) }]
   events[8] = immediate
   assert.deepEqual(webPilotHandoffOutcome(events, [first], 2), { choices: [], custom: true, delivered: false })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first], 2, { includeQuestionAsked: true }),
+    { choices: [], custom: true, delivered: false, questionAsked: true })
+  immediate.data.message.content[0].text = JSON.stringify({ answers: [{ id: 'choice', selected: [] }] })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first], 2, { includeQuestionAsked: true }),
+    { delivered: false, questionAsked: true })
+  immediate.sourceEventSeqs = [1]
+  assert.deepEqual(webPilotHandoffOutcome(events, [first], 2, { includeQuestionAsked: true }), { delivered: false })
+  immediate.sourceEventSeqs = [3]
+  immediate.data.message.content[0].text = JSON.stringify({ answers: [{}] })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first], 2, { includeQuestionAsked: true }), { delivered: false })
+  immediate.data.message.content[0].text = JSON.stringify({ answers: [{ id: 'other-question', selected: ['unrelated'] }] })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first], 2, { includeQuestionAsked: true }), { delivered: false })
 })
 
 test('Web Research only reports a bound read started after the actual evidence answer', () => {

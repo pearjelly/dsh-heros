@@ -2303,12 +2303,13 @@ window.__ModuleLoader__.load({
     }
 
     function webPilotPersonalChoice(view) {
-      return view?.choice || t(view?.choiceRecorded ? '已记录回复' : '未记录选择')
+      if (view?.choice) return view.choice
+      if (view?.choiceRecorded) return t('已记录回复')
+      return t(view?.questionAsked ? '已提问，未记录回复' : '未记录选择')
     }
 
-    function WebPilotPersonalEvidence({ view }) {
+    function WebPilotPersonalReceipts({ view }) {
       return h(Fragment, null,
-        h('p', null, h('strong', null, t('实际选择')), ' · ', webPilotPersonalChoice(view)),
         view.deliverables?.length > 0 && h('ul', { className: 'moba-web-pilot-files', 'aria-label': t('交付文件') },
           view.deliverables.map((name, index) => h('li', { key: index }, name))),
         view.deliverables?.length === 0 && h('p', null, t('本局没有交付文件。')),
@@ -2324,10 +2325,34 @@ window.__ModuleLoader__.load({
         })))
     }
 
+    function WebPilotPersonalEvidence({ view }) {
+      return h(Fragment, null,
+        h('p', null, h('strong', null, t('实际选择')), ' · ', webPilotPersonalChoice(view)),
+        h(WebPilotPersonalReceipts, { view }))
+    }
+
+    const webPilotPersonalReadLabels = {
+      complete: '未截断', truncated: '已截断', failed: '读取失败', unknown: '状态未知',
+    }
+
+    function webPilotPersonalReadCounts(reads) {
+      const counts = { complete: 0, truncated: 0, failed: 0, unknown: 0 }
+      for (const { status } of reads) {
+        const kind = status === 'http-error' ? 'failed' : status
+        counts[Object.hasOwn(counts, kind) ? kind : 'unknown'] += 1
+      }
+      return counts
+    }
+
     function WebPilotPersonalPair({ comparison, sessionId, request, dialogRef, onCancel, onVisit }) {
       const [save, setSave] = useState(null)
       const content = useRef(null)
       const saveDialog = useRef(null)
+      const sides = comparison.runs.map(run => ({ run, loadout: t(webPilotArms[run.arm].name),
+        choice: webPilotPersonalChoice(run), reads: webPilotPersonalReadCounts(run.reads ?? empty), files: run.deliverables?.length ?? 0 }))
+      const [first, second] = sides
+      const readKinds = Object.keys(webPilotPersonalReadLabels)
+      const readDifference = readKinds.some(kind => first.reads[kind] !== second.reads[kind])
 
       function openPlan(run, trigger) {
         const scrollTop = content.current.scrollTop
@@ -2343,22 +2368,40 @@ window.__ModuleLoader__.load({
         setSave(null)
       }
 
+      function runActions({ run, loadout }) {
+        return h('td', { key: run.sessionId }, h('div', { className: 'moba-web-pilot-pair-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', 'aria-label': t('查看原会话') + ' · ' + loadout,
+            onClick: () => run.sessionId === sessionId ? onCancel() : onVisit(run.sessionId) }, t('原会话', '原会话（双局对照）')),
+          run.canSavePlan === true && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+            'aria-label': t('保存为方案') + ' · ' + loadout, onClick: event => openPlan(run, event.currentTarget) }, t('保存为方案'))))
+      }
+
       return h(Fragment, null,
         h(InstallDialog, { title: t(webPilotPersonalPairTitle), className: 'moba-starter-dialog moba-web-pilot-personal-pair',
           dialogRef, onCancel, initialFocus: '.moba-web-pilot-personal-pair-back',
           onKeyDown: event => closeDialogOnEscape(event, onCancel) },
           h('div', { className: 'moba-web-pilot-practice-fields', ref: content },
-            h('div', { className: 'moba-lighthouse-arms' }, comparison.runs.map(run => {
-              const loadout = t(webPilotArms[run.arm].name)
-              return h('article', { key: run.sessionId, className: 'moba-lighthouse-arm' },
-                h('h3', null, loadout),
-                h(WebPilotPersonalEvidence, { view: run }),
-                h('footer', null,
-                  h('button', { type: 'button', className: 'moba-roster-open', 'aria-label': t('查看原会话') + ' · ' + loadout,
-                    onClick: () => run.sessionId === sessionId ? onCancel() : onVisit(run.sessionId) }, t('查看原会话')),
-                  run.canSavePlan === true && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
-                    'aria-label': t('保存为方案') + ' · ' + loadout, onClick: event => openPlan(run, event.currentTarget) }, t('保存为方案'))))
-            }))),
+            h('table', { className: 'moba-web-pilot-personal-matrix' },
+              h('thead', null, h('tr', null, h('td'), sides.map(({ run, loadout }) =>
+                h('th', { key: run.sessionId, scope: 'col' }, loadout)))),
+              h('tbody', null,
+                h('tr', { 'data-different': readDifference || undefined }, h('th', { scope: 'row' }, t('网页读取')),
+                  sides.map(({ run, reads }) => h('td', { key: run.sessionId }, run.reads?.length
+                    ? h('ul', null, readKinds.filter(kind => reads[kind]).map(kind =>
+                      h('li', { key: kind }, h('strong', null, reads[kind]), ' ', t(webPilotPersonalReadLabels[kind]))))
+                    : t('无读取记录')))),
+                h('tr', { 'data-different': first.choice !== second.choice || undefined }, h('th', { scope: 'row' }, t('实际选择')),
+                  sides.map(({ run, choice }) => h('td', { key: run.sessionId }, h('span', { className: 'moba-web-pilot-pair-choice' }, choice)))),
+                h('tr', { 'data-different': first.files !== second.files || undefined }, h('th', { scope: 'row' }, t('文件')),
+                  sides.map(({ run, files }) => h('td', { key: run.sessionId }, h('strong', null, files)))),
+                h('tr', null, h('td'), sides.map(runActions)))),
+            h('details', { className: 'moba-web-pilot-pair-receipts' },
+              h('summary', null, t('查看读取地址和交付文件')),
+              h('div', { className: 'moba-lighthouse-arms' }, sides.map(({ run, loadout, choice }) =>
+                h('article', { key: run.sessionId, className: 'moba-lighthouse-arm' },
+                  h('h3', null, loadout),
+                  (run.choice || run.choiceRecorded || run.questionAsked) && h('p', null, h('strong', null, t('实际选择')), ' · ', choice),
+                  h(WebPilotPersonalReceipts, { view: run })))))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-personal-pair-back', onClick: onCancel }, t('返回')))),
         save && h(WebPilotPlanSave, { sessionId: save.run.sessionId,
@@ -14751,6 +14794,7 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-personal-result .moba-web-pilot-personal-compare { background: #392e20; border-color: #ad8c52; color: #ffe3ab; }
       .moba-web-pilot-result:focus-visible, .moba-web-pilot-result :is(button, a):focus-visible,
       :is(.moba-web-pilot-comparison, .moba-web-pilot-personal-pair) :is(button, a):focus-visible,
+      .moba-web-pilot-personal-pair summary:focus-visible,
       .moba-web-pilot-replay-list button:focus-visible,
       .moba-web-pilot-save :is(button, input, textarea, [role="status"]):focus-visible { outline: 2px solid #9ed4ec; outline-offset: 2px; }
       .moba-web-pilot-comparison .moba-lighthouse-arms { margin: 6px 0 0; }
@@ -14763,10 +14807,29 @@ window.__ModuleLoader__.load({
       :is(.moba-web-pilot-decision-comparison, .moba-web-pilot-source-comparison, .moba-web-pilot-personal-pair, .moba-web-pilot-personal-replays)[open] {
         box-sizing: border-box; display: flex; flex-direction: column; overflow: clip; }
       :is(.moba-web-pilot-decision-comparison, .moba-web-pilot-source-comparison, .moba-web-pilot-personal-pair, .moba-web-pilot-personal-replays) > :is(h2, .moba-starter-actions) { flex: none; }
+      .moba-web-pilot-personal-matrix { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; text-align: start; }
+      .moba-web-pilot-personal-matrix :is(th, td) { padding: 5px; border-block-end: 1px solid var(--line); overflow-wrap: anywhere; }
+      .moba-web-pilot-personal-matrix tr > :first-child { width: 23%; color: var(--muted); }
+      .moba-web-pilot-personal-matrix thead th { color: var(--gold); }
+      .moba-web-pilot-personal-matrix tr[data-different] { background: #232f37; }
+      .moba-web-pilot-personal-matrix tr[data-different] th { color: #cbe2dd; }
+      .moba-web-pilot-personal-matrix tbody td { vertical-align: top; }
+      .moba-web-pilot-personal-matrix ul { display: flex; flex-wrap: wrap; gap: 2px 6px; margin: 0; padding: 0; list-style: none; }
+      .moba-web-pilot-pair-choice { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+      .moba-web-pilot-pair-actions { display: grid; gap: 4px; }
+      .moba-web-pilot-pair-actions button { justify-content: center; }
+      @media (max-width: 600px) {
+        .moba-web-pilot-personal-matrix :is(th, td) { padding-block: 4px; }
+        .moba-web-pilot-pair-choice { font-size: 11px; }
+      }
+      .moba-web-pilot-pair-receipts { margin-block-start: 5px; }
+      .moba-web-pilot-pair-receipts > summary { box-sizing: border-box; min-block-size: 44px; align-content: center;
+        padding-inline: 5px; color: #b7deeb; font-size: 12px; cursor: pointer; }
+      .moba-web-pilot-pair-receipts .moba-web-pilot-personal-reads small { white-space: normal; overflow-wrap: anywhere; }
       .moba-web-pilot-personal-pair .moba-lighthouse-arms { grid-template-columns: repeat(auto-fit, minmax(min(218px, 100%), 1fr)); }
       .moba-web-pilot-personal-pair .moba-lighthouse-arm { align-content: start; gap: 5px; }
       .moba-web-pilot-personal-pair .moba-lighthouse-arm :is(h3, p) { margin: 0; overflow-wrap: anywhere; }
-      .moba-web-pilot-personal-pair .moba-lighthouse-arm button { min-inline-size: 0; overflow-wrap: anywhere; }
+      .moba-web-pilot-pair-actions button { min-inline-size: 0; overflow-wrap: anywhere; }
       .moba-web-pilot-decision-comparison > .moba-starter-actions:has(> .moba-start) { display: grid; grid-template-columns: auto minmax(0, 1fr); }
       .moba-web-pilot-decision-comparison > .moba-starter-actions button { justify-content: center; white-space: normal; }
       .moba-web-pilot-decision-comparison .moba-web-pilot-practice-fields > p { margin: 0; }

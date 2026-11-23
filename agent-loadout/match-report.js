@@ -233,6 +233,22 @@ function questionAnswers(message, maxLength = Infinity) {
   }
 }
 
+function matchesQuestionAnswers(call, answers) {
+  const input = call.data.arguments
+  if (!answers?.length || typeof input !== 'string' || input.length > 32_000) return false
+  try {
+    const { questions } = JSON.parse(input)
+    if (!Array.isArray(questions) || questions.length !== answers.length ||
+      !questions.every(question => typeof question?.id === 'string' && question.id)) return false
+    const ids = new Set(questions.map(question => question.id))
+    return ids.size === questions.length && answers.every(item => ids.delete(item?.id) &&
+      Array.isArray(item.selected) && item.selected.every(label => typeof label === 'string') &&
+      (item.custom === undefined || typeof item.custom === 'string'))
+  } catch {
+    return false
+  }
+}
+
 function answerChoices(message) {
   const labels = questionAnswers(message, 16_384)?.flatMap(answer => Array.isArray(answer?.selected) ? answer.selected : [])
     .filter(label => typeof label === 'string' && label.length <= 200)
@@ -620,14 +636,21 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     ...(followUps.continuationReason && { continuationReason: followUps.continuationReason }), ...(includeWindows && { windows }) }
 }
 
-export function webPilotHandoffOutcome(events, windows, receiptSeq, { includeAnswerSeq = false, includeFiles = false } = {}) {
+export function webPilotHandoffOutcome(events, windows, receiptSeq,
+  { includeAnswerSeq = false, includeFiles = false, includeQuestionAsked = false } = {}) {
   const questions = new Map()
   let answer
   let delivered = false
+  let questionAsked = false
   const deliveredFiles = includeFiles ? new Map() : undefined
-  function recordAnswer(call, message, answerSeq) {
-    if (!call || answer && call.seq < answer.seq) return
+  function recordAnswer(call, message, answerSeq, nativeReply = false) {
+    if (!call) return
     const answers = questionAnswers(message)
+    if (includeQuestionAsked) {
+      if (!nativeReply && !matchesQuestionAnswers(call, answers)) return
+      questionAsked = true
+    }
+    if (answer && call.seq < answer.seq) return
     const choices = answers?.flatMap(item => Array.isArray(item?.selected) ? item.selected : [])
       .filter(label => typeof label === 'string' && label.trim())
     const custom = answers?.some(item => typeof item?.custom === 'string' && item.custom.trim())
@@ -642,7 +665,7 @@ export function webPilotHandoffOutcome(events, windows, receiptSeq, { includeAns
       const { type, data, seq, surfaceOp, sourceEventSeqs } = event
       if (type === 'user/message' && surfaceOp === 'append' && data.source.kind === 'user-question-reply' &&
         data.source.outcome === 'answered') {
-        recordAnswer(questions.get(data.source.callId), data, seq)
+        recordAnswer(questions.get(data.source.callId), data, seq, true)
       }
       if (data?.turn !== turn) continue
       if (type === 'tool/call') {
@@ -673,7 +696,8 @@ export function webPilotHandoffOutcome(events, windows, receiptSeq, { includeAns
   }
   return { ...(answer && { choices: answer.choices, custom: Boolean(answer.custom),
     ...(includeAnswerSeq && { answerSeq: answer.answerSeq }) }), delivered,
-    ...(deliveredFiles && { files: [...deliveredFiles.values()].map(file => file.name) }) }
+    ...(deliveredFiles && { files: [...deliveredFiles.values()].map(file => file.name) }),
+    ...(questionAsked && { questionAsked: true }) }
 }
 
 function webPilotReadCalls(events, windows, afterSeq, binding) {

@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.230.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.231.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -45,7 +45,7 @@ To keep an alternative, try the other loadout and save it from the two-run compa
 
 In the original conversation, choose **View replays** to continue an unsent replay from its existing draft, or pick a completed replay to compare its actual result against the original. Each completed row shows its recorded choice and deliveries. You can still start another replay to try a different decision.
 
-In **Compare the runs**, choose **Use this loadout on my task** on either side. Pick your workspace and send your own plain-text question and link. When **My task result** records a verified web attempt, choose **Try the other loadout**. Review the gear change, same workspace and original question, then open a new draft. You can return to the original result and choose **Continue replay draft** to reopen the exact conversation with your existing edits. **My replays** shows which runs await a send or a choice, are running, or have finished. To make a separate draft, choose **Start another replay**. Send the task yourself. When both first questions match, use **Compare my two runs** to check actual reads, choices and deliveries. **View tested source** returns to the public practice runs.
+In **Compare the runs**, choose **Use this loadout on my task** on either side. Pick your workspace and send your own plain-text question and link. When **My task result** records a verified web attempt, choose **Try the other loadout**. Review the gear change, same workspace and original question, then open a new draft. You can return to the original result and choose **Continue replay draft** to reopen the exact conversation with your existing edits. **My replays** shows which runs await a send or a choice, are running, or have finished. To make a separate draft, choose **Start another replay**. Send the task yourself. When both first questions match, **Compare my two runs** shows the recorded reads, choices and delivery counts at the top. Expand a run to check its actual URLs and file names, open its conversation, or save its verified loadout. **View tested source** returns to the public practice runs.
 
 To keep a tested loadout, choose **Save as a plan** on its side of the comparison. You can see that run's decision and files while naming the plan and adding an optional note about when to use it. In **Loadout plans**, choose **View tested source** to revisit both runs and see which one you saved, or **Apply loadout** to use the saved kit in the Armory. The share code carries the loadout recipe. Decisions, delivery filenames, and original conversations stay in your profile.
 
