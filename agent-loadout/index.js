@@ -6769,7 +6769,10 @@ export async function apply(ctx) {
         const { cwd, origin } = source.header
         const personal = typeof cwd === 'string' && cwd && origin !== 'subagent' && !planTaskDetails(source).launch?.webSourcePractice &&
           await personalTaskPathFilter().then(includesPath => includesPath(cwd)).catch(() => false)
-        if (!personal) delete value.webRecovery
+        if (!personal) {
+          delete value.webRecovery
+          delete value.webRecoveryRepeat
+        }
       }
       const endSeqs = value.turns.filter(turn => !turn.inherited && Number.isSafeInteger(turn.endSeq)).map(turn => turn.endSeq)
       await growth.settle()

@@ -4,6 +4,7 @@ import { basename, join, resolve } from 'node:path'
 import { sourceConflictCode } from './tool-bindings.js'
 import { validShortcut } from './match-shortcuts.js'
 import { materialProofRecord } from './match-comparisons.js'
+import { englishText } from './localization.js'
 
 const requestPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 const pageSize = 8
@@ -356,6 +357,25 @@ async function reportTurn(source, start, end, receipts) {
     entries: entries.sort((a, b) => a.seq - b.seq), webRecovery }
 }
 
+function submittedNarrowedQuestion(events, start, end, url) {
+  // These are the prompts that v0.201 wrote into the native draft. Only recover
+  // the editable point from a single matching user message with no attachments.
+  const messages = events.slice(start, end).filter(event => event.type === 'user/message' && event.data.source.kind === 'user')
+  const content = messages.length === 1 ? messages[0].data.content : undefined
+  if (content?.length !== 1 || content[0]?.type !== 'text' || typeof content[0].text !== 'string' ||
+    content[0].text.length > 6000) return
+  const text = content[0].text.replace(/\r\n?/g, '\n').trim()
+  for (const translate of [value => value, englishText]) {
+    const prefix = [
+      translate('上次读取以下地址时，响应被截断。请沿用这个来源。'), url, translate('本次只核对这一点'), '',
+    ].join('\n')
+    const suffix = '\n' + translate('引用能核对的原文并给出链接。找不到依据时，标为待核实。')
+    if (!text.startsWith(prefix) || !text.endsWith(suffix)) continue
+    const question = text.slice(prefix.length, -suffix.length).trim()
+    if (question && question.length <= 400) return question
+  }
+}
+
 export function noteDeliveredFiles(files, { files: delivered, turn }, seq) {
   for (const [index, file] of (delivered ?? []).entries()) {
     if (typeof file.path !== 'string') continue
@@ -613,9 +633,12 @@ export async function matchReport(source, before, receipts) {
   const panelActivities = []
   const compactions = []
   let webRecovery
+  let webRecoveryRepeat
   let latestTurn = before === undefined
+  let previousTurn
   const result = () => ({ turns, ...(commands.length && { commands }), ...(panelActivities.length && { panelActivities }),
-    ...(compactions.length && { compactions }), ...(webRecovery !== undefined && { webRecovery }) })
+    ...(compactions.length && { compactions }), ...(webRecovery !== undefined && { webRecovery }),
+    ...(webRecoveryRepeat && { webRecoveryRepeat }) })
   const outcomes = new Map()
   const limit = before ?? events.length
   let end = events.length
@@ -641,11 +664,26 @@ export async function matchReport(source, before, receipts) {
     } else if (type === 'compaction/end' && index < limit) {
       compaction = { seq, time, state: data.error === undefined ? 'completed' : 'failed', inherited: index < source.inheritedEventCount }
     } else if (type === 'turn/start') {
-      if (index < limit) turn = await reportTurn(source, index, end, receipts)
+      if (index < limit) turn = previousTurn?.start === index ? previousTurn.value : await reportTurn(source, index, end, receipts)
       if (latestTurn && turn?.webRecovery !== undefined) {
         const lastSubmission = events.findLast(event => event.type === 'turn/end' ||
           event.type === 'user/message' && event.data.source.kind === 'user')
-        if (lastSubmission?.type === 'turn/end' && lastSubmission.seq === turn.endSeq) webRecovery = turn.webRecovery
+        if (lastSubmission?.type === 'turn/end' && lastSubmission.seq === turn.endSeq) {
+          webRecovery = turn.webRecovery
+          const read = turn.entries.find(entry => entry.seq === webRecovery)?.webRead
+          if (read?.status === 'truncated') {
+            const start = events.findLastIndex((event, offset) => offset < index && event.type === 'turn/start')
+            if (start >= 0) {
+              const earlier = await reportTurn(source, start, index, receipts)
+              previousTurn = { start, value: earlier }
+              const oldRead = earlier?.entries.find(entry => entry.seq === earlier.webRecovery)?.webRead
+              if (oldRead?.status === 'truncated' && oldRead.url.split('#', 1)[0] === read.url.split('#', 1)[0]) {
+                const question = submittedNarrowedQuestion(events, index, end, oldRead.url)
+                webRecoveryRepeat = question ? { question } : {}
+              }
+            }
+          }
+        }
       }
       latestTurn = false
       if (turn) delete turn.webRecovery

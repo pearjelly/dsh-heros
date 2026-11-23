@@ -9208,9 +9208,9 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function WebRecoveryDraft({ id, entry, sessionId, request, onDraft, onBack }) {
+    function WebRecoveryDraft({ id, entry, repeat, sessionId, request, onDraft, onBack }) {
       const language = useLanguage()
-      const [question, setQuestion] = useState('')
+      const [question, setQuestion] = useState(repeat?.question ?? '')
       const [mode, setMode] = useState('search')
       const [location, setLocation] = useState('')
       const [busy, setBusy] = useState(false)
@@ -9220,14 +9220,19 @@ window.__ModuleLoader__.load({
       const questionField = useRef(null)
       const preview = useRef(null)
       const pending = useRef(null)
-      const narrowed = entry.webRead.status === 'truncated'
+      const repeated = Boolean(repeat)
+      const narrowed = entry.webRead.status === 'truncated' && !repeated
       const link = narrowed ? entry.webRead.url : mode === 'link' ? webRecoveryLink(location) : undefined
-      const ready = question.trim() && (link || !narrowed && mode === 'search')
+      const samePage = repeated && link?.split('#', 1)[0] === entry.webRead.url.split('#', 1)[0]
+      const ready = question.trim() && !samePage && (link || !narrowed && mode === 'search')
+      const linkInstruction = repeated ? '同一网址再次截断。请改查下面的章节或替代来源。'
+        : '上次网页读取失败。请核对下面这个替代来源。'
+      const searchInstruction = repeated ? '同一网址再次截断。请优先查找同一发布方提供的较短章节页，或另一份公开可访问的原始来源。'
+        : '上次网页读取失败。请为这个问题查找另一份公开可访问的原始来源。'
       const task = ready ? [
-        narrowed ? t('上次读取以下地址时，响应被截断。请沿用这个来源。')
-          : link ? t('上次网页读取失败。请核对下面这个替代来源。')
-            : t('上次网页读取失败。请为这个问题查找另一份公开可访问的原始来源。'),
+        t(narrowed ? '上次读取以下地址时，响应被截断。请沿用这个来源。' : link ? linkInstruction : searchInstruction),
         link, t('本次只核对这一点'), question.trim(),
+        ...(repeated && !link ? [t('原读取地址（作为查找线索）'), entry.webRead.url] : empty),
         t('引用能核对的原文并给出链接。找不到依据时，标为待核实。'),
       ].filter(Boolean).join('\n') : ''
 
@@ -9253,7 +9258,8 @@ window.__ModuleLoader__.load({
           const latest = await request(action, { action, sessionId }, abort.signal, language)
           if (abort.signal.aborted) return
           const current = latest.turns[0]?.entries.find(item => item.seq === entry.seq)?.webRead
-          if (latest.webRecovery !== entry.seq || current?.status !== entry.webRead.status || current.url !== entry.webRead.url) {
+          if (latest.webRecovery !== entry.seq || current?.status !== entry.webRead.status || current.url !== entry.webRead.url ||
+            Boolean(latest.webRecoveryRepeat) !== repeated || latest.webRecoveryRepeat?.question !== repeat?.question) {
             setError(t('读取结果已变化，请返回战报查看最新一轮。'))
             return
           }
@@ -9280,20 +9286,23 @@ window.__ModuleLoader__.load({
       return h('form', { id, className: 'moba-web-recovery-form', onSubmit: apply,
         onKeyDown: event => closeDialogOnEscape(event, onBack) },
         h('strong', null, t(narrowed ? '缩小问题' : '换个来源')),
-        h('p', null, t(narrowed ? '写下你要核对的一小点，沿用本次实际读取的地址。' : '可以查找另一份公开原文，或使用你提供的新链接。')),
+        h('p', null, t(narrowed ? '写下你要核对的一小点，沿用本次实际读取的地址。'
+          : repeated ? '这个地址连续两次返回截断响应。换用更短的章节链接，或查找其他公开原文。'
+            : '可以查找另一份公开原文，或使用你提供的新链接。')),
         h('label', null, t('你想核对哪一点？'),
           h('textarea', { ref: questionField, rows: 2, maxLength: 400, value: question, required: true, disabled: busy,
             onChange: event => { setQuestion(event.target.value); resetNotice() } })),
         !narrowed && h('label', null, t('来源选择'),
           h('select', { value: mode, disabled: busy,
             onChange: event => { setMode(event.target.value); resetNotice() } },
-            h('option', { value: 'search' }, t('查找公开替代来源')),
+            h('option', { value: 'search' }, t(repeated ? '查找较短的原文' : '查找公开替代来源')),
             h('option', { value: 'link' }, t('使用其他链接')))),
         !narrowed && mode === 'link' && h('label', null, t('其他来源链接'),
           h('input', { type: 'url', required: true, maxLength: 2048, value: location, disabled: busy, placeholder: 'https://',
             onChange: event => { setLocation(event.target.value); resetNotice() } })),
         !narrowed && mode === 'link' && location.trim() && !link &&
           h('p', { className: 'moba-match-action-note' }, t('请填写完整的 HTTP 或 HTTPS 地址。')),
+        samePage && h('p', { className: 'moba-match-action-note' }, t('这个链接仍指向同一页面。请选择另一个地址。')),
         task && h('label', null, t('后续问题预览'), h('textarea', { ref: preview, rows: 3, value: task, readOnly: true })),
         h('p', { className: 'moba-match-action-note' }, t('填入后可编辑，再由你手动发送。')),
         error && h('p', { className: 'moba-match-action-error', role: 'alert' }, error),
@@ -9374,6 +9383,7 @@ window.__ModuleLoader__.load({
         const action = entry.type === 'action'
         const read = entry.webRead
         const offered = result?.webRecovery === entry.seq
+        const repeat = offered ? result.webRecoveryRepeat : undefined
         return h('li', { key: entry.seq, className: 'moba-report-row', 'data-type': entry.type, 'data-nested': entry.nested },
           entry.kind === 'quest' ? h(Glyph, { kind: 'report', size: 21 })
             : entry.kind === 'hero' ? h(HeroArt, { ...entry, className: 'moba-report-art' })
@@ -9387,19 +9397,20 @@ window.__ModuleLoader__.load({
             entry.blockedSourceName && h('small', null, t('拦截来源 ') + entry.blockedSourceName),
             read && h('div', { className: 'moba-report-web-read', 'data-web-read': read.status },
               h('strong', null, t(reportWebReadStates[read.status]), read.statusCode && ' · HTTP ' + read.statusCode),
+              repeat && h('small', null, t('同一网址再次截断')),
               read.url && h('a', { href: read.url, title: read.url, target: '_blank', rel: 'noopener noreferrer' },
                 t('打开读取地址'), h(Glyph, { kind: 'arrow', size: 13 })),
               offered && h('button', { type: 'button', className: 'moba-text moba-web-recovery-trigger', ref: recoveryTrigger,
-                'aria-expanded': recovery?.seq === entry.seq, 'aria-controls': recovery?.seq === entry.seq ? recoveryId : undefined,
-                onClick: () => setRecovery(entry) },
-              t(read.status === 'truncated' ? '缩小问题' : '换个来源'))),
+                'aria-expanded': recovery?.entry.seq === entry.seq, 'aria-controls': recovery?.entry.seq === entry.seq ? recoveryId : undefined,
+                onClick: () => setRecovery({ entry, repeat }) },
+              t(read.status === 'truncated' && !repeat ? '缩小问题' : '换个来源'))),
             !action && entry.choices?.length > 0 && h('small', null, t('已选 ') + entry.choices.join('、'))),
           h('div', { className: 'moba-report-event-status', 'data-state': action ? 'action' : entry.state },
             (!read || !['completed', 'failed'].includes(entry.state)) &&
               h('span', null, action ? entry.kind === 'quest' ? t('任务') : t('操作') : t(reportToolStates[entry.state])),
             !action && entry.duration !== undefined &&
               h('small', null, entry.duration < 100 ? t('<0.1 秒') : (entry.duration / 1000).toFixed(1) + t(' 秒'))),
-          recovery?.seq === entry.seq && h(WebRecoveryDraft, { id: recoveryId, entry: recovery, sessionId, request, onDraft, onBack: closeRecovery }))
+          recovery?.entry.seq === entry.seq && h(WebRecoveryDraft, { id: recoveryId, ...recovery, sessionId, request, onDraft, onBack: closeRecovery }))
       }
 
       const report = result && [

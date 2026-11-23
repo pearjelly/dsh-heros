@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { matchReport, toolSourceRecord } from '../match-report.js'
+import { englishText } from '../localization.js'
 import { observedWebSource, webSourceUrl } from '../web-source-practice.js'
 
 const manifest = await readFile(new URL('./fixtures/web-source-v196.json', import.meta.url), 'utf8')
@@ -154,4 +155,50 @@ test('only the current, completed user turn can offer a follow-up for its latest
     events[events.length - 1] = { ...events.at(-1), seq: 7 }
   })
   assert.equal(laterRead.webRecovery, undefined)
+})
+
+test('repeated truncation follows adjacent actual final addresses and carries only a recognized submitted point', async () => {
+  const url = 'https://example.com/final'
+  const question = 'Check the definition.\nInclude its two exceptions.'
+  const narrow = translate => [
+    translate('上次读取以下地址时，响应被截断。请沿用这个来源。'),
+    url, translate('本次只核对这一点'), question,
+    translate('引用能核对的原文并给出链接。找不到依据时，标为待核实。'),
+  ].join('\n')
+
+  function twoTurns(latestText, { latestUrl = url, gap = false, extra = [], priorTruncated = true } = {}) {
+    return (call, result, events) => {
+      function completeRead(start, turn, finalUrl, text, truncated, additional) {
+        const args = JSON.stringify({ url: 'https://example.com/request-' + turn })
+        return [
+          { ...events[0], seq: start, data: { turn } },
+          { type: 'user/message', seq: start + 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text }, ...additional] } },
+          { ...call, seq: start + 2, data: { ...call.data, turn, arguments: args } },
+          { ...result, seq: start + 3, sourceEventSeqs: [start + 2], data: {
+            ...result.data, turn, meta: { ...result.data.meta, url: finalUrl, truncated },
+          } },
+          { ...events.at(-1), seq: start + 4 },
+        ]
+      }
+      const first = completeRead(0, 1, url, 'Read the source.', priorTruncated, [])
+      const middle = gap ? [{ ...events[0], seq: 5, data: { turn: 2 } }, { ...events.at(-1), seq: 6 }] : []
+      const latest = completeRead(gap ? 7 : 5, gap ? 3 : 2, latestUrl, latestText, true, extra)
+      events.splice(0, events.length, ...first, ...middle, ...latest)
+    }
+  }
+
+  for (const text of [narrow(value => value), narrow(englishText).replaceAll('\n', '\r\n')]) {
+    const report = await webReport(twoTurns(text, { latestUrl: url + '#section' }))
+    assert.equal(report.webRecovery, 7)
+    assert.deepEqual(report.webRecoveryRepeat, { question })
+  }
+  assert.deepEqual((await webReport(twoTurns('Check this source again.'))).webRecoveryRepeat, {})
+  assert.deepEqual((await webReport(twoTurns(narrow(englishText), { extra: [{ type: 'image' }] }))).webRecoveryRepeat, {})
+  assert.equal((await webReport(twoTurns(narrow(englishText)), { before: 5 })).webRecoveryRepeat, undefined)
+  assert.equal((await webReport(twoTurns(narrow(englishText)), { inheritedEventCount: 5 })).webRecoveryRepeat, undefined)
+  for (const options of [{ latestUrl: 'https://example.com/other' }, { gap: true }, { priorTruncated: false }]) {
+    const report = await webReport(twoTurns(narrow(englishText), options))
+    assert.ok(Number.isSafeInteger(report.webRecovery))
+    assert.equal(report.webRecoveryRepeat, undefined)
+  }
 })
