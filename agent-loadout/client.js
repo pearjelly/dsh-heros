@@ -3514,12 +3514,14 @@ window.__ModuleLoader__.load({
           invitation && h('button', { type: 'button', className: 'moba-start', onClick: () => copy(true) }, t('复制挑战邀请'))))
     }
 
+    const publicPracticeCodePattern = /(?<![A-Za-z0-9_.-])DSH(?:C[1-5]|R[1-5])\.[A-Za-z0-9_-]+/g
+
     function pastedLighthouseChallenge(text) {
       if (text.length > lighthouseInvitationLimit) return { problem: '这段消息太长，请只粘贴挑战邀请或战报。' }
       const multiple = '找到多个不同的码，请只保留要核对的那一个。'
       let code
       let olderReport = false
-      for (const [candidate] of text.matchAll(/(?<![A-Za-z0-9_.-])DSH(?:C[1-5]|R[1-4])\.[A-Za-z0-9_-]+/g)) {
+      for (const [candidate] of text.matchAll(publicPracticeCodePattern)) {
         if (/^DSHR[1-3]\./u.test(candidate)) {
           olderReport = true
           continue
@@ -3529,6 +3531,7 @@ window.__ModuleLoader__.load({
         code = candidate
       }
       if (code?.startsWith('DSHR4.')) return olderReport ? { problem: multiple } : { reportCode: code }
+      if (code?.startsWith('DSHR5.')) return olderReport ? { problem: multiple } : { combinedReport: true }
       if (olderReport && code?.startsWith('DSHC5.')) return { problem: multiple }
       return code ? { code } : { problem: '没有找到挑战码或试玩战报码。请粘贴完整消息或代码。' }
     }
@@ -3596,7 +3599,7 @@ window.__ModuleLoader__.load({
       const field = useRef(null)
       const errorMessage = useRef(null)
       const returnToReportTrial = useRef(false)
-      const { code: invitationCode, reportCode, problem } = useMemo(() => pastedLighthouseChallenge(input), [input])
+      const { code: invitationCode, reportCode, combinedReport, problem } = useMemo(() => pastedLighthouseChallenge(input), [input])
       const trimmed = input.trim()
       const returnedReport = trimmed.length <= lighthouseHandoffReportCodeLimit && reviewHandoffReportCode.test(trimmed)
       const code = reportTrial?.code ?? invitationCode
@@ -3671,7 +3674,7 @@ window.__ModuleLoader__.load({
       }
 
       async function check(useLocal = false) {
-        if (pending.current || returnedReport || (useLocal && !canReviewLocal)) return
+        if (pending.current || returnedReport || combinedReport || (useLocal && !canReviewLocal)) return
         if (reportCode) {
           editInvitation()
           setActiveWebReport(reportCode)
@@ -3759,6 +3762,8 @@ window.__ModuleLoader__.load({
                 onChange: event => { setInput(event.target.value); setChecked(null); setError(''); setOpeningChoice('') } })),
             returnedReport && h('p', { className: 'moba-starter-note', role: 'status' }, t(onFindHandoffReport
               ? '这是一份交接战报。请选择自己的原局再对照。' : '这是一份交接战报。完成同题交接后即可对照。')),
+            combinedReport && h('p', { className: 'moba-starter-note', role: 'status' },
+              t('这是一份灯塔备用电池战报。打开你已完成的同题战报，点「交换试玩战报」粘贴。')),
             error && h('p', { className: 'moba-alert', role: 'alert', ref: errorMessage, tabIndex: reportTrial ? -1 : undefined }, error),
             busy === 'check' && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对挑战要求…')),
             preview && h('div', { className: 'moba-share-review' },
@@ -3794,7 +3799,7 @@ window.__ModuleLoader__.load({
               t(reportTrial ? '返回好友战报' : '返回')),
             returnedReport && onFindHandoffReport && h('button', { type: 'button', className: 'moba-start',
               onClick: () => onFindHandoffReport(trimmed) }, t(lighthouseHandoffHistoryLabel)),
-            !returnedReport && showInput && h('button', { type: 'submit', className: canOpen || canReviewLocal ? 'moba-roster-open' : 'moba-start',
+            !returnedReport && !combinedReport && showInput && h('button', { type: 'submit', className: canOpen || canReviewLocal ? 'moba-roster-open' : 'moba-start',
               disabled: Boolean(busy) || !input.trim() }, t(code ? '核对挑战码' : '核对邀请或战报')),
             canReviewLocal && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy),
               onClick: () => void check(true) }, t('核对本机标准出装')),
@@ -4442,6 +4447,154 @@ window.__ModuleLoader__.load({
                 onPersonal()
               } }, t('用我的出装')),
             !received && h('button', { type: 'submit', className: 'moba-start', disabled: busy || !result?.local || !input.trim() }, t('对照好友战报')))))
+    }
+
+    function pastedCombinedLighthouseReport(text) {
+      if (text.length > lighthouseInvitationLimit) return { problem: '这段消息太长，请只粘贴战报或战报码。' }
+      const codes = new Set(Array.from(text.matchAll(publicPracticeCodePattern), ([code]) => code))
+      if (codes.size > 1) return { problem: '找到多个不同的码，请只保留要核对的那一个。' }
+      const [code] = codes
+      return code?.startsWith('DSHR5.') && code.length <= lighthouseHandoffReportCodeLimit ? { code }
+        : { problem: '请粘贴灯塔备用电池战报或战报码。' }
+    }
+
+    const lighthouseReviewReportDecisions = { confirm: '确认交付', revise: '退回修改', answered: '已作选择' }
+
+    function missingLighthouseGearDecision(gear, mode) {
+      return gear === 'evidence' && mode === 'review' ? '未装备' : '已装备，未记录选择'
+    }
+
+    function CombinedLighthouseReportComparison({ local, friend }) {
+      const headingId = useId()
+      const rows = [
+        ['出装', side => lighthouseCarryModeLabels[side.played]],
+        ['证据核验', side => side.evidence === 'none' ? missingLighthouseGearDecision('evidence', side.played) : webPilotReportDecisions[side.evidence]],
+        ['交付前复核', side => side.review === 'none' ? missingLighthouseGearDecision('review', side.played) : lighthouseReviewReportDecisions[side.review]],
+        ['交付文件', side => side.delivered ? '有交付记录' : '没有交付记录'],
+      ]
+      return h('section', { className: 'moba-lighthouse-replay-pair' },
+        h('h3', { id: headingId, tabIndex: -1 }, t(friend ? '同题对照' : '我的试玩战报')),
+        h('p', { className: 'moba-starter-note' }, t('任务语言'), ' · ', t(local.sampleLanguage === 'en' ? '英文' : '中文')),
+        h('table', { 'aria-labelledby': headingId },
+          h('thead', null, h('tr', null, h('td'), h('th', { scope: 'col' }, t('本机核验的结果')),
+            friend && h('th', { scope: 'col' }, t('好友分享的结果')))),
+          h('tbody', null, rows.map(([label, value]) => h('tr', { key: label },
+            h('th', { scope: 'row' }, t(label)), h('td', null, t(value(local))), friend && h('td', null, t(value(friend))))))))
+    }
+
+    function LighthouseCombinedHandoffReport({ sessionId, request, onBack }) {
+      const language = useLanguage()
+      const [result, setResult] = useState(null)
+      const [input, setInput] = useState('')
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [manualCopy, setManualCopy] = useState(false)
+      const [busy, setBusy] = useState(false)
+      const [attempt, retry] = useState(0)
+      const dialog = useRef(null)
+      const field = useRef(null)
+      const reportField = useRef(null)
+      const pending = useRef(null)
+      const action = 'lighthouse-combined-handoff-report'
+      const report = result?.code && t('这是我的深度荣耀灯塔战报。打开你已完成的备用电池试玩战报，点「交换试玩战报」，粘贴这整段即可对照。') +
+        '\n\n' + result.code
+
+      useEffect(() => {
+        const abort = new AbortController()
+        setResult(null)
+        setError('')
+        setNotice('')
+        setManualCopy(false)
+        setBusy(false)
+        request(action, { action, sessionId }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setResult(value) })
+          .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
+        return () => { abort.abort(); pending.current?.abort() }
+      }, [request, sessionId, language, attempt])
+
+      useLayoutEffect(() => {
+        if (manualCopy) {
+          reportField.current?.focus()
+          reportField.current?.select()
+        }
+      }, [manualCopy])
+
+      useLayoutEffect(() => {
+        if (result?.friend) dialog.current?.querySelector('.moba-lighthouse-replay-pair h3')?.focus()
+      }, [result?.friend])
+
+      function close() {
+        pending.current?.abort()
+        dialog.current?.close()
+        onBack()
+      }
+
+      function edit(event) {
+        setInput(event.target.value)
+        setError('')
+        setResult(current => current?.friend ? { local: current.local, code: current.code } : current)
+      }
+
+      async function compare(event) {
+        event.preventDefault()
+        if (pending.current || !result?.local) return
+        const { code, problem } = pastedCombinedLighthouseReport(input)
+        if (!code) {
+          setError(t(problem))
+          field.current?.focus()
+          return
+        }
+        const abort = pending.current = new AbortController()
+        setBusy(true)
+        setError('')
+        setNotice('')
+        setManualCopy(false)
+        try {
+          const value = await request(action, { action, sessionId, code }, abort.signal, language)
+          if (!abort.signal.aborted) setResult(value)
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          if (pending.current === abort) pending.current = null
+          if (!abort.signal.aborted) setBusy(false)
+        }
+      }
+
+      async function copy() {
+        if (!report) return
+        try {
+          await navigator.clipboard.writeText(report)
+          setNotice(t('战报已复制。'))
+        } catch {
+          if (manualCopy) {
+            reportField.current?.focus()
+            reportField.current?.select()
+          } else setManualCopy(true)
+          setNotice(t('战报已选中，可以手动复制。'))
+        }
+      }
+
+      return h(InstallDialog, { title: t(webPilotReportTitle), dialogRef: dialog, onCancel: close,
+        className: 'moba-starter-dialog moba-web-pilot-handoff moba-lighthouse-combined-report',
+        initialFocus: '.moba-lighthouse-report-back', onKeyDown: event => closeDialogOnEscape(event, close) },
+        h('form', { onSubmit: compare },
+          h('div', { className: 'moba-plan-fields moba-share-fields' },
+            result?.local && h(CombinedLighthouseReportComparison, { local: result.local, friend: result.friend }),
+            manualCopy && report && h('label', null, t('我的试玩战报'),
+              h('textarea', { className: 'moba-share-code', ref: reportField, value: report, readOnly: true, rows: 3,
+                spellCheck: false, onFocus: event => event.currentTarget.select() })),
+            notice && h('p', { className: 'moba-empty', role: 'status' }, notice),
+            h('label', null, t('好友试玩战报或战报码'),
+              h('textarea', { className: 'moba-share-code', ref: field, rows: 2, value: input, readOnly: busy,
+                spellCheck: false, autoComplete: 'off', autoCapitalize: 'off', maxLength: lighthouseInvitationLimit + 1, onChange: edit })),
+            error && h('p', { className: 'moba-alert', role: 'alert' }, error),
+            (busy || !result && !error) && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对战报…'))),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-report-back', onClick: close }, t('返回')),
+            report && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: copy }, t('复制战报给好友')),
+            error && !result && h('button', { type: 'button', className: 'moba-roster-open',
+              onClick: () => retry(value => value + 1) }, t('重新核对')),
+            h('button', { type: 'submit', className: 'moba-start', disabled: busy || !result?.local || !input.trim() }, t('对照好友战报')))))
     }
 
     function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal, onPersonalTask,
@@ -12821,9 +12974,7 @@ window.__ModuleLoader__.load({
               h('tr', { key: id }, h('th', { scope: 'row' }, t(name)),
                 bySide.map((choices, i) => {
                   const side = sides[i]
-                  let missing = '未记录选择'
-                  if (comparedGear) missing = id === 'evidence' && side.mode === 'review'
-                    ? '未装备' : '已装备，未记录选择'
+                  const missing = comparedGear ? missingLighthouseGearDecision(id, side.mode) : '未记录选择'
                   return h('td', { key: side.sessionId }, choices.get(id) ?? t(missing))
                 }))),
             h('tr', null, h('th', { scope: 'row' }, t('交付文件')), sides.map(run =>
@@ -12858,6 +13009,7 @@ window.__ModuleLoader__.load({
       const lighthouseReplayButton = useRef(null)
       const lighthouseSwitchButton = useRef(null)
       const lighthouseInviteButton = useRef(null)
+      const lighthouseReportButton = useRef(null)
       const lighthousePersonalButton = useRef(null)
       const lighthousePreviousPersonalButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
@@ -12922,6 +13074,7 @@ window.__ModuleLoader__.load({
           'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton,
           'lighthouse-combined-replay': lighthouseReplayButton, 'lighthouse-combined-replay-switch': lighthouseSwitchButton,
           'lighthouse-combined-share': lighthouseInviteButton,
+          'lighthouse-combined-report': lighthouseReportButton,
           'lighthouse-combined-personal': lighthousePersonalButton,
           'lighthouse-combined-personal-previous': lighthousePreviousPersonalButton }
         const button = buttons[initialPersonalFocus]?.current
@@ -12991,7 +13144,9 @@ window.__ModuleLoader__.load({
                   onClick: () => setReview('current') }, t('核对并保存出装'), h(Glyph, { kind: 'arrow', size: 16 })),
                 result.lighthouseReplay === true && h('button', { ref: lighthouseInviteButton, type: 'button', className: 'moba-text',
                   'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-share' }) },
-                t(lighthouseCombinedInviteTitle))),
+                t(lighthouseCombinedInviteTitle)),
+                result.lighthouseReplay === true && h('button', { ref: lighthouseReportButton, type: 'button', className: 'moba-text',
+                  'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-report' }) }, t(webPilotReportTitle))),
               sourceTrial && h('button', { ref: sourceTrialButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'source-trial', source: sourceTrial }) },
                 t('在灯塔试玩标准模式'), h(Glyph, { kind: 'arrow', size: 16 })),
@@ -13787,7 +13942,8 @@ window.__ModuleLoader__.load({
           setAction({ ...returnAction, initialPersonalFocus: focus })
           if (!element.matches(':popover-open')) element.showPopover(source ? { source } : undefined)
         }
-        if (['lighthouse-combined-replay', 'lighthouse-combined-personal', 'lighthouse-combined-share'].includes(mode)) restore()
+        if (['lighthouse-combined-replay', 'lighthouse-combined-personal', 'lighthouse-combined-share',
+          'lighthouse-combined-report'].includes(mode)) restore()
         else requestAnimationFrame(restore)
       }
 
@@ -14060,6 +14216,8 @@ window.__ModuleLoader__.load({
         personalFlow?.mode === 'lighthouse-combined-replay' && h(LighthouseCombinedReplay, { sessionId, initialLoadout: personalFlow.initialLoadout, request,
           onBack: () => closePersonalFlow(), onOpen: visitPersonalFlow }),
         personalFlow?.mode === 'lighthouse-combined-share' && h(LighthouseChallengeShare, { lighthouseSessionId: sessionId,
+          request, onBack: () => closePersonalFlow() }),
+        personalFlow?.mode === 'lighthouse-combined-report' && h(LighthouseCombinedHandoffReport, { sessionId,
           request, onBack: () => closePersonalFlow() }),
         personalFlow?.mode === 'lighthouse-combined-personal' && h(PersonalBaselineTask, { lighthouseSessionId: sessionId,
           lighthousePairSide: personalFlow.lighthousePairSide, workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
@@ -15412,7 +15570,7 @@ window.__ModuleLoader__.load({
       .moba-direct-form input[type="file"]::file-selector-button { margin-right: 8px; padding: 6px 9px; border: 1px solid #745f40; background: #1b2331; color: var(--ink); cursor: pointer; }
       .moba-market-dialog .moba-market-actions { margin-top: 12px; }
       .moba-starter-dialog { width: min(535px, calc(100vw - 28px)); }
-      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation, .moba-lighthouse-lesson, .moba-lighthouse-combined-replay) {
+      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation, .moba-lighthouse-lesson, .moba-lighthouse-combined-replay, .moba-lighthouse-combined-report) {
         --ink: #f3e9d2; --muted: #b6b4bc; --gold: #e6bc70; --line: #564532; --blue: #9ed4ec; --deep: #0a0e17;
       }
       .moba-lighthouse-comparison { width: min(700px, calc(100vw - 28px)); }
@@ -15718,6 +15876,14 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-handoff :is(button, textarea, h3):focus-visible { outline: 2px solid #9ed4ec; outline-offset: 2px; }
       .moba-web-pilot-handoff-copy-actions { display: flex; align-items: stretch; gap: 7px; }
       .moba-web-pilot-handoff-copy-actions button { min-inline-size: 0; max-inline-size: 100%; white-space: normal; }
+      .moba-lighthouse-combined-report .moba-share-fields { overflow: auto; }
+      .moba-lighthouse-combined-report .moba-lighthouse-replay-pair :is(h3, p) { margin: 0; }
+      .moba-lighthouse-combined-report .moba-lighthouse-replay-pair h3 { color: var(--gold); font-size: 15px; }
+      .moba-lighthouse-combined-report .moba-starter-actions button { min-inline-size: 0; white-space: normal; }
+      @media (max-width: 400px) {
+        .moba-lighthouse-combined-report .moba-starter-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .moba-lighthouse-combined-report .moba-starter-actions .moba-start { grid-column: 1 / -1; justify-content: center; }
+      }
       .moba-web-pilot-received-save { flex: none; }
       .moba-web-pilot-received-origin .moba-plan-note { margin: 0; overflow-wrap: anywhere; }
       .moba-web-pilot-received-origin .moba-starter-actions button { max-inline-size: 100%; white-space: normal; }

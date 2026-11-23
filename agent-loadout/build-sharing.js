@@ -315,6 +315,40 @@ export function decodeLighthouseCombinedChallenge(value) {
   throw new Error(invalidChallenge)
 }
 
+const combinedReportPrefix = 'DSHR5.'
+const invalidCombinedReport = '灯塔备用电池战报码无效或版本不受支持。'
+
+export function encodeLighthouseCombinedReport({ sampleLanguage, played, evidence, review, delivered }) {
+  if (typeof sampleLanguage !== 'string' || !Object.hasOwn(combinedChallengeSamples, sampleLanguage) ||
+    !lighthouseCombinedModes.includes(played) || !['none', ...lighthouseEvidenceChoices, 'answered'].includes(evidence) ||
+    !['none', 'confirm', 'revise', 'answered'].includes(review) || typeof delivered !== 'boolean' ||
+    (played === 'review') !== (evidence === 'none') || (played === 'review' && review === 'none')) {
+    throw new Error(invalidCombinedReport)
+  }
+  const sample = combinedChallengeSamples[sampleLanguage]
+  return combinedReportPrefix + Buffer.from(JSON.stringify({ sample, played, evidence, review, delivered })).toString('base64url')
+}
+
+export function decodeLighthouseCombinedReport(value) {
+  if (typeof value !== 'string' || value.length > 192) throw new Error(invalidCombinedReport)
+  const code = value.trim()
+  if (!code.startsWith(combinedReportPrefix)) throw new Error(invalidCombinedReport)
+  const payload = code.slice(combinedReportPrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidCombinedReport)
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (shape(data, ['sample', 'played', 'evidence', 'review', 'delivered'])) {
+      const { sample, played, evidence, review, delivered } = data
+      const sampleLanguage = Object.keys(combinedChallengeSamples).find(key => combinedChallengeSamples[key] === sample)
+      const report = { sampleLanguage, played, evidence, review, delivered }
+      if (sampleLanguage && encodeLighthouseCombinedReport(report) === code) return report
+    }
+  } catch {
+    // Compare only decisions for the public battery sample.
+  }
+  throw new Error(invalidCombinedReport)
+}
+
 const webPilotReportPrefix = 'DSHR4.'
 const invalidWebPilotReport = '网页试玩战报码无效或版本不受支持。'
 

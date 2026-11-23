@@ -1800,6 +1800,33 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(invitedResult.deliverables, [])
     assert.deepEqual(await native(reviewOpening.sessionId), firstReviewNative)
 
+    const readChallengeReport = (sessionId, fields, status) =>
+      challenge('lighthouse-combined-handoff-report', { sessionId, ...fields }, status)
+    await readChallengeReport(ownOpening.sessionId, {}, 422)
+    await readChallengeReport(withEvidence.sessionId, {}, 422)
+    const pausedReport = await readChallengeReport(invited.sessionId)
+    const deliveredReport = await readChallengeReport(variant.sessionId)
+    assert.match(pausedReport.code, /^DSHR5\./)
+    const pausedRecipe = JSON.parse(Buffer.from(pausedReport.code.slice(6), 'base64url').toString())
+    assert.deepEqual(pausedRecipe, {
+      sample: 'lighthouse-battery-gap-1-zh', played: 'evidence-review', evidence: 'pause', review: 'none', delivered: false,
+    })
+    assert.deepEqual(deliveredReport.local, {
+      sampleLanguage: 'zh', played: 'review', evidence: 'none', review: 'confirm', delivered: true,
+    })
+    assert.deepEqual(await readChallengeReport(variant.sessionId, { code: pausedReport.code }), {
+      ...deliveredReport, friend: pausedReport.local,
+    })
+    assert.deepEqual(await readChallengeReport(invited.sessionId, { code: deliveredReport.code }), {
+      ...pausedReport, friend: deliveredReport.local,
+    })
+    const reportCode = fields => 'DSHR5.' + Buffer.from(JSON.stringify(fields)).toString('base64url')
+    await readChallengeReport(variant.sessionId, { code: invitation.code }, 422)
+    await readChallengeReport(variant.sessionId, { code: reportCode({ ...pausedRecipe, sample: 'lighthouse-battery-gap-1-en' }) }, 422)
+    await readChallengeReport(variant.sessionId, { code: reportCode({ ...pausedRecipe, file: '/x' }) }, 422)
+    await readChallengeReport(variant.sessionId, { code: reportCode({ ...pausedRecipe, evidence: 'none' }) }, 422)
+    assert.deepEqual(await native(variant.sessionId), variantNative)
+
     const before = await history(directSession)
     const liveComparison = await preview('review', { sourceSessionId: directSession })
     assert.equal(liveComparison.comparison.live, true)

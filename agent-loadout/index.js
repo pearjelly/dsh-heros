@@ -10,7 +10,7 @@ import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, 
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
 import { openBuildPlans, planTaskPrompt, planTaskSessionId as heroAlternateSessionId, webPilotPlanComparison } from './build-plans.js'
-import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseCombinedChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, decodeLighthouseReviewChallenge, decodeLighthouseReviewReport, decodeWebPilotChallenge, decodeWebPilotReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseCombinedChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, encodeLighthouseReviewChallenge, encodeLighthouseReviewReport, encodeWebPilotChallenge, encodeWebPilotReport, isLighthouseCombinedChallenge, isLighthouseHeroChallenge, isLighthouseReviewChallenge, isWebPilotChallenge, lighthouseChallengeName } from './build-sharing.js'
+import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseCombinedChallenge, decodeLighthouseCombinedReport, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, decodeLighthouseReviewChallenge, decodeLighthouseReviewReport, decodeWebPilotChallenge, decodeWebPilotReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseCombinedChallenge, encodeLighthouseCombinedReport, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, encodeLighthouseReviewChallenge, encodeLighthouseReviewReport, encodeWebPilotChallenge, encodeWebPilotReport, isLighthouseCombinedChallenge, isLighthouseHeroChallenge, isLighthouseReviewChallenge, isWebPilotChallenge, lighthouseChallengeName } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
 import { customActionStore } from './custom-actions.js'
@@ -3555,6 +3555,22 @@ export async function apply(ctx) {
     const { original } = await checkCombinedLighthouseLoadout(sessionId, signal)
     const { language: sampleLanguage, mode: played } = original
     return { code: encodeLighthouseCombinedChallenge(sampleLanguage, played), sampleLanguage, played }
+  }
+
+  async function combinedLighthouseReport({ sessionId, code }, signal) {
+    const friend = code === undefined ? undefined : decodeLighthouseCombinedReport(code)
+    const { original } = await checkCombinedLighthouseLoadout(sessionId, signal)
+    const { language: sampleLanguage, mode: played, workflowDecisions, deliverables } = original
+    if (friend && friend.sampleLanguage !== sampleLanguage) throw new Error('这份交接战报的题目语言和本局不同。')
+    const evidence = workflowDecisions.find(item => item.gearId === 'evidence')?.choices ?? []
+    const review = workflowDecisions.find(item => item.gearId === 'review')?.choices ?? []
+    const local = {
+      sampleLanguage, played,
+      evidence: evidence.length ? lighthouseEvidenceDecision(evidence) ?? 'answered' : 'none',
+      review: review.length === 1 ? lighthouseReviewDecision(review[0]) : review.length ? 'answered' : 'none',
+      delivered: deliverables.length > 0,
+    }
+    return { local, code: encodeLighthouseCombinedReport(local), ...(friend && { friend }) }
   }
 
   async function checkCombinedLighthousePairSide({ sessionId, pairSide }, signal) {
@@ -9143,6 +9159,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-combined-replay-preview') value = (await checkCombinedLighthouseReplay(selection, request.signal)).preview
         else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, 'replay')
         else if (selection?.action === 'lighthouse-combined-challenge-share') value = await shareCombinedLighthouseChallenge(selection, request.signal)
+        else if (selection?.action === 'lighthouse-combined-handoff-report') value = await combinedLighthouseReport(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-personal-draft') value = await readCombinedLighthousePersonalDraft(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-pending') value = await combinedLighthousePending(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-resume') value = await resumeCombinedLighthouse(selection, request.signal)
