@@ -53,6 +53,7 @@ const planTaskSessionPrefix = 'session-a076'
 const webSourceUnavailable = '本机暂时无法装配原生网页读取。'
 const webSourceDirectory = 'web-source-practice'
 const webSourceChanged = '试玩出装已变化，请重新核对。'
+const webPilotReplayChanged = '无法核对原局的题目或网页来源，请返回原局。'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
 const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).digest('hex')
@@ -1411,6 +1412,7 @@ export async function apply(ctx) {
         ...(source && isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, task,
         ...(material !== undefined && { material }), ...(target && { target }), ...(source && { source }), ...(armory && { armory }), ...(webSourcePractice && { webSourcePractice }),
+        ...(kind === 'web-pilot' && input.replayOf && { webPilotReplayOf: input.replayOf }),
         ...(checked.handoffAlternateOf && { handoffAlternateOf: checked.handoffAlternateOf }),
         ...(kind === 'alternate' && { alternateOf: input.alternateOf }) })
       updates.notify(sessionId)
@@ -1437,11 +1439,18 @@ export async function apply(ctx) {
     return { task, hash }
   }
 
-  function requestedWebPilot({ arm, sampleLanguage }, english) {
+  async function requestedWebPilot({ arm, sampleLanguage, parentSessionId }, english, signal) {
     if (!['standard', 'evidence'].includes(arm) || ![undefined, 'en', 'zh'].includes(sampleLanguage)) throw new Error(webSourceChanged)
-    const task = webPilotTask(sampleLanguage === undefined ? english : sampleLanguage === 'en')
-    const hash = createHash('sha256').update(JSON.stringify([arm, task])).digest('hex')
-    return { arm, task, hash }
+    if (parentSessionId === undefined) {
+      const task = webPilotTask(sampleLanguage === undefined ? english : sampleLanguage === 'en')
+      const hash = createHash('sha256').update(JSON.stringify([arm, task])).digest('hex')
+      return { arm, task, hash }
+    }
+    const parent = await inspectWebSourcePractice({ sessionId: parentSessionId }, signal)
+    if (!completedWebPilot(parent) || parent.binding.arm === arm) throw new Error(webPilotReplayChanged)
+    const { task, binding } = parent
+    const hash = createHash('sha256').update(JSON.stringify([arm, task, parentSessionId, binding.id, binding.sourceId])).digest('hex')
+    return { arm, task, hash, replayOf: parentSessionId, replayBinding: binding }
   }
 
   function pilotWebTool(scope) {
@@ -1485,8 +1494,11 @@ export async function apply(ctx) {
     return { draft, candidate, webToolId, webToolSource: arm ? sourceId : undefined }
   }
 
-  async function checkWebSourcePractice({ task, hash, arm }, signal) {
+  async function checkWebSourcePractice({ task, hash, arm, replayBinding }, signal) {
     const { draft, candidate, webToolId, webToolSource } = await plannedWebSourceLoadout(signal, arm)
+    if (replayBinding && (replayBinding.id !== webToolId || replayBinding.sourceId !== webToolSource)) {
+      throw new Error(webPilotReplayChanged)
+    }
     const token = createHash('sha256').update(JSON.stringify([planTaskOwner, hash, candidate.id, webToolId, ...(arm ? [webToolSource] : [])])).digest('hex')
     const planName = arm === 'evidence' ? '标准模式 + 证据核验' : arm ? '标准模式' : '网页检索'
     return { token, draft, candidate, webToolId, webToolSource, view: { planName, task } }
@@ -1499,7 +1511,7 @@ export async function apply(ctx) {
   }
 
   async function previewWebPilot(selection, english, signal) {
-    const input = requestedWebPilot(selection, english)
+    const input = await requestedWebPilot(selection, english, signal)
     const { token } = await checkWebSourcePractice(input, signal)
     return { token, arm: input.arm, version: webSourceVersion, hostVersion: webSourceHostVersion }
   }
@@ -1544,7 +1556,8 @@ export async function apply(ctx) {
         cwd: header.cwd, task: launch.task, presetId: binding.presetId, exactMessages: true,
         ...(pilot && { includeQuestions: true, includeToolCoordinates: true, linkedChoicesOnly: true, verifyMaterialProof: false }),
       }, receipts)
-      if (pilot) return { view: webPilotResult(source, outcome, binding, launch.task), binding }
+      if (pilot) return { view: webPilotResult(source, outcome, binding, launch.task), binding,
+        task: launch.task, replayOf: launch.webPilotReplayOf }
       const { status, turn } = outcome
       if (status !== 'complete') return { view: { status } }
       const verified = observedWebSource(source.events, turn, binding)
@@ -1568,9 +1581,26 @@ export async function apply(ctx) {
     return result && !result.binding?.arm ? result.view : null
   }
 
-  async function readWebPilot(selection, signal) {
-    const result = await inspectWebSourcePractice(selection, signal)
-    return result?.binding?.arm ? result.view : null
+  function completedWebPilot(result) {
+    return ['standard', 'evidence'].includes(result?.binding?.arm) && result.view.status === 'complete' && result.view.verified
+  }
+
+  async function readWebPilot({ sessionId }, signal) {
+    const result = await inspectWebSourcePractice({ sessionId }, signal)
+    if (!result?.binding?.arm) return null
+    const { binding, view, replayOf } = result
+    if (!completedWebPilot(result) || !replayOf || replayOf === sessionId) return view
+    const original = await inspectWebSourcePractice({ sessionId: replayOf }, signal).catch(() => {
+      signal?.throwIfAborted()
+      return null
+    })
+    if (!completedWebPilot(original) || original.task !== result.task || original.view.url !== view.url ||
+      original.binding.arm === binding.arm || original.binding.workspaceId === binding.workspaceId ||
+      original.binding.id !== binding.id || original.binding.sourceId !== binding.sourceId) return view
+    function comparedRun(id, { arm, choice, deliverables }) {
+      return { sessionId: id, arm, ...(choice && { choice }), deliverables }
+    }
+    return { ...view, comparison: { url: view.url, runs: [comparedRun(replayOf, original.view), comparedRun(sessionId, view)] } }
   }
 
   async function verifiedWebSourceLoadout(sessionId, signal) {

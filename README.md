@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.205.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.206.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -32,6 +32,8 @@ In the Armory, use **Choose a loadout** to jump to **Hero roster**. Select a her
 Open **Web Research practice** near the top of the lobby, or choose **Which version of the rule applies?** on the **Web Research** gear card. The old setup sheet lists RC builds. Can your preview build use this loadout? The practice equips Minimal with native web reading and opens a separate draft for you to send. Once the tool retrieves the full pinned publisher source, you can **Use the current manifest**. Choose **Keep unverified** if you want to hold off.
 
 In the same practice menu, choose **Is a compatibility claim enough to recommend a trial?** Pick **Stock Standard** or **Standard + Evidence Check**, then review and send the draft. Both loadouts read the same publisher manifest. The task asks whether to recommend a trial with no local test result. Make your decision if the native question card appears, then use the report to check the actual source, choice, and any delivered draft.
+
+From a verified result, choose **Try again with the other loadout** and open its draft. After both runs verify the same manifest, the replay lets you compare their recorded choices and delivered files and return to either conversation.
 
 When the source is missing or the result is marked unverified, **Try the same question again** opens a new draft with the original question. Any recorded choice remains in the original conversation.
 

@@ -1309,7 +1309,7 @@ window.__ModuleLoader__.load({
       evidence: { name: '标准模式 + 证据核验', detail: '只加装证据核验', icon: 'plus' },
     }
 
-    function WebPilotPractice({ request, initialArm = '', sampleLanguage, onCancel, onOpen }) {
+    function WebPilotPractice({ request, initialArm = '', sampleLanguage, parentSessionId, onCancel, onOpen }) {
       const language = useLanguage()
       const group = useId()
       const [arm, setArm] = useState(initialArm)
@@ -1321,16 +1321,17 @@ window.__ModuleLoader__.load({
       const opening = useRef(null)
       const current = state?.arm === arm && state.language === language && state.attempt === attempt ? state : null
       const preview = current?.preview
+      const parentForArm = arm === initialArm ? parentSessionId : undefined
 
       useEffect(() => {
         if (!arm) return
         const abort = new AbortController()
         const action = 'web-pilot-preview'
-        request(action, { action, arm, sampleLanguage }, abort.signal, language)
+        request(action, { action, arm, sampleLanguage, parentSessionId: parentForArm }, abort.signal, language)
           .then(value => { if (!abort.signal.aborted) setState({ preview: value, arm, language, attempt }) })
           .catch(reason => { if (!abort.signal.aborted) setState({ error: reason.message, arm, language, attempt }) })
         return () => abort.abort()
-      }, [request, arm, attempt, language, sampleLanguage])
+      }, [request, arm, attempt, language, sampleLanguage, parentForArm])
       useEffect(() => () => opening.current?.abort(), [])
 
       async function open(event) {
@@ -1345,8 +1346,8 @@ window.__ModuleLoader__.load({
         }
         try {
           const action = 'web-pilot-open'
-          const result = await request(action, { action, arm, sampleLanguage, token: preview.token, launchId: launch.current.id },
-            abort.signal, language)
+          const result = await request(action, { action, arm, sampleLanguage, parentSessionId: parentForArm,
+            token: preview.token, launchId: launch.current.id }, abort.signal, language)
           if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
         } catch (reason) {
           if (!abort.signal.aborted) setOpenError(reason.message)
@@ -1622,12 +1623,39 @@ window.__ModuleLoader__.load({
             onClick: () => { setError(''); retry(value => value + 1) } }, t('重新核对'))))
     }
 
+    function WebPilotOutcome({ view, complete }) {
+      return h(Fragment, null,
+        view?.choice && h('p', null, h('strong', null, t('实际选择')), ' · ', view.choice),
+        complete && !view.choice && h('p', null, t('本局没有记录到提问卡选择。')),
+        view?.deliverables?.length > 0 && h('ul', { className: 'moba-web-pilot-files', 'aria-label': t('交付文件') },
+          view.deliverables.map((name, index) => h('li', { key: index }, name))),
+        complete && view.deliverables?.length === 0 && h('p', null, t('本局没有交付文件。')))
+    }
+
+    function WebPilotComparison({ comparison, onCancel, onVisit }) {
+      return h(InstallDialog, { title: t('对照两局'), className: 'moba-starter-dialog moba-web-pilot-comparison',
+        onCancel, initialFocus: '.moba-web-pilot-comparison-back',
+        onKeyDown: event => closeDialogOnEscape(event, onCancel) },
+        h('a', { href: comparison.url, target: '_blank', rel: 'noopener noreferrer' }, t('查看发布方清单')),
+        h('div', { className: 'moba-lighthouse-arms' }, comparison.runs.map((run, index) =>
+          h('article', { className: 'moba-lighthouse-arm', key: run.sessionId },
+            h('div', null, h('h3', null, t(index === 0 ? '原局' : '复赛')),
+              h('span', { className: 'moba-lighthouse-arm-hero' }, t(webPilotArms[run.arm].name))),
+            h(WebPilotOutcome, { view: run, complete: true }),
+            h('button', { type: 'button', className: 'moba-roster-open', onClick: () => onVisit(run.sessionId) },
+              t(index === 0 ? '打开原局会话' : '打开复赛会话'))))),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-comparison-back', onClick: onCancel }, t('返回'))))
+    }
+
     function WebPilotPracticeResult({ sessionId, arm, request, onOpen, reportId, reporting, onReport }) {
       const language = useLanguage()
       const [state, setState] = useState(null)
       const [attempt, retry] = useState(0)
-      const [compareOpen, setCompareOpen] = useState(false)
-      const compareTrigger = useRef(null)
+      const [replayOpen, setReplayOpen] = useState(false)
+      const [comparisonOpen, setComparisonOpen] = useState(false)
+      const replayTrigger = useRef(null)
+      const comparisonTrigger = useRef(null)
       const current = state?.language === language && state.attempt === attempt ? state : null
       const view = current?.view
 
@@ -1655,9 +1683,17 @@ window.__ModuleLoader__.load({
       const currentArm = view?.arm ?? arm
       const alternateArm = currentArm === 'standard' ? 'evidence' : 'standard'
       const armName = webPilotArms[currentArm]?.name
-      const canCompare = complete && armName && view.sampleLanguage
-      return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-result', 'aria-label': t(webPilotTitle) },
+      const canReplay = complete && armName && view.sampleLanguage
+      const comparison = complete && view.verified ? view.comparison : null
+      function closeComparison() {
+        setComparisonOpen(false)
+        requestAnimationFrame(() => comparisonTrigger.current?.focus())
+      }
+      return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-result', tabIndex: 0, 'aria-label': t(webPilotTitle) },
         h('div', null, h('strong', null, t(webPilotTitle)), armName && h('span', null, t(armName))),
+        comparison && h('div', null,
+          h('button', { type: 'button', ref: comparisonTrigger, className: 'moba-settlement-button moba-web-pilot-compare',
+            'aria-haspopup': 'dialog', onClick: () => setComparisonOpen(true) }, t('对照两局'))),
         current?.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
           h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重新核对'))),
         unavailable && h('p', null, t('这次任务或出装已变化，无法核对本局。')),
@@ -1666,23 +1702,27 @@ window.__ModuleLoader__.load({
         complete && !view.verified && h('p', null, t('本局没有拿到可核对的发布方完整清单。')),
         view?.verified && h('p', null, t('发布方清单已核对。题目仍缺少本机试跑记录。')),
         waitingChoice && h('p', { role: 'status' }, t('请在会话中的提问卡上作出选择。')),
-        view?.choice && h('p', null, h('strong', null, t('实际选择')), ' · ', view.choice),
-        complete && !view.choice && h('p', null, t('本局没有记录到提问卡选择。')),
-        view?.deliverables?.length > 0 && h('ul', { className: 'moba-web-pilot-files', 'aria-label': t('交付文件') },
-          view.deliverables.map((name, index) => h('li', { key: index }, name))),
-        complete && view.deliverables?.length === 0 && h('p', null, t('本局没有交付文件。')),
+        h(WebPilotOutcome, { view, complete }),
         h('div', { className: 'moba-lighthouse-anchor-actions' },
           view?.verified && h('a', { href: view.url, target: '_blank', rel: 'noopener noreferrer' },
             t('查看发布方清单') + ' · v' + view.version + ' · DSH ' + view.hostVersion),
           h('button', { type: 'button', className: 'moba-settlement-button', onClick: onReport,
             'aria-controls': reportId, 'aria-expanded': reporting }, t('查看对局战报')),
-          canCompare && h('button', { type: 'button', ref: compareTrigger, className: 'moba-settlement-button',
-            'aria-haspopup': 'dialog', onClick: () => setCompareOpen(true) }, t('换另一套出装再试'))),
-        canCompare && compareOpen && h(WebPilotPractice, { request, initialArm: alternateArm, sampleLanguage: view.sampleLanguage, onCancel: () => {
-          setCompareOpen(false)
-          requestAnimationFrame(() => compareTrigger.current?.focus())
+          canReplay && h('button', { type: 'button', ref: replayTrigger, className: 'moba-settlement-button',
+            'aria-haspopup': 'dialog', onClick: () => setReplayOpen(true) }, t('换另一套出装再试'))),
+        comparison && comparisonOpen && h(WebPilotComparison, { comparison, onCancel: closeComparison, onVisit: targetId => {
+          if (targetId === sessionId) closeComparison()
+          else {
+            setComparisonOpen(false)
+            onOpen(targetId)
+          }
+        } }),
+        canReplay && replayOpen && h(WebPilotPractice, { request, initialArm: alternateArm, sampleLanguage: view.sampleLanguage,
+          parentSessionId: view.verified ? sessionId : undefined, onCancel: () => {
+            setReplayOpen(false)
+            requestAnimationFrame(() => replayTrigger.current?.focus())
         }, onOpen: (nextSessionId, task) => {
-          setCompareOpen(false)
+          setReplayOpen(false)
           onOpen(nextSessionId, task)
         } }))
     }
@@ -12936,10 +12976,11 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor > p { grid-column: 1 / -1; }
       .moba-lighthouse-anchor > .moba-task-pending { align-items: center; gap: 4px 7px; }
       .moba-web-source-dialog .moba-market-actions { flex-wrap: wrap; }
-      .moba-web-source-dialog .moba-market-actions button, .moba-web-source-result button, .moba-web-pilot-result button {
+      .moba-web-source-dialog .moba-market-actions button, .moba-web-source-result button, .moba-web-pilot-result button,
+      .moba-web-pilot-comparison button {
         min-block-size: 44px; white-space: normal;
       }
-      .moba-web-personal-dialog, .moba-web-pilot-dialog { box-sizing: border-box; }
+      .moba-web-personal-dialog, .moba-web-pilot-dialog, .moba-web-pilot-comparison { box-sizing: border-box; }
       .moba-web-pilot-entry { min-block-size: 44px; max-inline-size: 100%; text-align: start; white-space: normal; }
       .moba-web-pilot-entry svg { flex: none; }
       .moba-web-personal-form, .moba-web-personal-form label { display: grid; gap: 6px; min-inline-size: 0; }
@@ -12950,10 +12991,27 @@ window.__ModuleLoader__.load({
       .moba-web-source-result .moba-lighthouse-anchor-actions, .moba-web-pilot-result .moba-lighthouse-anchor-actions {
         justify-content: flex-start;
       }
-      .moba-web-source-result a, .moba-web-pilot-result a { color: #9ed4ec; }
-      .moba-web-pilot-result a { display: inline-flex; align-items: center; min-block-size: 44px; max-inline-size: 100%;
+      .moba-web-source-result a, .moba-web-pilot-result a, .moba-web-pilot-comparison a { color: #9ed4ec; }
+      .moba-web-pilot-result a, .moba-web-pilot-comparison a {
+        display: inline-flex; align-items: center; min-block-size: 44px; max-inline-size: 100%;
         overflow-wrap: anywhere; }
       .moba-web-pilot-files { margin: 0; padding-inline-start: 1.2em; font-size: 11px; overflow-wrap: anywhere; }
+      .moba-web-pilot-result .moba-settlement-button { min-inline-size: 0; padding: 5px 8px;
+        border: 1px solid #607d78; background: #162229; color: #e1eeea; font-size: 12px; overflow-wrap: anywhere; }
+      .moba-web-pilot-result .moba-settlement-button:hover { border-color: #a4c7bf; }
+      .moba-web-pilot-result .moba-web-pilot-compare { background: #392e20; border-color: #ad8c52; color: #ffe3ab; }
+      .moba-web-pilot-result:focus-visible, .moba-web-pilot-result :is(button, a):focus-visible,
+      .moba-web-pilot-comparison :is(button, a):focus-visible { outline: 2px solid #9ed4ec; outline-offset: 2px; }
+      .moba-web-pilot-comparison .moba-lighthouse-arms { margin: 6px 0 0; }
+      .moba-web-pilot-comparison .moba-lighthouse-arm { gap: 5px; align-content: start; }
+      .moba-web-pilot-comparison .moba-lighthouse-arm p { margin: 0; overflow-wrap: anywhere; }
+      .moba-web-pilot-comparison .moba-lighthouse-arm button { justify-self: start; text-align: start; }
+      @media (max-width: 600px) {
+        .moba-web-pilot-result { box-sizing: border-box; align-content: start;
+          max-block-size: max(88px, calc(100dvh - 444px)); overflow: auto; scroll-padding-block: 8px; }
+        .moba-web-pilot-result .moba-lighthouse-anchor-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .moba-web-pilot-result .moba-lighthouse-anchor-actions a { grid-column: 1 / -1; }
+      }
       .moba-plan-task-draft textarea { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 5px; resize: vertical;
         border: 1px solid #607d78; background: #111b24; color: inherit; font: inherit; }
       .moba-starter-dialog h2 { margin: 0 0 12px; font-size: 22px; }
