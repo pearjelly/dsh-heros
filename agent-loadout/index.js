@@ -2100,16 +2100,23 @@ export async function apply(ctx) {
       ...(savedComparison ? [savedComparison.standardSessionId, savedComparison.evidenceSessionId] : [])]) }))
   }
 
-  async function observedWebPilotPlan({ webPilotOrigin, presetId }, signal) {
+  function matchedPersonalWebPilotPlan({ webPilotOrigin, presetId }, task) {
+    if (task?.binding.arm === webPilotOrigin.arm && task.binding.presetId === presetId) {
+      return { binding: task.binding, personalOrigin: webPilotPersonalLineage(task) }
+    }
+  }
+
+  function observedPersonalWebPilotPlanRun(plan, pair) {
+    const run = pair?.find(item => item.sessionId === plan.webPilotOrigin.sessionId)
+    const matched = matchedPersonalWebPilotPlan(plan, webPilotPersonalPlanSource(run?.observed))
+    if (matched) return { ...matched, view: run.observed.view }
+  }
+
+  async function observedWebPilotPlan(plan, signal) {
+    const { webPilotOrigin, presetId } = plan
     if (!webPilotOrigin) return
     const { sessionId, arm, received, personal } = webPilotOrigin
-    if (personal) {
-      const task = await readWebPilotPersonalPlanSource(sessionId, signal)
-      if (task?.binding.arm === arm && task.binding.presetId === presetId) {
-        return { binding: task.binding, personalOrigin: webPilotPersonalLineage(task) }
-      }
-      return
-    }
+    if (personal) return matchedPersonalWebPilotPlan(plan, await readWebPilotPersonalPlanSource(sessionId, signal))
     const result = await inspectWebSourcePractice({ sessionId }, signal)
     const matches = run => run.binding.arm === arm && run.binding.presetId === presetId
     if (received) {
@@ -2139,9 +2146,7 @@ export async function apply(ctx) {
     const unavailable = '这份方案的实测来源已不可查看。'
     if (!origin?.personal || !origin.comparison) throw new Error(unavailable)
     const pair = await verifiedSavedWebPilotPersonalPair(origin.comparison, signal)
-    const selected = pair?.find(run => run.sessionId === origin.sessionId)
-    const task = webPilotPersonalPlanSource(selected?.observed)
-    if (!task || task.binding.arm !== origin.arm || task.binding.presetId !== plan.presetId) throw new Error(unavailable)
+    if (!observedPersonalWebPilotPlanRun(plan, pair)) throw new Error(unavailable)
     const comparison = await webPilotPersonalPairResult(pair, signal, { allowSave: false })
     buildPlans.read(id, revision)
     signal?.throwIfAborted()
@@ -2218,26 +2223,49 @@ export async function apply(ctx) {
   function oppositeWebPilotPlan(source, candidate) {
     const origin = source.webPilotOrigin
     const alternative = candidate.webPilotOrigin
-    return Boolean(origin && !origin.received && !origin.personal && alternative && !alternative.received && !alternative.personal &&
-      alternative.sessionId === origin.sessionId && alternative.arm !== origin.arm)
+    if (!origin || !alternative || origin.received || alternative.received || origin.arm === alternative.arm) return false
+    if (origin.personal || alternative.personal) {
+      const pair = origin.comparison
+      const other = alternative.comparison
+      return Boolean(pair && other && pair.standardSessionId === other.standardSessionId &&
+        pair.evidenceSessionId === other.evidenceSessionId)
+    }
+    return alternative.sessionId === origin.sessionId
+  }
+
+  function webPilotPlanRunSummary({ reads, choice, choiceRecorded, questionAsked, deliverables }) {
+    return { reads: reads.map(({ status }) => ({ status })), ...(choice && { choice }),
+      ...(choiceRecorded && { choiceRecorded: true }), ...(questionAsked && { questionAsked: true }),
+      deliverablesCount: deliverables.length }
   }
 
   async function webPilotPlanOptions({ id, revision }, signal) {
     const source = buildPlans.read(id, revision)
     const observed = await observedWebPilotPlan(source, signal)
     await verifiedWebPilotBinding(observed?.binding, signal)
-    const opposite = observed.pair?.find(run => run.binding.arm !== observed.binding.arm)?.binding
-    const isPeer = plan => opposite && oppositeWebPilotPlan(source, plan) && plan.presetId === opposite.presetId
+    const candidates = buildPlans.list().filter(plan => oppositeWebPilotPlan(source, plan))
+    const { personal, comparison, received } = source.webPilotOrigin
+    const personalPair = personal && candidates.length ? await verifiedSavedWebPilotPersonalPair(comparison, signal) : undefined
+    const personalSource = personalPair && observedPersonalWebPilotPlanRun(source, personalPair)
+    const personalOpposite = personalPair?.find(run => run.observed.personal.binding.arm !== observed.binding.arm)
+    const opposite = personal
+      ? personalSource && webPilotPersonalPlanSource(personalOpposite?.observed)?.binding
+      : observed.pair?.find(run => run.binding.arm !== observed.binding.arm)?.binding
+    const isPeer = plan => opposite && plan.presetId === opposite.presetId && oppositeWebPilotPlan(source, plan) &&
+      (!personal || observedPersonalWebPilotPlanRun(plan, personalPair))
     const workspaceIds = await personalWorkspaceIds(signal)
-    const checkedPeer = buildPlans.list().some(isPeer) && await verifiedWebPilotBinding(opposite, signal).catch(() => {
+    const checkedPeer = candidates.some(isPeer) && await verifiedWebPilotBinding(opposite, signal).catch(() => {
       signal?.throwIfAborted()
       return null
     })
     buildPlans.read(id, revision)
     const peers = checkedPeer ? buildPlans.list().filter(isPeer) : []
-    const plans = [source, ...peers].map(({ id, revision, name, note, webPilotOrigin }) =>
-      ({ id, revision, planName: name, note, arm: webPilotOrigin.arm }))
-    return { selectedId: id, plans, workspaceIds, ...(source.webPilotOrigin.received && { received: true }) }
+    const plans = [source, ...peers].map(plan => {
+      const { id, revision, name, note, webPilotOrigin } = plan
+      const run = peers.length && personalPair && observedPersonalWebPilotPlanRun(plan, personalPair)
+      return { id, revision, planName: name, note, arm: webPilotOrigin.arm, ...(run && { observed: webPilotPlanRunSummary(run.view) }) }
+    })
+    return { selectedId: id, plans, workspaceIds, ...(received && { received: true }) }
   }
 
   async function openWebPilotPlan({ id, revision, sourceId, sourceRevision, workspaceId, launchId }, signal) {
@@ -2248,13 +2276,22 @@ export async function apply(ctx) {
     }
     if (source.webPilotOrigin.personal) {
       const read = async () => {
-        const observed = await observedWebPilotPlan(source, signal)
+        let observed
+        if (source === selected) {
+          observed = await observedWebPilotPlan(selected, signal)
+        } else {
+          const pair = await verifiedSavedWebPilotPersonalPair(source.webPilotOrigin.comparison, signal)
+          const origin = observedPersonalWebPilotPlanRun(source, pair)
+          await verifiedWebPilotBinding(origin?.binding, signal)
+          observed = observedPersonalWebPilotPlanRun(selected, pair)
+        }
+        buildPlans.read(sourceId, sourceRevision)
         buildPlans.read(id, revision)
         if (!observed?.personalOrigin) throw new Error(webPilotPersonalUnavailable)
         return observed
       }
       const observed = await read()
-      return openPersonalWebDraft({ workspaceId, launchId }, signal, ['plan-web-pilot', id, revision, id, revision],
+      return openPersonalWebDraft({ workspaceId, launchId }, signal, ['plan-web-pilot', sourceId, sourceRevision, id, revision],
         () => verifiedWebPilotBinding(observed.binding, signal), async () => {
           const current = await read()
           if (!isDeepStrictEqual(current.personalOrigin, observed.personalOrigin)) throw new Error(webSourceChanged)

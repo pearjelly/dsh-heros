@@ -1609,6 +1609,7 @@ window.__ModuleLoader__.load({
       const current = checked?.attempt === attempt && checked.language === language && checked.membership === membership ? checked : null
       const options = current?.options
       const selected = options?.plans.find(item => item.id === picked)
+      const observedPlans = options?.plans.some(item => item.observed)
       const available = options ? workspaces.filter(item => options.workspaceIds.includes(item.workspaceId)) : empty
       const workspace = available.find(item => item.workspaceId === workspaceId)
       const unavailable = '这份方案已更新或不可用。请从出装方案重新选择。'
@@ -1654,8 +1655,29 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const routes = options && h('fieldset', { className: 'moba-starter-routes', disabled: busy },
+        h('legend', null, t(observedPlans ? '同题实测方案' : '出装方案')),
+        options.plans.map((item, index) => {
+          const { observed } = item
+          const id = group + '-plan-' + index
+          return h('label', { className: 'moba-starter-route', key: item.id, 'data-picked': item.id === selected?.id },
+            h('input', { type: 'radio', name: group, value: item.id, checked: item.id === selected?.id,
+              ...(observed && { 'aria-labelledby': id + '-name ' + id + '-gear',
+                'aria-describedby': id + '-observed' + (item.note ? ' ' + id + '-note' : '') }),
+              onChange: () => { setPicked(item.id); setOpenError('') } }),
+            h('span', null, h('strong', { id: id + '-name' }, item.planName),
+              h('small', { id: id + '-gear' }, t(webPilotArms[item.arm].name)),
+              observed && h('span', { className: 'moba-web-plan-observed', id: id + '-observed' },
+                h('span', null, t('网页读取')), h(WebPilotPersonalReadSummary, {
+                  counts: webPilotPersonalReadCounts(observed.reads ?? empty), inline: true }),
+                h('span', null, t('实际选择')), h('span', { className: 'moba-web-pilot-pair-choice' }, webPilotPersonalChoice(observed)),
+                h('span', null, t('文件')), h('span', null, observed.deliverablesCount)),
+              item.note && h('small', { id: id + '-note' }, item.note)))
+        }))
+
       return h(InstallDialog, { title: t(webPlanTaskLabel),
-        className: 'moba-starter-dialog moba-web-source-dialog moba-web-personal-dialog moba-web-plan-dialog',
+        className: 'moba-starter-dialog moba-web-source-dialog moba-web-personal-dialog moba-web-plan-dialog' +
+          (observedPlans ? ' moba-web-plan-with-observed' : ''),
         initialFocus: '.moba-web-source-back', busy, dialogRef, onCancel,
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening.current) onCancel() }) },
         h('p', { className: 'moba-starter-note' }, t('在新草稿中粘贴要核对的链接，写下问题，再手动发送。')),
@@ -1663,14 +1685,7 @@ window.__ModuleLoader__.load({
         (openError || current?.error || options && !selected) && h('p', { className: 'moba-alert', role: 'alert' },
           openError || current?.error || t(unavailable)),
         h('form', { className: 'moba-web-personal-form', onSubmit: open },
-          options && h('fieldset', { className: 'moba-starter-routes', disabled: busy },
-            h('legend', null, t('出装方案')),
-            options.plans.map(item => h('label', { className: 'moba-starter-route', key: item.id, 'data-picked': item.id === selected?.id },
-              h('input', { type: 'radio', name: group, value: item.id, checked: item.id === selected?.id,
-                onChange: () => { setPicked(item.id); setOpenError('') } }),
-              h('span', null, h('strong', null, item.planName),
-                h('small', null, t(webPilotArms[item.arm].name)),
-                item.note && h('small', null, item.note))))),
+          observedPlans ? h('div', { className: 'moba-web-plan-cards' }, routes) : routes,
           options && h(WebPersonalWorkspaceFields, { available, workspace, busy,
             onChange: id => { setWorkspace(id); setOpenError('') },
             onAdded: () => retry(value => value + 1) }),
@@ -2348,10 +2363,11 @@ window.__ModuleLoader__.load({
       return counts
     }
 
-    function WebPilotPersonalReadSummary({ counts }) {
+    function WebPilotPersonalReadSummary({ counts, inline = false }) {
       const kinds = webPilotPersonalReadKinds.filter(kind => counts[kind])
-      return kinds.length ? h('ul', { className: 'moba-web-pilot-personal-read-summary' }, kinds.map(kind =>
-        h('li', { key: kind }, h('strong', null, counts[kind]), ' ', t(webPilotPersonalReadLabels[kind])))) : t('无读取记录')
+      return kinds.length ? h(inline ? 'span' : 'ul', { className: 'moba-web-pilot-personal-read-summary' }, kinds.map(kind =>
+        h(inline ? 'span' : 'li', { key: kind }, h(inline ? 'b' : 'strong', null, counts[kind]), ' ', t(webPilotPersonalReadLabels[kind]))))
+        : inline ? h('span', null, t('无读取记录')) : t('无读取记录')
     }
 
     function isWebPilotPersonalPair(value, sessionId, replaySessionId) {
@@ -14850,6 +14866,16 @@ window.__ModuleLoader__.load({
       .moba-web-plan-dialog .moba-starter-route { min-block-size: 44px; }
       .moba-web-plan-dialog .moba-starter-route small { white-space: pre-wrap; }
       .moba-web-plan-dialog :is(button, select):focus-visible { outline: 2px solid #9ed4ec; outline-offset: 2px; }
+      .moba-web-plan-observed { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 8px;
+        padding: 4px 6px; border-inline-start: 2px solid #607d78; background: #222e36; color: #e1eeea; font-size: 11px; }
+      .moba-web-plan-observed > span:nth-child(odd) { color: #cbe2dd; }
+      @media (min-height: 460px) {
+        .moba-web-plan-with-observed[open] { display: flex; flex-direction: column; overflow: clip; }
+        .moba-web-plan-with-observed > :is(h2, p) { flex: none; }
+        .moba-web-plan-with-observed .moba-web-personal-form { display: flex; flex-direction: column; min-block-size: 0; }
+        .moba-web-plan-with-observed .moba-web-personal-form > :not(.moba-web-plan-cards) { flex: none; }
+        .moba-web-plan-cards { min-block-size: 0; overflow: auto; padding: 3px; scroll-padding-block: 3px; }
+      }
       .moba-web-source-result, .moba-web-pilot-result { grid-template-columns: minmax(0, 1fr); }
       .moba-web-source-result .moba-lighthouse-anchor-actions, .moba-web-pilot-result .moba-lighthouse-anchor-actions {
         justify-content: flex-start;
