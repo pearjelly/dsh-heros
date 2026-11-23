@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { link, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, sep } from 'node:path'
+import { basename, dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { englishStrings, englishText, localizeDisplay } from './localization.js'
@@ -54,6 +54,7 @@ const webSourceUnavailable = '本机暂时无法装配原生网页读取。'
 const webSourceDirectory = 'web-source-practice'
 const webSourceChanged = '试玩出装已变化，请重新核对。'
 const webPilotReplayChanged = '无法核对原局的题目或网页来源，请返回原局。'
+const webPilotReplayUnavailable = '这局复赛已变化，请重新核对。'
 const webPilotPersonalUnavailable = '请从已核对的两局对照里选择一套出装。'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
@@ -1612,17 +1613,23 @@ export async function apply(ctx) {
     return ['standard', 'evidence'].includes(result?.binding?.arm) && result.view.status === 'complete' && result.view.verified
   }
 
-  async function verifiedWebPilotPair(sessionId, result, signal) {
+  function matchesWebPilotReplay(original, task, binding) {
+    return ['standard', 'evidence'].includes(binding?.arm) && original.task === task &&
+      original.binding.arm !== binding.arm && original.binding.workspaceId !== binding.workspaceId &&
+      original.binding.id === binding.id && original.binding.sourceId === binding.sourceId
+  }
+
+  async function verifiedWebPilotPair(sessionId, result, signal, parent) {
     if (!completedWebPilot(result)) return
     const { binding, view, replayOf } = result
     if (!replayOf || replayOf === sessionId) return
-    const original = await inspectWebSourcePractice({ sessionId: replayOf }, signal).catch(() => {
+    if (parent && parent.sessionId !== replayOf) return
+    const original = parent ?? await inspectWebSourcePractice({ sessionId: replayOf }, signal).catch(() => {
       signal?.throwIfAborted()
       return null
     })
-    if (!completedWebPilot(original) || original.task !== result.task || original.view.url !== view.url ||
-      original.binding.arm === binding.arm || original.binding.workspaceId === binding.workspaceId ||
-      original.binding.id !== binding.id || original.binding.sourceId !== binding.sourceId) return
+    if (!completedWebPilot(original) || original.view.url !== view.url ||
+      !matchesWebPilotReplay(original, result.task, binding)) return
     return [{ ...original, sessionId: replayOf }, { ...result, sessionId }]
   }
 
@@ -1632,11 +1639,92 @@ export async function apply(ctx) {
     return { url: pair[1].view.url, runs }
   }
 
-  async function readWebPilot({ sessionId }, signal) {
+  function webPilotWorkspace(workspace, root, sessionId) {
+    return heroAlternateSessionId.test(sessionId) && workspace?.path === join(root, sessionId) &&
+      workspace.sessionIds.includes(sessionId)
+  }
+
+  async function webPilotReplayParent(sessionId, signal) {
+    const original = await inspectWebSourcePractice({ sessionId }, signal)
+    if (!completedWebPilot(original)) throw new Error(webPilotReplayUnavailable)
+    const registry = ctx.get('workspaceRegistry')
+    const root = join(await realpath(directory), webSourceDirectory)
+    if (!webPilotWorkspace(registry?.get(original.binding.workspaceId), root, sessionId)) {
+      throw new Error(webPilotReplayUnavailable)
+    }
+    return { original: { ...original, sessionId }, registry, root }
+  }
+
+  async function readWebPilotReplay(sessionId, { original, registry, root }, signal) {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId) || sessionId === original.sessionId) return
+    const saved = await planTaskSession(sessionId, signal)
+    const { launch, header } = saved ?? {}
+    const binding = launch?.webSourcePractice
+    const workspace = binding && registry.get(binding.workspaceId)
+    if (launch?.webPilotReplayOf !== original.sessionId || !matchesWebPilotReplay(original, launch.task, binding) ||
+      !webPilotWorkspace(workspace, root, sessionId) || header.cwd !== workspace.path ||
+      header.agentPreset !== binding.presetId || header.parentSession) return
+    const run = { sessionId, arm: binding.arm, openedAt: header.createdAt }
+    if (!saved.started) {
+      if (saved.presetChanged || await realpath(workspace.path).catch(() => null) !== workspace.path) return
+      return { run: { ...run, status: 'waiting' } }
+    }
+    const result = await inspectWebSourcePractice({ sessionId }, signal)
+    const pair = await verifiedWebPilotPair(sessionId, result, signal, original)
+    if (pair) {
+      const { choice, deliverables } = result.view
+      return { run: { ...run, status: 'complete', ...(choice && { choice }), deliverables }, pair }
+    }
+  }
+
+  async function webPilotReplays({ sessionId, before }, signal) {
+    let previous
+    if (before !== undefined) {
+      const fields = typeof before === 'string' && /^(\d{1,16}):(session-a076[a-f0-9]{28})$/.exec(before)
+      if (!fields || !Number.isSafeInteger(Number(fields[1]))) throw new Error(webPilotReplayUnavailable)
+      previous = { createdAt: Number(fields[1]), id: fields[2] }
+    }
+    const reference = await webPilotReplayParent(sessionId, signal)
+    const { registry, root } = reference
+    const order = (a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)
+    const candidates = registry.list().flatMap(workspace => {
+      const id = basename(workspace.path)
+      if (id !== sessionId && webPilotWorkspace(workspace, root, id)) {
+        const candidate = { id, createdAt: Date.parse(workspace.createdAt) || 0 }
+        if (!previous || order(candidate, previous) > 0) return [candidate]
+      }
+      return []
+    }).sort(order)
+    const runs = []
+    const limit = Math.min(candidates.length, 48)
+    let inspected = 0
+    while (inspected < limit && runs.length < 12) {
+      signal?.throwIfAborted()
+      const batch = candidates.slice(inspected, inspected + Math.min(6, 12 - runs.length, limit - inspected))
+      const results = await Promise.all(batch.map(({ id }) => readWebPilotReplay(id, reference, signal).catch(() => {
+        signal?.throwIfAborted()
+      })))
+      runs.push(...results.filter(Boolean).map(result => result.run))
+      inspected += batch.length
+    }
+    const last = candidates[inspected - 1]
+    return { runs, ...(last && inspected < candidates.length && { nextBefore: `${last.createdAt}:${last.id}` }) }
+  }
+
+  async function readWebPilot({ sessionId, originalSessionId }, signal) {
+    if (originalSessionId !== undefined) {
+      const reference = await webPilotReplayParent(originalSessionId, signal)
+      const replay = await readWebPilotReplay(sessionId, reference, signal)
+      if (!replay) throw new Error(webPilotReplayUnavailable)
+      return replay.pair
+        ? { ...replay.pair[1].view, sessionId, comparison: webPilotComparison(replay.pair) }
+        : replay.run
+    }
     const result = await inspectWebSourcePractice({ sessionId }, signal)
     if (!result?.binding?.arm) return null
     const pair = await verifiedWebPilotPair(sessionId, result, signal)
-    return pair ? { ...result.view, comparison: webPilotComparison(pair) } : result.view
+    return { ...result.view, ...(completedWebPilot(result) && { canReviewReplays: true }),
+      ...(pair && { comparison: webPilotComparison(pair) }) }
   }
 
   async function verifiedWebSourceLoadout(sessionId, signal) {
@@ -7785,6 +7873,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-pilot-preview') value = await previewWebPilot(selection, english, request.signal)
         else if (selection?.action === 'web-pilot-open') value = await openReviewedTask(selection, english, request.signal, 'web-pilot')
         else if (selection?.action === 'web-pilot-result') value = await readWebPilot(selection, request.signal)
+        else if (selection?.action === 'web-pilot-replays') value = await webPilotReplays(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-options') value = await webPilotPersonalOptions(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-open') value = await openWebSourcePersonal(selection, request.signal, 'web-pilot-personal')
         else if (selection?.action === 'web-pilot-plan-save') {

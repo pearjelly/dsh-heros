@@ -1,7 +1,7 @@
 window.__ModuleLoader__.load({
   id: 'dsh-agent-loadout',
   factory(require) {
-    const { createElement: h, createContext, useContext, Fragment, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } = require('react')
+    const { createElement: h, createContext, useContext, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } = require('react')
     const WorkspaceSetupContext = createContext(null)
     const panelId = 'agent-loadout'
     let activeLanguage = { getSnapshot: () => 'zh', subscribe: () => () => {} }
@@ -1135,8 +1135,9 @@ window.__ModuleLoader__.load({
         h(EquipmentPairings, { key: item.id, item, presets, request, onShowHero, onOpenSource, onPreview: onPreviewPairing }))
     }
 
-    function InstallDialog({ title, children, busy, onCancel, className = '', initialFocus, onKeyDown }) {
-      const ref = useRef(null)
+    function InstallDialog({ title, children, busy, onCancel, className = '', initialFocus, onKeyDown, dialogRef }) {
+      const ownRef = useRef(null)
+      const ref = dialogRef ?? ownRef
       const titleId = useId()
       useEffect(() => {
         if (!ref.current.open) ref.current.showModal()
@@ -1796,16 +1797,20 @@ window.__ModuleLoader__.load({
               t(busy ? '正在保存…' : '保存方案')))))
     }
 
-    function WebPilotComparison({ sessionId, comparison, request, workspaces, savedPlan, onCancel, onVisit }) {
+    function WebPilotComparison({ sessionId, comparison, request, workspaces, savedPlan, onCancel, onVisit, dialogRef }) {
       const [action, setAction] = useState(null)
       function closeAction() {
         setAction(null)
         requestAnimationFrame(() => action.trigger.focus())
       }
+      function back() {
+        dialogRef?.current?.close()
+        onCancel()
+      }
       return h(Fragment, null,
         h(InstallDialog, { title: t(savedPlan ? '此方案保存自这局' : '对照两局'), className: 'moba-starter-dialog moba-web-pilot-comparison',
-          onCancel, initialFocus: '.moba-web-pilot-comparison-back',
-          onKeyDown: event => closeDialogOnEscape(event, onCancel) },
+          dialogRef, onCancel: back, initialFocus: '.moba-web-pilot-comparison-back',
+          onKeyDown: event => closeDialogOnEscape(event, back) },
           savedPlan && h('p', { className: 'moba-plan-note' }, h('strong', null, savedPlan.name)),
           h('a', { href: comparison.url, target: '_blank', rel: 'noopener noreferrer' }, t('查看发布方清单')),
           h('div', { className: 'moba-lighthouse-arms' }, comparison.runs.map((run, index) => {
@@ -1828,11 +1833,141 @@ window.__ModuleLoader__.load({
                   } }, t('保存为方案'))))
           })),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
-            h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-comparison-back', onClick: onCancel },
+            h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-comparison-back', onClick: back },
               t(savedPlan ? '返回方案库' : '返回')))),
         action?.type === 'personal' && h(WebSourcePersonalDraft, { sessionId, arm: action.run.arm, request, workspaces,
           onCancel: closeAction, onOpen: onVisit }),
         action?.type === 'save' && h(WebPilotPlanSave, { sessionId, run: action.run, request, onCancel: closeAction }))
+    }
+
+    const webPilotReplaysLabel = '查看复赛'
+    const webPilotReplayChanged = '这局复赛已变化，请重新核对。'
+
+    function WebPilotReplayList({ sessionId, request, workspaces, onCancel, onOpen }) {
+      const language = useLanguage()
+      const [query, setQuery] = useState({})
+      const [state, setState] = useState(null)
+      const [reading, setReading] = useState('')
+      const [readError, setReadError] = useState(null)
+      const [comparison, setComparison] = useState(null)
+      const pending = useRef(null)
+      const visiting = useRef(false)
+      const back = useRef(null)
+      const listDialog = useRef(null)
+      const comparisonDialog = useRef(null)
+      const returnFocus = useRef(null)
+      const current = state?.language === language ? state : null
+      const loading = current?.query !== query
+      const nextBefore = current?.nextBefore !== query.before ? current?.nextBefore : undefined
+      const clock = new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'medium' })
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'web-pilot-replays'
+        request(action, { action, sessionId, before: query.before }, abort.signal, language).then(value => {
+          if (abort.signal.aborted) return
+          setState(previous => {
+            const earlier = query.before && previous?.language === language ? previous.runs : empty
+            const byId = new Map([...earlier, ...value.runs].map(run => [run.sessionId, run]))
+            return { query, language, runs: [...byId.values()], nextBefore: value.nextBefore }
+          })
+        }).catch(reason => {
+          if (!abort.signal.aborted) setState(previous => ({ query, language,
+            runs: previous?.language === language ? previous.runs : empty,
+            nextBefore: previous?.language === language ? previous.nextBefore : undefined, error: reason.message }))
+        })
+        return () => abort.abort()
+      }, [request, sessionId, language, query])
+      useEffect(() => () => pending.current?.abort(), [])
+      useLayoutEffect(() => {
+        if (comparison || !returnFocus.current) return
+        const trigger = returnFocus.current
+        returnFocus.current = null
+        const focusTarget = trigger.isConnected ? trigger : back.current
+        focusTarget?.focus()
+      }, [comparison])
+
+      function closeList() {
+        comparisonDialog.current?.close()
+        listDialog.current?.close()
+        onCancel()
+      }
+
+      function visit(targetId) {
+        if (visiting.current) return
+        visiting.current = true
+        if (targetId === sessionId) closeList()
+        else onOpen(targetId)
+      }
+
+      async function openReplay(run, trigger) {
+        if (pending.current || visiting.current) return
+        const abort = pending.current = new AbortController()
+        setReading(run.sessionId)
+        setReadError(null)
+        try {
+          const action = 'web-pilot-result'
+          const result = await request(action, { action, sessionId: run.sessionId, originalSessionId: sessionId }, abort.signal, language)
+          if (abort.signal.aborted) return
+          if (result?.sessionId !== run.sessionId || result.arm !== run.arm || result.status !== run.status) {
+            throw new Error(t(webPilotReplayChanged))
+          }
+          if (run.status === 'waiting') {
+            visit(run.sessionId)
+            return
+          }
+          const [original, replay] = result.comparison?.runs ?? empty
+          if (original?.sessionId !== sessionId || replay?.sessionId !== run.sessionId) throw new Error(t(webPilotReplayChanged))
+          setComparison({ sessionId: run.sessionId, value: result.comparison, trigger })
+        } catch (reason) {
+          if (!abort.signal.aborted) setReadError({ sessionId: run.sessionId, message: reason.message })
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted && !visiting.current) setReading('')
+        }
+      }
+
+      function closeComparison() {
+        returnFocus.current = comparison.trigger
+        setComparison(null)
+      }
+
+      return h(Fragment, null,
+        h(InstallDialog, { title: t(webPilotReplaysLabel),
+          className: 'moba-starter-dialog moba-web-source-dialog moba-web-pilot-replay-list',
+          dialogRef: listDialog, initialFocus: '.moba-web-pilot-replays-back', onCancel: closeList,
+          onKeyDown: event => closeDialogOnEscape(event, closeList) },
+          current?.runs.length > 0 && h('ul', { className: 'moba-history-list' }, current.runs.map(run => {
+            const complete = run.status === 'complete'
+            const opened = new Date(run.openedAt)
+            const hasDate = Number.isFinite(opened.getTime())
+            return h('li', { className: 'moba-history-entry', key: run.sessionId },
+              h('header', null, h('h3', null, t(webPilotArms[run.arm].name)),
+                hasDate && h('time', { dateTime: opened.toISOString() }, clock.format(opened))),
+              h('p', null, t(complete ? '已完成' : '等待发送任务')),
+              complete && h(WebPilotOutcome, { view: run, complete }),
+              readError?.sessionId === run.sessionId && h('p', { className: 'moba-alert', role: 'alert' }, readError.message),
+              reading === run.sessionId && h('p', { role: 'status' }, t('正在核对实战来源…')),
+              h('div', { className: 'moba-history-card-actions' },
+                readError?.sessionId === run.sessionId && h('button', { type: 'button', className: 'moba-roster-open',
+                  disabled: loading, onClick: () => { setReadError(null); setQuery({}) } }, t('重新核对')),
+                h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': complete ? 'dialog' : undefined,
+                  'aria-disabled': Boolean(reading), onClick: event => openReplay(run, event.currentTarget) },
+                  t(complete ? '查看对照' : '继续草稿'))))
+          })),
+          loading && h('p', { className: 'moba-empty', role: 'status' }, t('正在读取复赛…')),
+          !loading && current.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error),
+          !loading && !current.error && !current.runs.length && h('p', { className: 'moba-empty' },
+            t(nextBefore ? '这页没有匹配项，仍有更早的记录可查。' : '还没有可继续或回看的复赛。')),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            !loading && current?.error && h('button', { type: 'button', className: 'moba-roster-open',
+              onClick: () => setQuery({ before: query.before }) }, t('重试')),
+            nextBefore && h('button', { type: 'button', className: 'moba-roster-open', disabled: loading || Boolean(current.error),
+              onClick: () => setQuery({ before: nextBefore }) }, t('加载更多记录')),
+            h('button', { type: 'button', ref: back, className: 'moba-roster-open moba-web-pilot-replays-back',
+              onClick: closeList }, t('返回')))),
+        comparison && h(WebPilotComparison, { sessionId: comparison.sessionId, comparison: comparison.value, request, workspaces,
+          dialogRef: comparisonDialog, onCancel: closeComparison, onVisit: visit }))
     }
 
     function WebPilotPracticeResult({ sessionId, arm, request, workspaces, onOpen, reportId, reporting, onReport }) {
@@ -1841,8 +1976,11 @@ window.__ModuleLoader__.load({
       const [attempt, retry] = useState(0)
       const [replayOpen, setReplayOpen] = useState(false)
       const [comparisonOpen, setComparisonOpen] = useState(false)
+      const [replayListOpen, setReplayListOpen] = useState(false)
       const replayTrigger = useRef(null)
       const comparisonTrigger = useRef(null)
+      const replayListTrigger = useRef(null)
+      const returnFromReplayList = useRef(false)
       const current = state?.language === language && state.attempt === attempt ? state : null
       const view = current?.view
 
@@ -1863,6 +2001,11 @@ window.__ModuleLoader__.load({
         load()
         return () => { abort.abort(); clearTimeout(timer) }
       }, [request, sessionId, language, attempt])
+      useLayoutEffect(() => {
+        if (replayListOpen || !returnFromReplayList.current) return
+        returnFromReplayList.current = false
+        replayListTrigger.current?.focus()
+      }, [replayListOpen])
 
       const complete = view?.status === 'complete'
       const unavailable = view?.status === 'unavailable'
@@ -1871,16 +2014,23 @@ window.__ModuleLoader__.load({
       const alternateArm = currentArm === 'standard' ? 'evidence' : 'standard'
       const armName = webPilotArms[currentArm]?.name
       const canReplay = complete && armName && view.sampleLanguage
+      const canReviewReplays = view?.canReviewReplays === true
       const comparison = complete && view.verified ? view.comparison : null
+      const startReplay = canReplay && h('button', { type: 'button', ref: replayTrigger, className: 'moba-settlement-button',
+        'aria-haspopup': 'dialog', onClick: () => setReplayOpen(true) }, t('换另一套出装再试'))
       function closeComparison() {
         setComparisonOpen(false)
         requestAnimationFrame(() => comparisonTrigger.current?.focus())
       }
       return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-result', tabIndex: 0, 'aria-label': t(webPilotTitle) },
         h('div', null, h('strong', null, t(webPilotTitle)), armName && h('span', null, t(armName))),
-        comparison && h('div', null,
-          h('button', { type: 'button', ref: comparisonTrigger, className: 'moba-settlement-button moba-web-pilot-compare',
-            'aria-haspopup': 'dialog', onClick: () => setComparisonOpen(true) }, t('对照两局'))),
+        (comparison || canReviewReplays) && h('div', { className: 'moba-web-pilot-primary-actions' },
+          comparison && h('button', { type: 'button', ref: comparisonTrigger, className: 'moba-settlement-button moba-web-pilot-compare',
+            'aria-haspopup': 'dialog', onClick: () => setComparisonOpen(true) }, t('对照两局')),
+          canReviewReplays && h('button', { type: 'button', ref: replayListTrigger,
+            className: 'moba-settlement-button moba-web-pilot-review', 'data-primary': !comparison || undefined,
+            'aria-haspopup': 'dialog', onClick: () => setReplayListOpen(true) }, t(webPilotReplaysLabel)),
+          canReviewReplays && !comparison && startReplay),
         current?.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
           h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重新核对'))),
         unavailable && h('p', null, t('这次任务或出装已变化，无法核对本局。')),
@@ -1895,8 +2045,14 @@ window.__ModuleLoader__.load({
             t('查看发布方清单') + ' · v' + view.version + ' · DSH ' + view.hostVersion),
           h('button', { type: 'button', className: 'moba-settlement-button', onClick: onReport,
             'aria-controls': reportId, 'aria-expanded': reporting }, t('查看对局战报')),
-          canReplay && h('button', { type: 'button', ref: replayTrigger, className: 'moba-settlement-button',
-            'aria-haspopup': 'dialog', onClick: () => setReplayOpen(true) }, t('换另一套出装再试'))),
+          (!canReviewReplays || comparison) && startReplay),
+        canReviewReplays && replayListOpen && h(WebPilotReplayList, { sessionId, request, workspaces, onCancel: () => {
+          returnFromReplayList.current = true
+          setReplayListOpen(false)
+        }, onOpen: targetId => {
+          setReplayListOpen(false)
+          onOpen(targetId)
+        } }),
         comparison && comparisonOpen && h(WebPilotComparison, { sessionId, comparison, request, workspaces, onCancel: closeComparison, onVisit: targetId => {
           if (targetId === sessionId) closeComparison()
           else {
@@ -13190,10 +13346,11 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor > .moba-task-pending { align-items: center; gap: 4px 7px; }
       .moba-web-source-dialog .moba-market-actions { flex-wrap: wrap; }
       .moba-web-source-dialog .moba-market-actions button, .moba-web-source-result button, .moba-web-pilot-result button,
-      .moba-web-pilot-comparison button {
+      .moba-web-pilot-comparison button, .moba-web-pilot-replay-list button {
         min-block-size: 44px; white-space: normal;
       }
-      .moba-web-personal-dialog, .moba-web-pilot-dialog, .moba-web-pilot-comparison, .moba-web-pilot-save { box-sizing: border-box; }
+      .moba-web-personal-dialog, .moba-web-pilot-dialog, .moba-web-pilot-comparison, .moba-web-pilot-save,
+      .moba-web-pilot-replay-list { box-sizing: border-box; }
       .moba-web-detail-practice { display: flex; flex-wrap: wrap; gap: 6px; }
       .moba-web-detail-practice button { min-block-size: 44px; max-inline-size: 100%; text-align: start;
         white-space: normal; overflow-wrap: anywhere; }
@@ -13217,9 +13374,12 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-result .moba-settlement-button { min-inline-size: 0; padding: 5px 8px;
         border: 1px solid #607d78; background: #162229; color: #e1eeea; font-size: 12px; overflow-wrap: anywhere; }
       .moba-web-pilot-result .moba-settlement-button:hover { border-color: #a4c7bf; }
-      .moba-web-pilot-result .moba-web-pilot-compare { background: #392e20; border-color: #ad8c52; color: #ffe3ab; }
+      .moba-web-pilot-result :is(.moba-web-pilot-compare, .moba-web-pilot-review[data-primary]) {
+        background: #392e20; border-color: #ad8c52; color: #ffe3ab;
+      }
       .moba-web-pilot-result:focus-visible, .moba-web-pilot-result :is(button, a):focus-visible,
       .moba-web-pilot-comparison :is(button, a):focus-visible,
+      .moba-web-pilot-replay-list button:focus-visible,
       .moba-web-pilot-save :is(button, input, textarea, [role="status"]):focus-visible { outline: 2px solid #9ed4ec; outline-offset: 2px; }
       .moba-web-pilot-comparison .moba-lighthouse-arms { margin: 6px 0 0; }
       .moba-web-pilot-comparison .moba-lighthouse-arm { gap: 5px; align-content: start; }
@@ -13235,9 +13395,11 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-save .moba-plan-fields { padding: 10px 0 0; }
       .moba-web-pilot-save .moba-plan-fields :is(input, textarea) { box-sizing: border-box; min-block-size: 44px; }
       .moba-web-pilot-save [role="status"] { overflow-wrap: anywhere; }
+      .moba-web-pilot-replay-list .moba-history-entry button { max-inline-size: 100%; overflow-wrap: anywhere; }
       @media (max-width: 600px) {
         .moba-web-pilot-result { box-sizing: border-box; align-content: start;
           max-block-size: max(88px, calc(100dvh - 444px)); overflow: auto; scroll-padding-block: 8px; }
+        .moba-web-pilot-result .moba-web-pilot-primary-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .moba-web-pilot-result .moba-lighthouse-anchor-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .moba-web-pilot-result .moba-lighthouse-anchor-actions a { grid-column: 1 / -1; }
       }
