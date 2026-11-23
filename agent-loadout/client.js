@@ -2926,16 +2926,25 @@ window.__ModuleLoader__.load({
       review: '只测交付前复核',
     }
     const lighthouseCarryModeLabels = { ...lighthouseReplayModeLabels, review: '仅交付前复核' }
+    const lighthousePracticeDecisions = {
+      'evidence-review': '缺证时，先决定补证、降级或暂缓。',
+      review: '草稿就绪时，确认交付或退回修改。',
+    }
 
-    function LighthouseLoadoutChoices({ heading, options, picked, available, disabled, onChoose }) {
+    function LighthouseLoadoutChoices({ heading, options, descriptions, picked, available, disabled, onChoose }) {
       const group = useId()
       return h('fieldset', { className: 'moba-starter-routes moba-lighthouse-mode-options', disabled },
         h('legend', null, t(heading)),
-        Object.entries(options).map(([value, label]) =>
-          h('label', { className: 'moba-starter-route', key: value, 'data-picked': picked === value },
+        Object.entries(options).map(([value, label]) => {
+          const name = group + '-' + value
+          const description = descriptions?.[value]
+          return h('label', { className: 'moba-starter-route', key: value, 'data-picked': picked === value },
             h('input', { type: 'radio', name: group, value, checked: picked === value, disabled: available && !available.includes(value),
+              ...(description && { 'aria-labelledby': name, 'aria-describedby': name + '-detail' }),
               onChange: () => onChoose(value) }),
-            h('span', null, h('strong', null, t(label))))))
+            h('span', null, h('strong', { id: description ? name : undefined }, t(label)),
+              description && h('small', { id: name + '-detail' }, t(description))))
+        }))
     }
     const lighthousePendingTitle = '灯塔试玩记录'
     const lighthousePendingUnavailable = '找不到这页灯塔试玩记录。'
@@ -3045,7 +3054,7 @@ window.__ModuleLoader__.load({
       const returningToRuns = useRef(false)
       const combined = step === 'combined'
       const showRuns = step === 'checking' || step === 'pending'
-      const requestedMode = combined && startCombined ? mode : undefined
+      const requestedMode = combined ? mode : undefined
       const state = checked?.attempt === attempt && checked.language === language && checked.combined === combined &&
         checked.requestedMode === requestedMode ? checked : null
       const preview = state?.value
@@ -3062,7 +3071,7 @@ window.__ModuleLoader__.load({
           .then(value => {
             if (abort.signal.aborted) return
             if (combined && (typeof value?.task !== 'string' || !value.task || typeof value.material !== 'string' || !value.material ||
-              value.mode !== (requestedMode ?? 'evidence-review') || !value.token && !value.reason)) {
+              value.mode !== requestedMode || !value.token && !value.reason)) {
               throw new Error(t('本机暂时无法装配这套出装。'))
             }
             setChecked({ value, language, attempt, combined, requestedMode })
@@ -3190,13 +3199,8 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-lighthouse-combined-fields' },
             h('p', { className: 'moba-lighthouse-note', ref: combinedIntro, tabIndex: -1, 'data-review-start-intro': true },
               t('调度说有两节备用电池，补给卡能证明吗？')),
-            startCombined && h(LighthouseLoadoutChoices, { heading: '试玩出装', options: lighthouseReplayModeLabels, picked: mode,
-              disabled: opening, onChoose: chooseMode }),
-            h('ul', { className: 'moba-lighthouse-results moba-lighthouse-combined-choices' },
-              mode !== 'review' && h('li', null, h('div', null, h('strong', null, t('证据核验')),
-                h('small', null, t('证据不足时，可以选择补证、降级推荐或暂缓。')))),
-              h('li', null, h('div', null, h('strong', null, t('交付前复核')),
-                h('small', null, t('草稿就绪时，确认交付或退回修改。'))))),
+            h(LighthouseLoadoutChoices, { heading: '试玩出装', options: lighthouseReplayModeLabels, descriptions: lighthousePracticeDecisions,
+              picked: mode, disabled: opening, onChoose: chooseMode }),
             preview && h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看试玩任务')),
               h(InstallFacts, { facts: [[t('材料文件'), preview.material]] }),
               h('label', { className: 'moba-lighthouse-task' }, t('试玩任务'),
@@ -16095,7 +16099,6 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-mode-options { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-block: 5px 8px; }
       .moba-lighthouse-mode-options .moba-starter-route { min-block-size: 44px; align-items: center; padding: 6px; }
       .moba-lighthouse-mode-options .moba-starter-route strong { font-size: 12px; }
-      .moba-lighthouse-combined-choices li { overflow-wrap: anywhere; }
       .moba-lighthouse-replay-heading { margin-block: 7px 4px; }
       .moba-lighthouse-combined-start summary { display: list-item; align-content: center; min-block-size: 44px; }
       @media (max-width: 390px) {
