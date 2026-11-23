@@ -1500,6 +1500,12 @@ export async function apply(ctx) {
     return view
   }
 
+  async function previewWebPilotReportTrial({ code }, signal) {
+    const { sampleLanguage, played } = decodeWebPilotReport(code)
+    const invitation = encodeWebPilotChallenge(sampleLanguage, played)
+    return { code: invitation, preview: await previewWebPilotChallenge({ code: invitation }, signal) }
+  }
+
   function pilotWebTool(scope) {
     const origins = ctx.get('agentLoadoutToolOrigins')
     if (webPilotTools.every(([name, module]) => {
@@ -7976,6 +7982,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-pilot-handoff-report') value = await shareWebPilotReport(selection, request.signal)
         else if (selection?.action === 'web-pilot-handoff-compare') value = await compareWebPilotReport(selection, request.signal)
         else if (selection?.action === 'web-pilot-handoff-find') value = await findWebPilotReports(selection, request.signal)
+        else if (selection?.action === 'web-pilot-handoff-trial-preview') value = await previewWebPilotReportTrial(selection, request.signal)
         else if (selection?.action === 'web-pilot-replays') value = await webPilotReplays(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-options') value = await webPilotPersonalOptions(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-open') value = await openWebSourcePersonal(selection, request.signal, 'web-pilot-personal')
