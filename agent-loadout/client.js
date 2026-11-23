@@ -1929,9 +1929,10 @@ window.__ModuleLoader__.load({
     const reviewHandoffDecisions = { confirm: '确认交付', revise: '退回修改', answered: '已作出复核选择' }
 
     function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal, onPersonalTask,
-      initialInput = '' }) {
+      initialInput = '', initialCompareCode }) {
       const language = useLanguage()
-      const [input, setInput] = useState(initialInput)
+      const [input, setInput] = useState(initialCompareCode ?? initialInput)
+      const [resumeCode, setResumeCode] = useState(initialCompareCode)
       const [result, setResult] = useState(null)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
@@ -1960,11 +1961,13 @@ window.__ModuleLoader__.load({
         const abort = new AbortController()
         setResult(null)
         setError('')
-        request(shareAction, { action: shareAction, comparisonId, arm: report.arm, ...(reviewKind && { kind: reviewKind }) }, abort.signal, language)
+        const action = resumeCode ? compareAction : shareAction
+        request(action, { action, comparisonId, arm: report.arm, ...(reviewKind && { kind: reviewKind }),
+          ...(resumeCode && { code: resumeCode }) }, abort.signal, language)
           .then(value => { if (!abort.signal.aborted) setResult(value) })
           .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
         return () => abort.abort()
-      }, [share, shareAction, request, comparisonId, report.arm, reviewKind, language])
+      }, [share, shareAction, compareAction, resumeCode, request, comparisonId, report.arm, reviewKind, language])
       useEffect(() => { if (!share && result?.friend) heading.current?.focus() }, [share, result])
       useEffect(() => {
         if (replyCodeVisible) {
@@ -2027,16 +2030,18 @@ window.__ModuleLoader__.load({
 
       function openRepeat(route) {
         if (pending.current || !result?.friend || !onOpenRepeat) return
+        const code = input.trim()
         if (!repeatLaunchIds.current.has(route)) {
           const bytes = crypto.getRandomValues(new Uint8Array(16))
           repeatLaunchIds.current.set(route, Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''))
         }
         return openRound(async signal => {
           const action = reviewKind ? 'lighthouse-review-report-replay' : 'lighthouse-evidence-repeat'
-          const opened = await request(action, { action, comparisonId, code: input.trim(), launchId: repeatLaunchIds.current.get(route),
+          const opened = await request(action, { action, comparisonId, code, launchId: repeatLaunchIds.current.get(route),
             ...(reviewKind && { kind: reviewKind, arm: report.arm, ...(route && { route }) }) },
             signal, language)
-          return () => onOpenRepeat(opened.sessionId, opened.task)
+          const replayPeer = reviewKind && route ? { code, comparisonId: opened.id, arm: route } : undefined
+          return () => onOpenRepeat(opened.sessionId, opened.task, replayPeer)
         }, setError)
       }
 
@@ -2059,6 +2064,7 @@ window.__ModuleLoader__.load({
 
       function changeInput(event) {
         setInput(event.target.value)
+        setResumeCode(undefined)
         clearFriend()
         if (reviewKind) repeatLaunchIds.current.clear()
         setError('')
@@ -4254,7 +4260,7 @@ window.__ModuleLoader__.load({
           manualNotice: '已选中任务文字，可以手动复制。', backLabel }))
     }
 
-    function RunComparisonAnchor({ kind, member, sessionId, request, onVisit, consumeDraft, putTask, draftStore, hasTurn, workspaces, onUse }) {
+    function RunComparisonAnchor({ kind, member, sessionId, request, onVisit, consumeDraft, putTask, draftStore, hasTurn, workspaces, onUse, replayPeer }) {
       const language = useLanguage()
       const config = comparisonKinds[kind]
       const lesson = member?.lesson === lighthouseRematchLesson
@@ -4285,6 +4291,8 @@ window.__ModuleLoader__.load({
       const availableDeliveryReview = lesson && kind === 'workspace' && member.canTryDeliveryReview === true
       const availableDirectRematch = member?.canTryDirectDelivery === true
       const reviewInvitation = member?.reviewInvitation
+      const replayPeerCode = reviewInvitation && kind === 'workspace' && replayPeer && replayPeer.comparisonId === member.id &&
+        replayPeer.arm === member.arm ? replayPeer.code : undefined
       const canCompareOwnReview = member?.canCompareOwnReview === true
       const evidenceReportCode = evidence && member.evidenceReportCode
       const taskPending = (evidence || reviewChallengeArm) && member.firstTaskPending && !hasTurn
@@ -4361,7 +4369,7 @@ window.__ModuleLoader__.load({
                   errorNotice: '这局的战报码暂时不可用。请查看练习记录后重试。' }),
                 h('button', { ref: reviewReportTrigger, type: 'button', 'aria-haspopup': 'dialog',
                   className: 'moba-settlement-button', 'data-review-handoff-report': true,
-                  onClick: () => setOpenReviewReport(true) }, t('对照好友战报'))))),
+                  onClick: () => setOpenReviewReport(true) }, t(replayPeerCode ? '再对照刚才的战报' : '对照好友战报'))))),
           h('div', { className: 'moba-lighthouse-anchor-actions' },
             availableDirectRematch && h('button', { ref: directRematchTrigger, type: 'button', 'aria-haspopup': 'dialog',
               className: 'moba-settlement-button', 'data-review-direct-preview': true,
@@ -4394,8 +4402,8 @@ window.__ModuleLoader__.load({
         openReviewInvitation && reviewInvitation && h(LighthouseChallengeShare, { comparisonId: member.id, request,
           reviewSource: { kind, arm: member.arm, played: reviewInvitation }, onBack: closeReviewInvitation }),
         openReviewReport && reviewInvitation && h(LighthouseHandoffReport, { report: { mode: 'compare', reviewKind: kind, arm: member.arm },
-          comparisonId: member.id, request, onBack: closeReviewReport,
-          onOpenRepeat: (next, task) => { setOpenReviewReport(false); onVisit(next, task) } }),
+          comparisonId: member.id, request, initialCompareCode: replayPeerCode, onBack: closeReviewReport,
+          onOpenRepeat: (next, task, peer) => { setOpenReviewReport(false); onVisit(next, task, peer) } }),
         lessonTaskSource && h(PersonalLoadoutTask, { source: lessonTaskSource, workspaces, request, onBack: closeLessonTask,
           backLabel: '返回练习会话', onVisit: (next, task) => { setLessonTaskSource(null); onVisit(next, task) } }),
         openEvidenceReplay && h(RematchEditor, { kind, comparisonId: member.id, arm: member.arm, sourceSessionId: sessionId, request,
@@ -8454,9 +8462,9 @@ window.__ModuleLoader__.load({
             const { trigger } = lighthouseRunsView
             setLighthouseRunsView(null)
             requestAnimationFrame(() => (trigger.current ?? challengeButton.current)?.focus())
-          }, onOpen: (sessionId, task) => {
+          }, onOpen: (sessionId, task, peer) => {
             setLighthouseRunsView(null)
-            if (task) openDraftSession(sessionId, task)
+            if (task) openDraftSession(sessionId, task, peer)
             else openSource(sessionId)
           } }),
           lighthouseCompareOpen && h(RunComparison, { request, onUse: adoptComparisonLoadout,
@@ -10454,7 +10462,7 @@ window.__ModuleLoader__.load({
     }
 
     function MatchEquipment({ sessionId, blankSession, request, openLobby, openContinuation, openDraftSession, openTaskResult, consumeTaskResult,
-      consumeTaskDraft, putTaskDraft, draftStore, send, workspaces, planSourceStore, returnToPlan }) {
+      consumeTaskDraft, putTaskDraft, draftStore, send, workspaces, planSourceStore, returnToPlan, replayPeer }) {
       const language = useLanguage()
       const planVisit = useSyncExternalStore(planSourceStore.subscribe, planSourceStore.getSnapshot)
       const id = useId()
@@ -10842,7 +10850,7 @@ window.__ModuleLoader__.load({
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft, hasTurn: Boolean(snapshot.running || receipt), onUse: reuseComparisonLoadout,
         }),
         snapshot?.workspaceComparison && h(WorkspaceComparisonAnchor, {
-          member: snapshot.workspaceComparison, sessionId, request, onVisit: openDraftSession,
+          member: snapshot.workspaceComparison, sessionId, request, onVisit: openDraftSession, replayPeer,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft, draftStore,
           hasTurn: Boolean(snapshot.running || receipt), workspaces, onUse: reuseComparisonLoadout,
         }),
@@ -12615,6 +12623,8 @@ window.__ModuleLoader__.load({
         let returnDraft
         let sessionTaskDraft
         let taskResultTarget
+        // Keep the latest explicit peer replay in this window only, separate from the native draft.
+        let replayPeer
         let planSourceVisit
         const planSourceEvents = new EventTarget()
         const planSourceStore = {
@@ -12673,9 +12683,10 @@ window.__ModuleLoader__.load({
             // Some hosts do not expose an input store for the current binding.
           }
         }
-        function openDraftSession(sessionId, task) {
+        function openDraftSession(sessionId, task, peer) {
           taskResultTarget = undefined
           sessionTaskDraft = task ? { sessionId, task } : undefined
+          if (peer) replayPeer = { ...peer, sessionId }
           ctx.uiWorkspace.openSession(sessionId)
         }
         function openTaskResult(sessionId) {
@@ -12758,6 +12769,7 @@ window.__ModuleLoader__.load({
             return id ? h(WorkspaceSetupContext.Provider, { value: workspaceSetup },
               h(MatchEquipment, { key: id, sessionId: id, blankSession, request, openLobby, send, openDraftSession, openTaskResult, consumeTaskResult,
                 consumeTaskDraft, putTaskDraft, draftStore, workspaces: ctx.workspaces.list, planSourceStore, returnToPlan,
+                replayPeer: replayPeer?.sessionId === id ? replayPeer : undefined,
                 openContinuation: next => ctx.uiWorkspace.openSession(next) })) : null
           }))
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
