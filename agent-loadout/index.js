@@ -820,7 +820,8 @@ export async function apply(ctx) {
 
   function publicBuildPlan({ evidenceOrigin, handoffOrigin, webPilotOrigin, webPilotSaveRequest, ...plan }) {
     return { ...plan, ...(evidenceOrigin && { hasEvidenceOrigin: true }), ...(handoffOrigin && { hasHandoffOrigin: true }),
-      ...(webPilotOrigin && { hasWebPilotOrigin: true }) }
+      ...(webPilotOrigin && { hasWebPilotOrigin: true }),
+      ...(webPilotOrigin?.received && { hasReceivedWebPilotOrigin: true }) }
   }
 
   function planCard(plan, art, unavailable) {
@@ -1938,12 +1939,12 @@ export async function apply(ctx) {
     const result = await inspectWebSourcePractice({ sessionId }, signal)
     const matches = run => run.binding.arm === arm && run.binding.presetId === presetId
     if (received) {
-      if (result?.receivedReport && matches(result)) return { binding: result.binding }
+      if (result?.receivedReport && matches(result)) return { binding: result.binding, run: { ...result, sessionId } }
       return
     }
     const pair = await verifiedWebPilotPair(sessionId, result, signal)
     const matched = pair?.find(matches)
-    if (matched) return { binding: matched.binding, pair }
+    if (matched) return { binding: matched.binding, pair, run: matched }
   }
 
   async function readPlanWebPilotOrigin({ id, revision }, signal) {
@@ -1955,6 +1956,73 @@ export async function apply(ctx) {
     const { sessionId, arm, received } = plan.webPilotOrigin
     return received ? { status: 'ready', received: true, sessionId, arm }
       : { status: 'ready', arm, comparison: webPilotComparison(observed.pair) }
+  }
+
+  function testedWebPilotPlanCard({ id, revision, name, note }, { sessionId, binding }) {
+    return { id, revision, name, note, arm: binding.arm, sessionId }
+  }
+
+  function compatibleTestedWebPilotRuns(source, other) {
+    return completedCanonicalWebPilot(source) && completedCanonicalWebPilot(other) && source.sessionId !== other.sessionId &&
+      source.view.url === other.view.url && matchesWebPilotReplay(source, other.task, other.binding)
+  }
+
+  async function readTestedWebPilotPlan(selection, signal) {
+    const { id, revision } = selection
+    const plan = buildPlans.read(id, revision)
+    if (!plan.webPilotOrigin?.received) throw new Error('这份方案的实测来源已不可查看。')
+    const observed = await observedWebPilotPlan(plan, signal)
+    if (!observed?.run) throw new Error('这份方案的实测来源已不可查看。')
+    return { plan, run: observed.run }
+  }
+
+  async function webPilotTestedPlanOptions(selection, signal) {
+    const { plan, run } = await readTestedWebPilotPlan(selection, signal)
+    const candidates = buildPlans.list().filter(other => other.id !== plan.id &&
+      other.webPilotOrigin && other.webPilotOrigin.arm !== run.binding.arm)
+    const alternatives = []
+    for (let index = 0; index < candidates.length; index += 4) {
+      signal?.throwIfAborted()
+      const batch = candidates.slice(index, index + 4)
+      const cards = await Promise.all(batch.map(async candidate => {
+        try {
+          const other = await observedWebPilotPlan(candidate, signal)
+          if (!compatibleTestedWebPilotRuns(run, other?.run)) return
+          buildPlans.read(candidate.id, candidate.revision)
+          return testedWebPilotPlanCard(candidate, other.run)
+        } catch {
+          signal?.throwIfAborted()
+        }
+      }))
+      alternatives.push(...cards.filter(Boolean))
+    }
+    buildPlans.read(plan.id, plan.revision)
+    signal?.throwIfAborted()
+    return { source: testedWebPilotPlanCard(plan, run), alternatives }
+  }
+
+  async function compareTestedWebPilotPlans({ id, revision, otherId, otherRevision }, signal) {
+    const unavailable = '这两套方案已无法按同题实测对照。'
+    const other = buildPlans.read(otherId, otherRevision)
+    const [{ plan, run }, compared] = await Promise.all([
+      readTestedWebPilotPlan({ id, revision }, signal), observedWebPilotPlan(other, signal),
+    ])
+    if (!compatibleTestedWebPilotRuns(run, compared?.run)) throw new Error(unavailable)
+    const saved = [[plan, run], [other, compared.run]]
+    const actual = await Promise.all(saved.map(async ([selected, original]) => {
+      const result = await inspectWebSourcePractice({ sessionId: original.sessionId }, signal, { handoff: true })
+      if (!result?.handoff || (selected.webPilotOrigin.received && !result.receivedReport) ||
+        result.task !== original.task || result.binding.presetId !== selected.presetId ||
+        result.binding.workspaceId !== original.binding.workspaceId || result.binding.id !== original.binding.id ||
+        result.binding.sourceId !== original.binding.sourceId || result.handoff.played !== original.binding.arm) {
+        throw new Error(unavailable)
+      }
+      return { ...testedWebPilotPlanCard(selected, original), decision: result.handoff.decision, delivered: result.handoff.delivered }
+    }))
+    buildPlans.read(id, revision)
+    buildPlans.read(otherId, otherRevision)
+    signal?.throwIfAborted()
+    return { runs: actual, url: run.view.url }
   }
 
   function oppositeWebPilotPlan(source, candidate) {
@@ -8189,6 +8257,10 @@ export async function apply(ctx) {
           value = await readPlanHandoffOrigin(selection, request.signal)
         } else if (selection?.action === 'plan-web-pilot-origin') {
           value = await readPlanWebPilotOrigin(selection, request.signal)
+        } else if (selection?.action === 'plan-web-pilot-tested-options') {
+          value = await webPilotTestedPlanOptions(selection, request.signal)
+        } else if (selection?.action === 'plan-web-pilot-tested-compare') {
+          value = await compareTestedWebPilotPlans(selection, request.signal)
         } else if (selection?.action === 'plan-web-pilot-options') {
           value = await webPilotPlanOptions(selection, request.signal)
         } else if (selection?.action === 'plan-web-pilot-open') {

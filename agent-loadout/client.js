@@ -1545,7 +1545,7 @@ window.__ModuleLoader__.load({
 
     const webPlanTaskLabel = '用这套出装开网页任务'
 
-    function WebPilotPlanDraft({ plan, request, workspaces, onCancel, onOpen }) {
+    function WebPilotPlanDraft({ plan, request, workspaces, dialogRef, onCancel, onOpen }) {
       const language = useLanguage()
       const group = useId()
       const [checked, setChecked] = useState(null)
@@ -1607,7 +1607,7 @@ window.__ModuleLoader__.load({
 
       return h(InstallDialog, { title: t(webPlanTaskLabel),
         className: 'moba-starter-dialog moba-web-source-dialog moba-web-personal-dialog moba-web-plan-dialog',
-        initialFocus: '.moba-web-source-back', busy, onCancel,
+        initialFocus: '.moba-web-source-back', busy, dialogRef, onCancel,
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening.current) onCancel() }) },
         h('p', { className: 'moba-starter-note' }, t('在新草稿中粘贴要核对的链接，写下问题，再手动发送。')),
         !current && h('p', { role: 'status' }, t('正在核对方案和工作区…')),
@@ -8096,12 +8096,139 @@ window.__ModuleLoader__.load({
         draft.equipmentIds.every(id => draft.equipmentSources?.[id] === reviewed.equipmentSources?.[id])
     }
 
+    const webPilotTestedLabel = '对照实测结果'
+
+    function WebPilotTestedPlans({ plan, request, dialogRef, suspended, onClose, onVisit, onUse }) {
+      const language = useLanguage()
+      const group = useId()
+      const [options, setOptions] = useState(null)
+      const [picked, setPicked] = useState('')
+      const [comparison, setComparison] = useState(null)
+      const [attempt, retry] = useState(0)
+      const [reading, setReading] = useState(false)
+      const [error, setError] = useState('')
+      const pending = useRef(null)
+      const heading = useRef(null)
+      const selectedRadio = useRef(null)
+      const feedback = useRef(null)
+      const returnToChoice = useRef(false)
+      const returnToPlan = useRef('')
+      const other = options?.alternatives.find(item => item.id === picked)
+
+      useEffect(() => {
+        const abort = new AbortController()
+        setOptions(null)
+        setPicked('')
+        setComparison(null)
+        setError('')
+        setReading(false)
+        const action = 'plan-web-pilot-tested-options'
+        request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setOptions(value) })
+          .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
+        return () => {
+          abort.abort()
+          pending.current?.abort()
+        }
+      }, [plan.id, plan.revision, request, language, attempt])
+
+      useLayoutEffect(() => {
+        if (comparison) heading.current?.focus()
+        else if (returnToChoice.current) {
+          returnToChoice.current = false
+          const target = selectedRadio.current ?? heading.current
+          target?.focus()
+        }
+      }, [comparison])
+
+      useLayoutEffect(() => { if (error) feedback.current?.focus() }, [error])
+
+      async function compare(event) {
+        event.preventDefault()
+        if (comparison || !other || pending.current) return
+        const abort = pending.current = new AbortController()
+        setReading(true)
+        setError('')
+        try {
+          const action = 'plan-web-pilot-tested-compare'
+          const value = await request(action, { action, id: plan.id, revision: plan.revision, otherId: other.id,
+            otherRevision: other.revision }, abort.signal, language)
+          if (!abort.signal.aborted) setComparison(value)
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          if (pending.current === abort) pending.current = null
+          if (!abort.signal.aborted) setReading(false)
+        }
+      }
+
+      function back() {
+        if (comparison) {
+          setError('')
+          returnToPlan.current = ''
+          returnToChoice.current = true
+          setComparison(null)
+        } else onClose()
+      }
+
+      function act(run, visit) {
+        if (visit ? onVisit(run) : onUse(run)) {
+          if (!visit) {
+            returnToPlan.current = run.id
+            setError('')
+          }
+        } else setError(t('这份方案已更新或不可用。请从出装方案重新选择。'))
+      }
+
+      if (suspended) return null
+      const notes = comparison?.runs.filter(run => run.note) ?? empty
+      return h(InstallDialog, { title: t(webPilotTestedLabel), dialogRef, onCancel: back,
+        className: 'moba-starter-dialog moba-web-pilot-handoff moba-web-pilot-tested',
+        initialFocus: returnToPlan.current ? '[data-tested-restore]' : '.moba-web-pilot-tested-heading',
+        onKeyDown: event => closeDialogOnEscape(event, back) },
+        h('form', { onSubmit: compare },
+          h('div', { className: 'moba-plan-fields moba-share-fields' },
+            h('h3', { className: 'moba-web-pilot-tested-heading', ref: heading, tabIndex: -1 },
+              comparison ? t('同题对照') : plan.name),
+            comparison ? h(Fragment, null,
+              h('a', { className: 'moba-web-pilot-tested-manifest', href: comparison.url, target: '_blank', rel: 'noopener noreferrer' },
+                t('查看发布方清单')),
+              h('div', { className: 'moba-web-pilot-handoff-sides' }, comparison.runs.map(run =>
+                h('article', { className: 'moba-web-pilot-handoff-side moba-web-pilot-tested-run', key: run.id },
+                  h('h4', null, run.name),
+                  h(InstallFacts, { facts: [[t('出装'), t(webPilotArms[run.arm].name)], ...webPilotReportOutcome(run)] }),
+                  h('div', { className: 'moba-web-pilot-tested-run-actions' },
+                    h('button', { type: 'button', className: 'moba-roster-open', onClick: () => act(run, true) }, t('打开原局会话')),
+                    h('button', { type: 'button', className: 'moba-start moba-web-pilot-tested-use', 'aria-haspopup': 'dialog',
+                      'data-tested-restore': returnToPlan.current === run.id || undefined, onClick: () => act(run, false) }, t('用这份方案')))))),
+              notes.length > 0 && h('details', { className: 'moba-web-pilot-tested-notes' }, h('summary', null, t('适用情形')),
+                h(InstallFacts, { facts: notes.map(run => [run.name, run.note]) })))
+              : options && (options.alternatives.length ? h('fieldset', { className: 'moba-starter-routes', disabled: reading },
+                h('legend', null, t('选择另一份已保存方案')),
+                options.alternatives.map(item => h('label', { className: 'moba-starter-route', key: item.id, 'data-picked': item.id === picked },
+                  h('input', { type: 'radio', name: group, value: item.id, checked: item.id === picked,
+                    ref: item.id === picked ? selectedRadio : undefined, onChange: () => { setPicked(item.id); setError('') } }),
+                  h('span', null, h('strong', null, item.name), h('small', null, t(webPilotArms[item.arm].name))))))
+                : h('p', { className: 'moba-starter-note' }, t('还没有另一套可对照的已核验出装方案。打开原局换装再试并保存。'))),
+            (!options && !error || reading) && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对实战来源…')),
+            error && h('p', { className: 'moba-alert', role: 'alert', ref: feedback, tabIndex: -1 }, error)),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open', onClick: back }, t(comparison ? '返回' : '返回方案库')),
+            !comparison && error && h('button', { type: 'button', className: 'moba-roster-open',
+              onClick: () => retry(value => value + 1), disabled: reading }, t('重新核对')),
+            !comparison && options && !options.alternatives.length && h('button', { type: 'button', className: 'moba-start',
+              onClick: () => act(options.source, true) }, t('打开原局会话')),
+            !comparison && options?.alternatives.length > 0 && h('button', { type: 'submit', className: 'moba-start',
+              disabled: reading || !other }, t('对照这两套')))))
+    }
+
     function BuildPlans({ plans, initialMode, initialTaskReference, initialPlanReference, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport,
       workspaces, workspaceId, onOpenTask, onOpenSource, evidenceSave, pairSaveEvidence }) {
       const [editor, setEditor] = useState(initialMode === 'create' ? { mode: 'create' } : null)
       const [sharing, setSharing] = useState(null)
       const [taskPlan, setTaskPlan] = useState(null)
       const [webTaskPlan, setWebTaskPlan] = useState(null)
+      const [testedPlan, setTestedPlan] = useState(null)
       const [receiptError, setReceiptError] = useState('')
       const [pairPlan, setPairPlan] = useState(null)
       const [retest, setRetest] = useState(null)
@@ -8122,6 +8249,10 @@ window.__ModuleLoader__.load({
       const importButton = useRef(null)
       const taskButton = useRef(null)
       const webTaskButton = useRef(null)
+      const testedButton = useRef(null)
+      const testedDialog = useRef(null)
+      const testedTaskDialog = useRef(null)
+      const restoreTestedFocus = useRef(false)
       const receiptBack = useRef(null)
       const pairButton = useRef(null)
       const retestButton = useRef(null)
@@ -8154,6 +8285,11 @@ window.__ModuleLoader__.load({
         const target = editor ? focus.current : returnedPlanRadio.current ?? focus.current
         target?.focus()
       }, [editor?.mode])
+      useLayoutEffect(() => {
+        if (testedPlan || !restoreTestedFocus.current) return
+        restoreTestedFocus.current = false
+        testedButton.current?.focus()
+      }, [testedPlan])
       useEffect(() => {
         if (!initialTaskReference) return
         const abort = new AbortController()
@@ -8209,8 +8345,35 @@ window.__ModuleLoader__.load({
       }
 
       function closeWebTask() {
+        if (testedPlan) {
+          testedTaskDialog.current?.close()
+          setWebTaskPlan(null)
+          return
+        }
         setWebTaskPlan(null)
         requestAnimationFrame(() => (webTaskButton.current ?? focus.current)?.focus())
+      }
+
+      function closeTested() {
+        testedDialog.current?.close()
+        restoreTestedFocus.current = true
+        setTestedPlan(null)
+      }
+
+      function useTested(run) {
+        const current = plans.find(item => !item.broken && planMatchesRevision(item, run))
+        if (!current) return false
+        testedDialog.current?.close()
+        setWebTaskPlan(current)
+        return true
+      }
+
+      function visitTested(run) {
+        if (!onOpenSource || !plans.some(item => !item.broken && planMatchesRevision(item, run))) return false
+        testedDialog.current?.close()
+        close()
+        onOpenSource(run.sessionId, { id: run.id, revision: run.revision, name: run.name })
+        return true
       }
 
       function closePair() {
@@ -8221,6 +8384,7 @@ window.__ModuleLoader__.load({
       }
 
       function taskOpened(result) {
+        if (testedPlan) testedTaskDialog.current?.close()
         close()
         onOpenTask(result)
       }
@@ -8270,6 +8434,10 @@ window.__ModuleLoader__.load({
       const testedSource = plan && (sourceInHeader || plan.hasEvidenceOrigin) && onOpenSource &&
         h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
           onVisit: (sessionId, reference) => { close(); onOpenSource(sessionId, reference) } })
+      const compareTested = plan?.hasReceivedWebPilotOrigin && onOpenSource && h('button', {
+        className: 'moba-roster-open moba-plan-tested-start', type: 'button', ref: testedButton,
+        'aria-haspopup': 'dialog', disabled: Boolean(plan.broken), onClick: () => setTestedPlan(plan),
+      }, t(webPilotTestedLabel))
       return h(Fragment, null, h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
         'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan || initialTaskReference || pairPlan), 'aria-labelledby': title,
         onCancel: event => { event.preventDefault(); if (pairPlan) closePair(); else if (taskPlan) closeTask(); else if (sharing) closeSharing(); else close() },
@@ -8343,7 +8511,7 @@ window.__ModuleLoader__.load({
                   : h('p', { className: 'moba-empty', role: 'status' }, plans.length ? t('未找到匹配的方案。') : t('还没有出装方案。'))),
               plan && h('div', { className: 'moba-plan-preview' },
                 sourceInHeader && h('div', { className: 'moba-plan-source-actions', 'data-web-task': plan.hasWebPilotOrigin || undefined },
-                  startWebTask || startTask, testedSource),
+                  startWebTask || startTask, testedSource, compareTested),
                 h('div', { className: 'moba-plan-hero' },
                   h(HeroArt, { id: plan.heroId, art: plan.heroArt, className: 'moba-splash' }),
                   h('div', { className: 'moba-stage-shade' }),
@@ -8379,7 +8547,10 @@ window.__ModuleLoader__.load({
                   onClick: () => { close(); onApply(plan) } }, t('采用方案'), h(Glyph, { kind: 'arrow', size: 17 })))
                 : !plans.length && h('button', { className: 'moba-start', type: 'button', disabled: !canSave,
                   onClick: () => edit('create') }, t('保存当前出装'))))),
-        webTaskPlan && h(WebPilotPlanDraft, { plan: webTaskPlan, request, workspaces, onCancel: closeWebTask, onOpen: taskOpened }))
+        testedPlan && h(WebPilotTestedPlans, { plan: testedPlan, request, dialogRef: testedDialog, suspended: Boolean(webTaskPlan),
+          onClose: closeTested, onUse: useTested, onVisit: visitTested }),
+        webTaskPlan && h(WebPilotPlanDraft, { plan: webTaskPlan, request, workspaces, dialogRef: testedPlan ? testedTaskDialog : undefined,
+          onCancel: closeWebTask, onOpen: taskOpened }))
     }
 
     function OpeningQuestEditor({ id, draftKey, hero, initial, followUp, trialTarget, deliveryTarget, request, enabled, pending, onSave, onClear, onClose, inspectGear, onRepair }) {
@@ -13492,6 +13663,7 @@ window.__ModuleLoader__.load({
       .moba-plan-source-actions > p { flex-basis: 100%; }
       .moba-plan-source-actions[data-web-task] { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
       .moba-plan-source-actions[data-web-task] > p { grid-column: 1 / -1; }
+      .moba-plan-source-actions .moba-plan-tested-start { grid-column: 1 / -1; }
       .moba-plan-web-start svg { flex: none; }
       .moba-plan-gear { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 7px; }
       .moba-plan-gear li { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 7px 4px 4px; background: #0e141f; border: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
@@ -13976,6 +14148,21 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-handoff-side + .moba-web-pilot-handoff-side { background: #202737; border-color: #67748d; }
       .moba-web-pilot-handoff-side h4 { margin: 0 0 5px; color: var(--ink); font-size: 13px; }
       .moba-web-pilot-handoff-side dl { margin: 0; gap: 4px 8px; }
+      .moba-web-pilot-tested .moba-share-fields { gap: 7px; }
+      .moba-web-pilot-tested-heading { margin: 0; color: var(--gold); font-size: 17px; overflow-wrap: anywhere; }
+      .moba-web-pilot-tested .moba-starter-routes { margin: 0; }
+      .moba-web-pilot-tested .moba-starter-route { min-block-size: 44px; }
+      .moba-web-pilot-tested .moba-starter-route input { inline-size: auto; min-block-size: 0; padding: 0; }
+      .moba-web-pilot-tested-manifest { display: inline-flex; align-items: center; justify-self: start;
+        min-block-size: 44px; color: #9ed4ec; overflow-wrap: anywhere; }
+      .moba-web-pilot-tested-run h4 { overflow-wrap: anywhere; }
+      .moba-web-pilot-tested-run-actions { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 6px; margin-top: 5px; }
+      .moba-web-pilot-tested-run-actions button { min-inline-size: 0; justify-content: center; white-space: normal; overflow-wrap: anywhere; }
+      .moba-web-pilot-tested-notes { min-inline-size: 0; }
+      .moba-web-pilot-tested-notes summary { box-sizing: border-box; min-block-size: 44px; padding: 10px 8px;
+        border: 1px solid var(--line); cursor: pointer; }
+      .moba-web-pilot-tested-notes dl { grid-template-columns: minmax(0, 1fr); }
+      .moba-web-pilot-tested-notes :is(dt, dd) { white-space: pre-wrap; overflow-wrap: anywhere; }
       .moba-web-pilot-find-flow { display: flex; flex-direction: column; min-block-size: 0; }
       .moba-web-pilot-find-flow .moba-share-fields { gap: 7px; }
       .moba-web-pilot-find-heading { margin: 0; color: var(--gold); font-size: 17px; }
