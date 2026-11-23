@@ -80,6 +80,9 @@ export async function lighthouseRematchLesson(directory, registry, launchId, eng
 }
 
 export function lighthouseEvidenceTask(english, scenario) {
+  if (scenario === 'revision') return english
+    ? 'Revise the handoff draft using the North Shore Lighthouse supply card. Read the card again and list only the supplies it verifies as available. Mark the dispatch claim about two spare batteries as unverified, separate from the listed supplies. Write a separate revised handoff and ask me to confirm delivery or request changes. Attach the revised file only if I confirm.'
+    : '依据北岸灯塔补给卡修订交接稿。重读补给卡，只把卡上核实的物资列为可领取。把调度消息里的两节备用电池单独标为未证实。另存一份修订稿，并请我确认交付或退回修改。确认后才交付修订稿。'
   const confirmed = scenario === 'confirmed'
   const claim = confirmed
     ? (english ? '2 cans of lamp oil' : '两罐灯油')
@@ -97,7 +100,8 @@ export function isLighthouseEvidenceWorkspace(directory, path) {
 export async function lighthouseEvidenceLesson(directory, registry, launchId, english, scenario) {
   if (typeof launchId !== 'string' || !openingId.test(launchId)) throw new Error('开局请求无效，请重试。')
   const path = join(directory, evidencePrefix + launchId)
-  const workspace = await seedWorkspace(path, registry, 'Lighthouse evidence choices · 灯塔证据取舍', true)
+  const title = scenario === 'revision' ? 'Lighthouse handoff revision · 灯塔交接修订' : 'Lighthouse evidence choices · 灯塔证据取舍'
+  const workspace = await seedWorkspace(path, registry, title, true)
   return { workspace, material: supplyCard, task: lighthouseEvidenceTask(english, scenario) }
 }
 

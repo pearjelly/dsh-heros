@@ -195,6 +195,7 @@ export async function apply(ctx) {
       const heroDeliveryMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(值班 材料\/(?:设备|补给) 台账\.md)"\n/u)?.[1]
       const personalEvidence = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(证据 材料\/(?:设备|更新|配装) 台账\.md)"\n/u)?.[1]
       const lighthousePlaybookMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(02-lighthouse\.md)"\n/u)?.[1]
+      const lighthouseRevision = lighthousePlaybookMaterial && /Revise the handoff draft|修订交接稿/u.test(latestText)
       const evidenceMaterial = personalEvidence ?? lighthousePlaybookMaterial ?? (comparisonMaterial === '02-lighthouse.md' ? comparisonMaterial : undefined)
       const supportedFact = personalEvidence ? 'two spare radios' : '2 cans of lamp oil'
       const unverifiedClaim = personalEvidence ? 'a spare charger' : 'two spare batteries'
@@ -299,6 +300,26 @@ export async function apply(ctx) {
         name = sequence[results.length]
         args = name === 'glob' ? { pattern: '[0-9][0-9]-*.md' }
           : { files: [{ path: '02-lighthouse.md', description: 'Lighthouse supply card' }] }
+      } else if (lighthouseRevision) {
+        const english = latestText.startsWith('[')
+        const file = 'revised-handoff.md'
+        const hasCard = results[0]?.content.some(block => block.text?.includes('2 cans of lamp oil'))
+        const systemText = system ?? messages.filter(message => message.role === 'system').flatMap(message => message.content)
+          .map(block => block.text).join('\n')
+        const hasReview = systemText.includes('whether to proceed with the handoff or revise the draft')
+        const confirmed = results[2] && JSON.parse(results[2].content[0].text).answers?.[0]?.selected?.includes('Confirm handoff')
+        sequence = ['read', ...(hasCard && hasReview ? ['write', 'ask_user_question', ...(confirmed ? ['present'] : [])] : [])]
+        name = sequence[results.length]
+        if (name === 'read') args = { file_path: lighthousePlaybookMaterial }
+        if (name === 'write') args = { file_path: file, content: english
+          ? '# Revised Lighthouse handoff\n\nHandoff supplies: 2 cans of lamp oil, 1 signal flag.\nUnverified and withheld: two spare batteries.\n'
+          : '# 灯塔修订交接稿\n\n本次交接：灯油 × 2、信号旗 × 1。\n未证实并暂不交接：两节备用电池。\n' }
+        if (name === 'ask_user_question') args = { questions: [{ id: 'fixture-delivery-review',
+          question: english ? 'The revised draft leaves out the unverified batteries. Confirm this handoff or request changes?'
+            : '修订交接稿已将未证实的备用电池排除在交接清单之外。确认交付还是退回修改？',
+          options: [{ label: 'Confirm handoff' }, { label: 'Revise draft' }],
+        }] }
+        if (name === 'present') args = { files: [{ path: file, description: english ? 'Revised Lighthouse handoff' : '灯塔修订交接稿' }] }
       } else if (evidenceGap || evidenceConfirmed) {
         const english = latestText.startsWith('[')
         const labels = english ? ['Continue gathering evidence', 'Lower the recommendation to a qualified draft', 'Pause submission']

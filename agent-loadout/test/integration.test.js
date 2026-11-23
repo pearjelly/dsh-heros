@@ -1372,7 +1372,7 @@ test('Lighthouse same-task comparison keeps two original attempts and their nati
   }
 })
 
-test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 180_000 }, async () => {
+test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 240_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-playbook-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')
@@ -2284,14 +2284,137 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       await turn
       assert.deepEqual(delivered(await history(sessionId)), choice === 'Confirm handoff' ? ['handoff.md'] : [])
     }
+
+    assert.deepEqual(await lighthouseHistory(), completedTrials)
+    const revision = (phase, fields, status) => challenge('lighthouse-combined-revision-' + phase, fields, status)
+    const dualView = await challenge('lighthouse-combined-start-preview', { mode: 'evidence-review' })
+    const dualOrigin = await challenge('lighthouse-combined-start-open', {
+      mode: 'evidence-review', token: dualView.token, launchId: '7'.repeat(32),
+    })
+    const dualTurn = host.request(turnEndpoint, { sessionId: dualOrigin.sessionId, text: dualOrigin.task })
+    dualTurn.catch(() => {})
+    await choose(dualOrigin.sessionId, 'fixture-lighthouse-evidence', 'Lower the recommendation to a qualified draft')
+    await choose(dualOrigin.sessionId, 'fixture-delivery-review', 'Revise draft')
+    await dualTurn
+    const dualOriginal = await result(dualOrigin.sessionId)
+    assert.deepEqual(dualOriginal.lighthouseOutcomeIds, { evidence: ['qualify'], review: ['revise'] })
+    assert.deepEqual(dualOriginal.deliverables, [])
+    const dualNative = await native(dualOrigin.sessionId)
+
+    const revisionSourceIds = [reviewOpening.sessionId, dualOrigin.sessionId]
+    const beforeRevisionDirectories = (await practiceDirectories()).sort()
+    for (const unavailable of [sessionId, variant.sessionId, confirmed.sessionId, withEvidence.sessionId, ownOpening.sessionId]) {
+      await revision('preview', { sourceSessionId: unavailable }, 422)
+      assert.notEqual((await result(unavailable))?.lighthouseRevisionAvailable, true)
+    }
+    const reviewRevision = await revision('preview', { sourceSessionId: revisionSourceIds[0] })
+    const dualRevision = await revision('preview', { sourceSessionId: revisionSourceIds[1] })
+    const openRevision = { sourceSessionId: revisionSourceIds[0], token: reviewRevision.token, launchId: '8'.repeat(32) }
+    await revision('open', { ...openRevision, sourceSessionId: revisionSourceIds[1] }, 422)
+    await revision('open', { ...openRevision, token: addEvidence.token }, 422)
+    await replay('open', { sessionId: openRevision.sourceSessionId, token: openRevision.token, launchId: openRevision.launchId }, 422)
+    try {
+      await appendFile(firstReviewSample, '\nChanged after reviewing the revision draft.\n')
+      await revision('open', openRevision, 422)
+    } finally {
+      await writeFile(firstReviewSample, reviewSample)
+    }
+    assert.deepEqual((await practiceDirectories()).sort(), beforeRevisionDirectories)
+    assert.deepEqual(await native(reviewOpening.sessionId), firstReviewNative)
+    assert.deepEqual(await native(dualOrigin.sessionId), dualNative)
+
+    const firstReviewed = await result(reviewOpening.sessionId)
+    assert.equal(firstReviewed.lighthouseRevisionAvailable, true)
+    assert.equal(dualOriginal.lighthouseRevisionAvailable, true)
+    const revisions = []
+    for (const { source, before, view, originalResult, choice, out } of [
+      { source: reviewOpening, before: firstReviewNative, view: reviewRevision, originalResult: firstReviewed,
+        choice: 'Confirm handoff', out: 'confirm' },
+      { source: dualOrigin, before: dualNative, view: dualRevision, originalResult: dualOriginal,
+        choice: 'Revise draft', out: 'revise' },
+    ]) {
+      const mode = originalResult.lighthouseMode
+      assert.equal(view.fromMode, mode)
+      assert.equal(view.mode, mode)
+      assert.equal(view.material, combinedPractice.material)
+      assert.notEqual(view.task, source.task)
+      assert.match(view.task, mode === 'review' ? /修订交接稿/ : /Revise the handoff draft/)
+      assert.match(view.task, mode === 'review' ? /两节备用电池/ : /two spare batteries/)
+      assert.match(view.task, mode === 'review' ? /未(?:经|被)?证实|未核实/u : /unverified|not verified|not confirmed/i)
+      assert.deepEqual(view.workflowDecisions, originalResult.workflowDecisions)
+      const fields = { sourceSessionId: source.sessionId, token: view.token, launchId: openRevision.launchId }
+      const opened = await revision('open', fields)
+      assert.deepEqual(await revision('open', fields), opened)
+      assert.equal(opened.task, view.task)
+      assert.notEqual(opened.workspaceId, source.workspaceId)
+      assert.notEqual(opened.sessionId, source.sessionId)
+      const draft = await native(opened.sessionId)
+      assert.equal(draft.presetId, before.presetId)
+      assert.ok(!draft.events.some(event => ['turn/start', 'user/message', 'tool/call'].includes(event.type)))
+      const marker = draft.events.find(event => event.type === 'plugin:dsh-agent-loadout/plan-task').data
+      assert.equal(marker.target.lighthouseRevisionOf, source.sessionId)
+      assert.equal(marker.target.lighthouseReplayOf, undefined)
+      assert.equal(marker.target.lighthouseScenarioOf, undefined)
+      assert.equal(marker.lighthouseReceivedReport, undefined)
+      const card = join(draft.workspacePath, combinedPractice.material)
+      assert.equal(await readFile(card, 'utf8'), sample)
+      assert.equal((await result(opened.sessionId))?.lighthouseRevisionPair, undefined)
+
+      const revisedTurn = host.request(turnEndpoint, { sessionId: opened.sessionId, text: opened.task })
+      revisedTurn.catch(() => {})
+      await choose(opened.sessionId, 'fixture-delivery-review', choice)
+      await revisedTurn
+      const revisionNative = await native(opened.sessionId)
+      const calls = revisionNative.events.filter(event => event.type === 'tool/call')
+      const confirm = out === 'confirm'
+      assert.deepEqual(calls.map(event => event.data.name), ['read', 'write', 'ask_user_question', ...(confirm ? ['present'] : [])])
+      assert.equal(JSON.parse(calls[0].data.arguments).file_path, combinedPractice.material)
+      const attachment = revisionNative.events.find(event => event.type === 'deliverables/presented')
+      const file = join(draft.workspacePath, 'revised-handoff.md')
+      const draftText = await readFile(file, 'utf8')
+      const supplies = draftText.split('\n')[2]
+      assert.match(supplies, /灯油|lamp oil/u)
+      assert.doesNotMatch(supplies, /备用电池|spare batteries/u)
+      assert.match(draftText, /未证实并暂不交接：两节备用电池|Unverified and withheld: two spare batteries/u)
+      if (confirm) assert.equal(attachment.data.files[0].path, file)
+      else assert.equal(attachment, undefined)
+      const files = confirm ? [{ name: basename(file), turn: attachment.data.turn, seq: attachment.seq, index: 0 }] : []
+      const revised = await result(opened.sessionId)
+      assert.deepEqual(revised.workflowDecisions, [{ gearId: 'review', choices: [choice] }])
+      assert.deepEqual(revised.deliverables, files)
+      assert.deepEqual(revised.lighthouseRevisionPair, {
+        previous: { sessionId: source.sessionId, mode, workflowDecisions: originalResult.workflowDecisions,
+          deliverables: [], outcomeIds: originalResult.lighthouseOutcomeIds },
+        current: { sessionId: opened.sessionId, mode, workflowDecisions: revised.workflowDecisions,
+          deliverables: files, outcomeIds: { review: [out] } },
+      })
+      assert.equal(revised.lighthousePair, undefined)
+      assert.equal(revised.lighthouseScenarioPair, undefined)
+      assert.notEqual(revised.lighthouseRevisionAvailable, true)
+      await revision('preview', { sourceSessionId: opened.sessionId }, 422)
+      await shareChallenge(opened.sessionId, 422)
+      await readChallengeReport(opened.sessionId, { code: pausedReport.code }, 422)
+      assert.equal(await readFile(card, 'utf8'), sample)
+      assert.equal(await readFile(join(before.workspacePath, combinedPractice.material), 'utf8'), sample)
+      assert.deepEqual(await native(source.sessionId), before)
+      revisions.push({ sessionId: opened.sessionId, pair: revised.lighthouseRevisionPair })
+    }
+    assert.deepEqual(await shareChallenge(reviewOpening.sessionId), invitation)
+    assert.deepEqual(await readChallengeReport(invited.sessionId), pausedReport)
+    const historyBeforeRestart = await lighthouseHistory()
+
     await host.stop()
     host = await startHost(env, patch)
+    for (const { sessionId, pair } of revisions) {
+      assert.deepEqual((await result(sessionId)).lighthouseRevisionPair, pair)
+      assert.deepEqual(await openLighthouseHistory(pair.previous.sessionId), { sessionId: pair.previous.sessionId })
+    }
     assert.deepEqual((await result(confirmed.sessionId)).lighthouseScenarioPair, confirmedResult.lighthouseScenarioPair)
     assert.equal((await result(receivedDraft.sessionId)).lighthouseReceivedReport, true)
     assert.deepEqual(await readChallengeReport(receivedDraft.sessionId, { received: true }), receivedComparison)
     assert.deepEqual(await readChallengeReport(invited.sessionId), pausedReport)
     await readChallengeReport(invited.sessionId, { received: true }, 422)
-    assert.deepEqual(await lighthouseHistory(), completedTrials)
+    assert.deepEqual(await lighthouseHistory(), historyBeforeRestart)
     assert.deepEqual(await openLighthouseHistory(receivedDraft.sessionId), { sessionId: receivedDraft.sessionId })
     await openLighthouseHistory(confirmed.sessionId, 422)
     await openLighthouseHistory(directSession, 422)

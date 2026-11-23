@@ -3336,8 +3336,9 @@ window.__ModuleLoader__.load({
 
     const lighthouseDecisionReplayTitle = '换个决定再试'
     const lighthouseScenarioReplayTitle = '试试证据齐全的情况'
+    const lighthouseRevisionTitle = '修订后再复核'
 
-    function LighthouseCombinedReplay({ sessionId, initialLoadout = 'same', confirmed, request, onBack, onOpen }) {
+    function LighthouseCombinedReplay({ sessionId, initialLoadout = 'same', confirmed, revision, request, onBack, onOpen }) {
       const language = useLanguage()
       const [loadout, setLoadout] = useState(initialLoadout)
       const [attempt, retry] = useState(0)
@@ -3345,6 +3346,7 @@ window.__ModuleLoader__.load({
       const [opening, setOpening] = useState(false)
       const [openError, setOpenError] = useState('')
       const dialog = useRef(null)
+      const feedback = useRef(null)
       const pending = useRef(null)
       const launch = useRef(null)
       const unavailable = '灯塔原局暂时无法核对。请回原会话查看。'
@@ -3354,18 +3356,21 @@ window.__ModuleLoader__.load({
       const original = read?.original
       const switchLabel = original?.fromMode === 'review' ? '加装证据核验' : '卸下证据核验'
       const issue = openError || state?.error
-      const route = confirmed ? 'lighthouse-combined-scenario' : 'lighthouse-combined-replay'
+      const fixedLoadout = confirmed || revision
+      const sourceField = revision ? 'sourceSessionId' : 'sessionId'
+      const route = revision ? 'lighthouse-combined-revision' : confirmed ? 'lighthouse-combined-scenario' : 'lighthouse-combined-replay'
 
       useEffect(() => {
         const abort = new AbortController()
         const action = route + '-preview'
-        request(action, { action, sessionId, ...(!confirmed && { loadout }) }, abort.signal, language)
+        request(action, { action, [sourceField]: sessionId, ...(!fixedLoadout && { loadout }) }, abort.signal, language)
           .then(value => {
             if (abort.signal.aborted) return
             if (!value?.token || typeof value.task !== 'string' || !value.task || typeof value.material !== 'string' || !value.material ||
               !Object.hasOwn(lighthouseReplayModeLabels, value.fromMode) || !Object.hasOwn(lighthouseReplayModeLabels, value.mode) ||
               (value.fromMode === value.mode) !== (loadout === 'same') ||
               (confirmed && (value.scenario !== 'confirmed' || value.mode !== 'evidence-review')) ||
+              (revision && (typeof value.originalTask !== 'string' || !value.originalTask || value.originalTask === value.task)) ||
               !Array.isArray(value.workflowDecisions) || !workflowDecisionRows(value.workflowDecisions).length) throw new Error(t(unavailable))
             setChecked({ value, original: value, sessionId, attempt, language, loadout })
           })
@@ -3374,8 +3379,9 @@ window.__ModuleLoader__.load({
               original: previous?.sessionId === sessionId ? previous.original : undefined, sessionId, attempt, language, loadout }))
           })
         return () => abort.abort()
-      }, [request, sessionId, attempt, language, loadout, route, confirmed])
+      }, [request, sessionId, attempt, language, loadout, route, sourceField, fixedLoadout, confirmed, revision])
       useEffect(() => () => pending.current?.abort(), [])
+      useLayoutEffect(() => { if (revision && issue) feedback.current?.focus() }, [revision, issue])
 
       function close() {
         if (pending.current) return
@@ -3394,7 +3400,7 @@ window.__ModuleLoader__.load({
         }
         try {
           const action = route + '-open'
-          const result = await request(action, { action, sessionId, ...(!confirmed && { loadout }),
+          const result = await request(action, { action, [sourceField]: sessionId, ...(!fixedLoadout && { loadout }),
             token: preview.token, launchId: launch.current.id }, abort.signal, language)
           if (!result?.sessionId || result.sessionId === sessionId || result.task !== preview.task) throw new Error(t(unavailable))
           if (!abort.signal.aborted) {
@@ -3409,15 +3415,19 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h(InstallDialog, { title: t(confirmed ? lighthouseScenarioReplayTitle : initialLoadout === 'switch' ? '同题复赛' : lighthouseDecisionReplayTitle),
+      const title = revision ? lighthouseRevisionTitle : confirmed ? lighthouseScenarioReplayTitle
+        : initialLoadout === 'switch' ? '同题复赛' : lighthouseDecisionReplayTitle
+      const note = revision ? '沿用原补给卡和出装，只交接已核实的物资，再复核修订稿。'
+        : confirmed ? '用同一张补给卡和同一套出装，这次核对两罐灯油。' : loadout === 'switch'
+          ? '两局沿用同一份补给卡和题目。交付前复核继续装备。' : '两局沿用同一份补给卡、题目和出装。'
+      return h(InstallDialog, { title: t(title),
         className: 'moba-starter-dialog moba-lighthouse-combined-start moba-lighthouse-combined-replay', dialogRef: dialog,
         busy: opening, onCancel: close, initialFocus: '.moba-lighthouse-replay-back',
         onKeyDown: event => closeDialogOnEscape(event, close) },
         h('div', { className: 'moba-lighthouse-combined-fields' },
-          h('p', { className: 'moba-lighthouse-note' }, t(confirmed ? '用同一张补给卡和同一套出装，这次核对两罐灯油。' : loadout === 'switch'
-            ? '两局沿用同一份补给卡和题目。交付前复核继续装备。' : '两局沿用同一份补给卡、题目和出装。')),
+          h('p', { className: 'moba-lighthouse-note' }, t(note)),
           original && h(Fragment, null,
-            confirmed ? h(InstallFacts, { facts: [[t('出装'), t(lighthouseReplayModeLabels[original.mode])]] })
+            fixedLoadout ? h(InstallFacts, { facts: [[t('出装'), t(lighthouseReplayModeLabels[original.mode])]] })
               : h(LighthouseLoadoutChoices, { heading: '复赛出装', options: { same: '保留这套出装', switch: switchLabel }, picked: loadout,
                 disabled: opening, onChoose: value => {
                   if (pending.current) return
@@ -3426,12 +3436,16 @@ window.__ModuleLoader__.load({
                 } }),
             h('h3', { className: 'moba-lighthouse-replay-heading' }, t('原局选择')),
             h(WorkflowDecisionReceipts, { rows: workflowDecisionRows(original.workflowDecisions) }),
-            h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看试玩任务')),
+            h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t(revision ? '查看修订任务' : '查看试玩任务')),
               h(InstallFacts, { facts: [[t('材料文件'), original.material]] }),
-              h('label', { className: 'moba-lighthouse-task' }, t('试玩任务'),
-                h('textarea', { readOnly: true, rows: 4, value: original.task })))),
+              h('label', { className: 'moba-lighthouse-task' }, t(revision ? '修订任务' : '试玩任务'),
+                h('textarea', { readOnly: true, rows: 4, value: original.task }))),
+            revision && h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看原局任务')),
+              h('label', { className: 'moba-lighthouse-task' }, t('原局任务'),
+                h('textarea', { readOnly: true, rows: 4, value: original.originalTask })))),
           !state && h('p', { role: 'status' }, t('正在核对实战来源…')),
-          issue && h('p', { className: 'moba-alert', role: 'alert' }, t(issue)),
+          issue && h('p', { className: 'moba-alert', role: 'alert', ref: revision ? feedback : undefined,
+            tabIndex: revision ? -1 : undefined }, t(issue)),
           preview && h('p', { className: 'moba-starter-note', role: opening ? 'status' : undefined },
             t(opening ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。'))),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
@@ -3440,7 +3454,7 @@ window.__ModuleLoader__.load({
           issue && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
             onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
           h('button', { type: 'button', className: 'moba-start', disabled: opening || !preview?.token || Boolean(issue),
-            onClick: open }, t('打开复赛草稿'), h(Glyph, { kind: 'arrow', size: 16 }))))
+            onClick: open }, t(revision ? '打开修订草稿' : '打开复赛草稿'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
     function LighthouseDirectRematch({ kind, comparisonId, arm, request, onBack, onOpen, backLabel = '返回练习记录' }) {
@@ -13387,19 +13401,21 @@ window.__ModuleLoader__.load({
         })))
     }
 
-    function LighthouseDecisionPair({ pair, scenarioPair, personalPair, savedWorkflowArm, onOpenMatch, onCarry, carryButtons }) {
+    function LighthouseDecisionPair({ pair, scenarioPair, revisionPair, personalPair, savedWorkflowArm, onOpenMatch, onCarry, carryButtons }) {
       const heading = useId()
       const sides = [pair.previous, pair.current]
-      const columns = scenarioPair ? ['关键证据缺失', '证据齐全'] : ['原局', '复赛']
+      const columns = scenarioPair ? ['关键证据缺失', '证据齐全'] : ['原局', revisionPair ? '修订后' : '复赛']
       const rows = sides.map(run => workflowDecisionRows(run.workflowDecisions))
       const bySide = rows.map(side => new Map(side.map(row => [row.gearId, row.choices])))
-      const comparedGear = !scenarioPair && sides.every(run => Object.hasOwn(lighthouseReplayModeLabels, run.mode)) && sides[0].mode !== sides[1].mode
+      const comparedGear = !scenarioPair && !revisionPair && sides.every(run => Object.hasOwn(lighthouseReplayModeLabels, run.mode)) && sides[0].mode !== sides[1].mode
       const compactGearPair = comparedGear && !personalPair
+      const compactReceiptPair = compactGearPair || revisionPair
+      const showChoiceSource = scenarioPair || personalPair || compactReceiptPair
       const personalModes = personalPair && personalWorkflowModes(pair)
-      const sourceDetails = (scenarioPair || personalPair || compactGearPair) && h('details', {
+      const sourceDetails = showChoiceSource && h('details', {
         className: 'moba-minimal-replay-detail moba-lighthouse-choice-source',
       },
-        h('summary', null, t(compactGearPair && sides.some(run => run.deliverables.length) ? '查看选择原文和交付文件' : '查看选择原文')),
+        h('summary', null, t(compactReceiptPair && sides.some(run => run.deliverables.length) ? '查看选择原文和交付文件' : '查看选择原文')),
         rows.map((side, index) => {
           const run = sides[index]
           return h('div', { key: run.sessionId },
@@ -13407,13 +13423,14 @@ window.__ModuleLoader__.load({
             side.length ? h('dl', null, side.map(({ gearId, name, choices }) => h(Fragment, { key: gearId },
               h('dt', null, t(name)), h('dd', null, h('ul', null, choices.map(choice => h('li', { key: choice }, choice)))))))
               : h('p', null, t('未记录选择')),
-            compactGearPair && run.deliverables.length > 0 && h(LessonTaskFiles, {
+            compactReceiptPair && run.deliverables.length > 0 && h(LessonTaskFiles, {
               files: run.deliverables, sessionId: run.sessionId, headingTag: 'h6',
             }))
         }))
       return h('section', { className: 'moba-lighthouse-replay-pair', 'aria-labelledby': heading, 'data-compact-gear-pair': compactGearPair || undefined },
-        h('h4', { id: heading, 'data-personal-workflow-pair': personalPair || undefined, tabIndex: personalPair ? -1 : undefined }, t('对照两局')),
-        scenarioPair && h('p', { className: 'moba-match-action-note' }, t('两局沿用同一份补给卡和出装。')),
+        h('h4', { id: heading, 'data-personal-workflow-pair': personalPair || undefined, tabIndex: personalPair ? -1 : undefined },
+          t(revisionPair ? '修订前后对照' : '对照两局')),
+        (scenarioPair || revisionPair) && h('p', { className: 'moba-match-action-note' }, t('两局沿用同一份补给卡和出装。')),
         personalPair && h('p', { className: 'moba-lighthouse-note' }, t(personalModes[1] === 'review' ? '只卸下证据核验' : '只加装证据核验')),
         h('table', { 'aria-labelledby': heading },
           h('thead', null, h('tr', null, h('td'), columns.map((label, i) => h('th', { key: label, scope: 'col' }, t(label),
@@ -13424,21 +13441,21 @@ window.__ModuleLoader__.load({
               h('td', null, t('两节备用电池')), h('td', null, t('两罐灯油'))),
             personalPair && h('tr', null, h('th', { scope: 'row' }, t('出装')), personalModes.map((mode, index) =>
               h('td', { key: sides[index].sessionId }, t(lighthouseCarryModeLabels[mode])))),
-            Object.entries(workflowDecisionGear).filter(([id]) => compactGearPair || personalPair || (scenarioPair && id === 'evidence') ||
+            Object.entries(workflowDecisionGear).filter(([id]) => compactReceiptPair || personalPair || (scenarioPair && id === 'evidence') ||
                 bySide.some(choices => choices.has(id))).map(([id, name]) =>
               h('tr', { key: id }, h('th', { scope: 'row' }, t(name)),
                 bySide.map((choices, i) => {
                   const side = sides[i]
                   const mode = personalPair ? personalModes[i] : side.mode
-                  const missing = (comparedGear || personalPair) ? missingLighthouseGearDecision(id, mode) : '未记录选择'
+                  const missing = (comparedGear || personalPair || revisionPair) ? missingLighthouseGearDecision(id, mode) : '未记录选择'
                   const recorded = choices.get(id)
-                  const displayed = localizedLighthouseChoices(id, recorded, (scenarioPair || personalPair || compactGearPair) && side.outcomeIds?.[id])
+                  const displayed = localizedLighthouseChoices(id, recorded, showChoiceSource && side.outcomeIds?.[id])
                   return h('td', { key: side.sessionId }, displayed?.join(' / ') ?? t(missing))
                 }))),
             h('tr', null, h('th', { scope: 'row' }, t('交付文件')), sides.map(run =>
-              h('td', { key: run.sessionId }, compactGearPair ? run.deliverables.length : run.deliverables.length
+              h('td', { key: run.sessionId }, compactReceiptPair ? run.deliverables.length : run.deliverables.length
                 ? h(LessonTaskFiles, { files: run.deliverables, sessionId: run.sessionId, compact: true }) : '0'))))),
-        !compactGearPair && sourceDetails,
+        !compactReceiptPair && sourceDetails,
         comparedGear && onCarry && h('div', { className: 'moba-lesson-result-options' },
           ['previous', 'current'].map(side => {
             const label = t(side === 'previous' ? '用原局出装做我的任务' : '用复赛出装做我的任务')
@@ -13449,8 +13466,11 @@ window.__ModuleLoader__.load({
               h('span', null, h('strong', null, label), !compactGearPair && h('small', null, setup)),
               !compactGearPair && h(Glyph, { kind: 'arrow', size: 16 }))
           })),
-        compactGearPair && sourceDetails,
-        h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')),
+        compactReceiptPair && sourceDetails,
+        revisionPair ? h('div', { className: 'moba-lesson-result-options', 'data-lighthouse-single-actions': true },
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')),
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: () => onOpenMatch(pair.current.sessionId) }, t('查看修订会话')))
+          : h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')),
         savedWorkflowArm && h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.current.sessionId) }, t('打开复赛会话')),
         scenarioPair && onCarry && h('div', { className: 'moba-lesson-result-options' },
           h('button', { type: 'button', className: 'moba-match-move moba-lighthouse-carry-side',
@@ -13480,6 +13500,7 @@ window.__ModuleLoader__.load({
       const lighthouseReplayButton = useRef(null)
       const lighthouseSwitchButton = useRef(null)
       const lighthouseScenarioButton = useRef(null)
+      const lighthouseRevisionButton = useRef(null)
       const lighthouseInviteButton = useRef(null)
       const lighthouseReportButton = useRef(null)
       const lighthousePersonalButton = useRef(null)
@@ -13494,10 +13515,12 @@ window.__ModuleLoader__.load({
       const cached = state[pane]
       const current = cached && cached.version === version && cached.retry === retry && cached.language === language ? cached : null
       const result = current?.result
-      const lighthousePair = result?.lighthousePair ?? result?.lighthouseScenarioPair
+      const lighthousePair = result?.lighthousePair ?? result?.lighthouseScenarioPair ?? result?.lighthouseRevisionPair
       const personalWorkflowReceipt = result?.personalWorkflowReceipt
       const personalWorkflowRematch = personalWorkflowReceipt && result.personalWorkflowRematch
       const lighthouseScenarioPair = Boolean(result?.lighthouseScenarioPair && !result.lighthousePair)
+      const lighthouseRevisionPair = Boolean(result?.lighthouseRevisionPair && !result.lighthousePair && !result.lighthouseScenarioPair)
+      const lighthouseRevisionAvailable = result?.lighthouseRevisionAvailable === true
       const lighthouseWorkflowReceipt = result?.lighthouseReplay === true && !lighthousePair &&
         Object.hasOwn(lighthouseReplayModeLabels, result.lighthouseMode) && result.lighthouseOutcomeIds
       const compactWorkflowReceipt = lighthouseWorkflowReceipt || personalWorkflowReceipt
@@ -13564,6 +13587,7 @@ window.__ModuleLoader__.load({
           'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton,
           'lighthouse-combined-replay': lighthouseReplayButton, 'lighthouse-combined-replay-switch': lighthouseSwitchButton,
           'lighthouse-combined-scenario': lighthouseScenarioButton,
+          'lighthouse-combined-revision': lighthouseRevisionButton,
           'lighthouse-combined-share': lighthouseInviteButton,
           'lighthouse-combined-report': lighthouseReportButton,
           'lighthouse-combined-personal': lighthousePersonalButton,
@@ -13611,19 +13635,25 @@ window.__ModuleLoader__.load({
                 t(result.status === 'unavailable' ? '暂不可核对' : comparisonArmStates[result.status] ?? result.status),
                 result.turn && t('第 ') + result.turn + t(' 回合'),
               ].filter(Boolean).join(' · ')),
-              lighthousePair ? h(LighthouseDecisionPair, { pair: lighthousePair, scenarioPair: lighthouseScenarioPair, onOpenMatch,
-                onCarry: (lighthouseScenarioPair || result.lighthouseReplay) && (lighthousePairSide => onPersonalFlow({ mode: 'lighthouse-combined-personal', lighthousePairSide })),
+              lighthousePair ? h(LighthouseDecisionPair, { pair: lighthousePair, scenarioPair: lighthouseScenarioPair,
+                revisionPair: lighthouseRevisionPair, onOpenMatch,
+                onCarry: !lighthouseRevisionPair && (lighthouseScenarioPair || result.lighthouseReplay) &&
+                  (lighthousePairSide => onPersonalFlow({ mode: 'lighthouse-combined-personal', lighthousePairSide })),
                 carryButtons: { previous: lighthousePreviousPersonalButton, current: lighthousePersonalButton, shared: lighthousePersonalButton } })
                 : compactWorkflowReceipt ? h(WorkflowTaskReceipt, { rows: workflowRows, files: result.deliverables ?? empty,
                   sessionId, materialDelivered: result.materialDelivered,
                   outcomeIds: lighthouseWorkflowReceipt || personalWorkflowReceipt.outcomeIds,
                   mode: lighthouseWorkflowReceipt ? result.lighthouseMode : personalWorkflowReceipt?.mode })
                   : h(WorkflowDecisionReceipts, { rows: workflowRows }),
-              (result.lighthouseReplay || result.lighthouseScenarioReplay || alternateLabel || handoffAlternate || personalWorkflowRematch || singleSave) &&
+              (result.lighthouseReplay || result.lighthouseScenarioReplay || lighthouseRevisionAvailable || alternateLabel || handoffAlternate || personalWorkflowRematch || singleSave) &&
                 h('div', { className: 'moba-lesson-result-options', 'data-personal-workflow-actions': Boolean(personalWorkflowRematch && singleSave) || undefined },
                 personalWorkflowRematch && h('button', { ref: personalWorkflowRematchButton, type: 'button', className: 'moba-match-move',
                   'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'personal-workflow-rematch', source: personalWorkflowRematch }) },
                 t(personalWorkflowRematch.change?.addId === 'evidence' ? '加装证据核验，同题再试' : '卸下证据核验，同题再试')),
+                lighthouseRevisionAvailable && h('button', { ref: lighthouseRevisionButton, type: 'button',
+                  className: 'moba-match-move moba-lighthouse-revision-action', 'aria-haspopup': 'dialog',
+                  onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-revision' }) },
+                t(lighthouseRevisionTitle), h(Glyph, { kind: 'arrow', size: 16 })),
                 pairedSingleActions ? h('div', { className: 'moba-lesson-result-options', 'data-lighthouse-single-actions': true },
                   switchAction, lighthousePersonalAction) : switchAction,
                 result.lighthouseScenarioReplay === true && h('button', { ref: lighthouseScenarioButton, type: 'button', className: 'moba-match-move',
@@ -14445,7 +14475,7 @@ window.__ModuleLoader__.load({
           setAction({ ...returnAction, initialPersonalFocus: focus })
           if (!element.matches(':popover-open')) element.showPopover(source ? { source } : undefined)
         }
-        if (['lighthouse-combined-replay', 'lighthouse-combined-scenario', 'lighthouse-combined-personal', 'lighthouse-combined-share',
+        if (['lighthouse-combined-replay', 'lighthouse-combined-scenario', 'lighthouse-combined-revision', 'lighthouse-combined-personal', 'lighthouse-combined-share',
           'lighthouse-combined-report', 'personal-workflow-rematch'].includes(mode)) restore()
         else requestAnimationFrame(restore)
       }
@@ -14716,8 +14746,9 @@ window.__ModuleLoader__.load({
         } }, t('试试交付前复核')) : undefined
 
       return h(Fragment, null,
-        ['lighthouse-combined-replay', 'lighthouse-combined-scenario'].includes(personalFlow?.mode) && h(LighthouseCombinedReplay, { key: personalFlow.mode,
-          sessionId, initialLoadout: personalFlow.initialLoadout, confirmed: personalFlow.mode === 'lighthouse-combined-scenario', request,
+        ['lighthouse-combined-replay', 'lighthouse-combined-scenario', 'lighthouse-combined-revision'].includes(personalFlow?.mode) &&
+          h(LighthouseCombinedReplay, { key: personalFlow.mode, sessionId, initialLoadout: personalFlow.initialLoadout,
+          confirmed: personalFlow.mode === 'lighthouse-combined-scenario', revision: personalFlow.mode === 'lighthouse-combined-revision', request,
           onBack: () => closePersonalFlow(), onOpen: visitPersonalFlow }),
         personalFlow?.mode === 'lighthouse-combined-share' && h(LighthouseChallengeShare, { lighthouseSessionId: sessionId,
           request, onBack: () => closePersonalFlow() }),
@@ -15424,6 +15455,7 @@ window.__ModuleLoader__.load({
       .moba-lesson-result-options button { min-width: 0; min-height: 44px; overflow-wrap: anywhere; white-space: normal; }
       .moba-lesson-result-options[data-personal-workflow-actions] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .moba-lesson-result-options[data-lighthouse-single-actions] { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .moba-lighthouse-revision-action { grid-column: 1 / -1; }
       .moba-workflow-task-receipt { display: grid; gap: 6px; min-width: 0; }
       .moba-workflow-task-receipt dl { display: grid; gap: 4px; margin: 0; font-size: 12px; }
       .moba-workflow-task-receipt dl > div { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
