@@ -6765,13 +6765,14 @@ export async function apply(ctx) {
     const source = await query.observeSession(sessionId, { projectionMode: 'none', signal })
     try {
       const value = await matchReport(source, before, receipts)
-      if (value.webRecovery !== undefined) {
+      if (value.webRecovery !== undefined || value.webRecoveryOutcome) {
         const { cwd, origin } = source.header
         const personal = typeof cwd === 'string' && cwd && origin !== 'subagent' && !planTaskDetails(source).launch?.webSourcePractice &&
           await personalTaskPathFilter().then(includesPath => includesPath(cwd)).catch(() => false)
         if (!personal) {
           delete value.webRecovery
           delete value.webRecoveryRepeat
+          delete value.webRecoveryOutcome
         }
       }
       const endSeqs = value.turns.filter(turn => !turn.inherited && Number.isSafeInteger(turn.endSeq)).map(turn => turn.endSeq)

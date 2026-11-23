@@ -244,22 +244,25 @@ function settleTool(call, outcome, error, time) {
   if (call.name === 'ask_user_question' && call.state === 'completed') call.choices = answerChoices(outcome)
 }
 
+function safeWebAddress(url) {
+  if (typeof url !== 'string' || url.length > 4096 || /[\p{Cc}\p{Z}]/u.test(url) || !/^https?:\/\//i.test(url)) return
+  try {
+    const parsed = new URL(url)
+    if (!parsed.username && !parsed.password && ['http:', 'https:'].includes(parsed.protocol)) return parsed.href
+  } catch {
+    // Invalid URLs from historical metadata do not become links.
+  }
+}
+
 function reportWebRead({ meta, error }, toolState) {
   if (toolState === 'failed') return { status: 'failed' }
   if (toolState !== 'completed' || error || !meta || typeof meta !== 'object' || Array.isArray(meta)) return { status: 'unknown' }
-  const { url, statusCode, truncated } = meta
-  if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 599 || typeof truncated !== 'boolean' ||
-    typeof url !== 'string' || url.length > 4096 || /[\p{Cc}\p{Z}]/u.test(url) || !/^https?:\/\//i.test(url)) {
-    return { status: 'unknown' }
-  }
-  try {
-    const parsed = new URL(url)
-    if (parsed.username || parsed.password || !['http:', 'https:'].includes(parsed.protocol)) return { status: 'unknown' }
-    const status = statusCode < 200 || statusCode >= 300 ? 'http-error' : truncated ? 'truncated' : 'complete'
-    return { status, statusCode, url: parsed.href }
-  } catch {
-    return { status: 'unknown' }
-  }
+  const { statusCode, truncated } = meta
+  const url = safeWebAddress(meta.url)
+  if (!url || !Number.isInteger(statusCode) || statusCode < 100 || statusCode > 599 ||
+    typeof truncated !== 'boolean') return { status: 'unknown' }
+  const status = statusCode < 200 || statusCode >= 300 ? 'http-error' : truncated ? 'truncated' : 'complete'
+  return { status, statusCode, url }
 }
 
 function applyToolSource(call, { id, sourceId, sourceName, blocked, registeredSourceName }) {
@@ -352,19 +355,25 @@ async function reportTurn(source, start, end, receipts) {
     }
   }
   const latestWeb = entries.findLast(entry => entry.name === 'web_fetch' && !entry.nested)
-  const webRecovery = userTurn && !inherited && status === 'completed' && recoverable.has(latestWeb) ? latestWeb.seq : undefined
+  const owned = userTurn && !inherited && status === 'completed'
+  const webRecovery = owned && recoverable.has(latestWeb) ? latestWeb.seq : undefined
+  const webComplete = owned && latestWeb?.state === 'completed' && latestWeb.webRead?.status === 'complete' ? latestWeb : undefined
   return { seq: start, endSeq, turn: beginning.data.turn, time: beginning.time, inherited, status,
-    entries: entries.sort((a, b) => a.seq - b.seq), webRecovery }
+    entries: entries.sort((a, b) => a.seq - b.seq), webRecovery, webComplete }
+}
+
+function submittedWebText(events, start, end, beforeCall = Infinity) {
+  const messages = events.slice(start, end).filter(event => event.type === 'user/message' && event.data.source.kind === 'user')
+  const content = messages.length === 1 ? messages[0].data.content : undefined
+  if (content?.length !== 1 || messages[0].seq >= beforeCall || content[0]?.type !== 'text' || typeof content[0].text !== 'string' ||
+    content[0].text.length > 6000) return
+  return content[0].text.replace(/\r\n?/g, '\n').trim()
 }
 
 function submittedNarrowedQuestion(events, start, end, url) {
-  // These are the prompts that v0.201 wrote into the native draft. Only recover
-  // the editable point from a single matching user message with no attachments.
-  const messages = events.slice(start, end).filter(event => event.type === 'user/message' && event.data.source.kind === 'user')
-  const content = messages.length === 1 ? messages[0].data.content : undefined
-  if (content?.length !== 1 || content[0]?.type !== 'text' || typeof content[0].text !== 'string' ||
-    content[0].text.length > 6000) return
-  const text = content[0].text.replace(/\r\n?/g, '\n').trim()
+  // Match the native draft text introduced in v0.201.
+  const text = submittedWebText(events, start, end)
+  if (!text) return
   for (const translate of [value => value, englishText]) {
     const prefix = [
       translate('上次读取以下地址时，响应被截断。请沿用这个来源。'), url, translate('本次只核对这一点'), '',
@@ -374,6 +383,52 @@ function submittedNarrowedQuestion(events, start, end, url) {
     const question = text.slice(prefix.length, -suffix.length).trim()
     if (question && question.length <= 400) return question
   }
+}
+
+function webPage(url) {
+  return url?.split('#', 1)[0]
+}
+
+function truncatedRead(turn) {
+  const entry = turn?.entries.find(entry => entry.seq === turn.webRecovery)
+  if (entry?.state === 'completed' && entry.webRead?.status === 'truncated') return entry.webRead
+}
+
+function requestedWebAddress(events, start, end, seq) {
+  const call = events.slice(start, end).find(event => event.seq === seq && event.type === 'tool/call')
+  const args = call?.data.arguments
+  if (typeof args !== 'string' || args.length > 8192) return
+  try {
+    return safeWebAddress(JSON.parse(args)?.url)
+  } catch {
+    // Old calls without valid arguments cannot establish which URL was requested.
+  }
+}
+
+function submittedSourceChange(text, originalUrl, requestedUrl) {
+  if (!text || !requestedUrl || webPage(requestedUrl) === webPage(originalUrl)) return false
+  // The text comes from the user's submitted v0.202 draft, after any manual edits.
+  // Match the selected link to the native request, before any server redirect.
+  for (const translate of [value => value, englishText]) {
+    const linkInstruction = translate('同一网址再次截断。请改查下面的章节或替代来源。')
+    const searchInstruction = translate('同一网址再次截断。请优先查找同一发布方提供的较短章节页，或另一份公开可访问的原始来源。')
+    const point = translate('本次只核对这一点')
+    const closing = translate('引用能核对的原文并给出链接。找不到依据时，标为待核实。')
+    const [instruction, selectedUrl] = text.split('\n', 2)
+    let prefix
+    let suffix
+    if (instruction === linkInstruction && webPage(safeWebAddress(selectedUrl)) === webPage(requestedUrl)) {
+      prefix = [instruction, selectedUrl, point, ''].join('\n')
+      suffix = '\n' + closing
+    } else if (instruction === searchInstruction) {
+      prefix = [instruction, point, ''].join('\n')
+      suffix = ['', translate('原读取地址（作为查找线索）'), originalUrl, closing].join('\n')
+    } else continue
+    if (!text.startsWith(prefix) || !text.endsWith(suffix)) continue
+    const question = text.slice(prefix.length, -suffix.length)
+    if (question.trim() && question.length <= 400) return true
+  }
+  return false
 }
 
 export function noteDeliveredFiles(files, { files: delivered, turn }, seq) {
@@ -634,11 +689,19 @@ export async function matchReport(source, before, receipts) {
   const compactions = []
   let webRecovery
   let webRecoveryRepeat
+  let webRecoveryOutcome
   let latestTurn = before === undefined
-  let previousTurn
+  const checkedTurns = new Map()
+  async function priorTurn(before) {
+    const start = events.findLastIndex((event, index) => index < before && event.type === 'turn/start')
+    if (start < 0) return
+    const value = await reportTurn(source, start, before, receipts)
+    checkedTurns.set(start, value)
+    return value
+  }
   const result = () => ({ turns, ...(commands.length && { commands }), ...(panelActivities.length && { panelActivities }),
     ...(compactions.length && { compactions }), ...(webRecovery !== undefined && { webRecovery }),
-    ...(webRecoveryRepeat && { webRecoveryRepeat }) })
+    ...(webRecoveryRepeat && { webRecoveryRepeat }), ...(webRecoveryOutcome && { webRecoveryOutcome }) })
   const outcomes = new Map()
   const limit = before ?? events.length
   let end = events.length
@@ -664,29 +727,39 @@ export async function matchReport(source, before, receipts) {
     } else if (type === 'compaction/end' && index < limit) {
       compaction = { seq, time, state: data.error === undefined ? 'completed' : 'failed', inherited: index < source.inheritedEventCount }
     } else if (type === 'turn/start') {
-      if (index < limit) turn = previousTurn?.start === index ? previousTurn.value : await reportTurn(source, index, end, receipts)
-      if (latestTurn && turn?.webRecovery !== undefined) {
+      if (index < limit) turn = checkedTurns.has(index) ? checkedTurns.get(index) : await reportTurn(source, index, end, receipts)
+      if (latestTurn && (turn?.webRecovery !== undefined || turn?.webComplete)) {
         const lastSubmission = events.findLast(event => event.type === 'turn/end' ||
           event.type === 'user/message' && event.data.source.kind === 'user')
         if (lastSubmission?.type === 'turn/end' && lastSubmission.seq === turn.endSeq) {
           webRecovery = turn.webRecovery
-          const read = turn.entries.find(entry => entry.seq === webRecovery)?.webRead
-          if (read?.status === 'truncated') {
-            const start = events.findLastIndex((event, offset) => offset < index && event.type === 'turn/start')
-            if (start >= 0) {
-              const earlier = await reportTurn(source, start, index, receipts)
-              previousTurn = { start, value: earlier }
-              const oldRead = earlier?.entries.find(entry => entry.seq === earlier.webRecovery)?.webRead
-              if (oldRead?.status === 'truncated' && oldRead.url.split('#', 1)[0] === read.url.split('#', 1)[0]) {
-                const question = submittedNarrowedQuestion(events, index, end, oldRead.url)
-                webRecoveryRepeat = question ? { question } : {}
+          const read = truncatedRead(turn)
+          if (read) {
+            const oldRead = truncatedRead(await priorTurn(index))
+            if (oldRead && webPage(oldRead.url) === webPage(read.url)) {
+              const question = submittedNarrowedQuestion(events, index, end, oldRead.url)
+              webRecoveryRepeat = question ? { question } : {}
+            }
+          } else if (turn.webComplete) {
+            const { seq, webRead } = turn.webComplete
+            const text = submittedWebText(events, index, end, seq)
+            const earlier = text ? await priorTurn(index) : undefined
+            const oldRead = truncatedRead(earlier)
+            if (oldRead && webPage(oldRead.url) !== webPage(webRead.url) &&
+              submittedSourceChange(text, oldRead.url, requestedWebAddress(events, index, end, seq))) {
+              const firstRead = truncatedRead(await priorTurn(earlier.seq))
+              if (firstRead && webPage(firstRead.url) === webPage(oldRead.url)) {
+                webRecoveryOutcome = { seq, previousUrl: oldRead.url }
               }
             }
           }
         }
       }
       latestTurn = false
-      if (turn) delete turn.webRecovery
+      if (turn) {
+        delete turn.webRecovery
+        delete turn.webComplete
+      }
       end = index
     }
     if (!turn && !command && !panel && !compaction) continue

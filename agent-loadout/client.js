@@ -9384,6 +9384,7 @@ window.__ModuleLoader__.load({
         const read = entry.webRead
         const offered = result?.webRecovery === entry.seq
         const repeat = offered ? result.webRecoveryRepeat : undefined
+        const previousUrl = result?.webRecoveryOutcome?.seq === entry.seq ? result.webRecoveryOutcome.previousUrl : undefined
         return h('li', { key: entry.seq, className: 'moba-report-row', 'data-type': entry.type, 'data-nested': entry.nested },
           entry.kind === 'quest' ? h(Glyph, { kind: 'report', size: 21 })
             : entry.kind === 'hero' ? h(HeroArt, { ...entry, className: 'moba-report-art' })
@@ -9396,10 +9397,13 @@ window.__ModuleLoader__.load({
             entry.expectedSourceName && h('small', null, t('所选来源 ') + entry.expectedSourceName),
             entry.blockedSourceName && h('small', null, t('拦截来源 ') + entry.blockedSourceName),
             read && h('div', { className: 'moba-report-web-read', 'data-web-read': read.status },
-              h('strong', null, t(reportWebReadStates[read.status]), read.statusCode && ' · HTTP ' + read.statusCode),
+              h('strong', null, t(previousUrl ? '换源后响应未截断' : reportWebReadStates[read.status]),
+                read.statusCode && ' · HTTP ' + read.statusCode),
               repeat && h('small', null, t('同一网址再次截断')),
               read.url && h('a', { href: read.url, title: read.url, target: '_blank', rel: 'noopener noreferrer' },
-                t('打开读取地址'), h(Glyph, { kind: 'arrow', size: 13 })),
+                t(previousUrl ? '打开替代来源' : '打开读取地址'), h(Glyph, { kind: 'arrow', size: 13 })),
+              previousUrl && h('a', { href: previousUrl, title: previousUrl, target: '_blank', rel: 'noopener noreferrer' },
+                t('查看原地址 · 连续两次截断'), h(Glyph, { kind: 'arrow', size: 13 })),
               offered && h('button', { type: 'button', className: 'moba-text moba-web-recovery-trigger', ref: recoveryTrigger,
                 'aria-expanded': recovery?.entry.seq === entry.seq, 'aria-controls': recovery?.entry.seq === entry.seq ? recoveryId : undefined,
                 onClick: () => setRecovery({ entry, repeat }) },

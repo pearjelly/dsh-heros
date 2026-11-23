@@ -202,3 +202,76 @@ test('repeated truncation follows adjacent actual final addresses and carries on
     assert.equal(report.webRecoveryRepeat, undefined)
   }
 })
+
+test('source change links the observed prior and alternative URLs on the qualifying latest row only', async () => {
+  const original = 'https://example.com/long'
+  const selected = 'https://example.com/section'
+  const resolved = 'https://example.org/section'
+  const question = 'Check the definition.\nInclude its two exceptions.'
+  const link = translate => [
+    translate('同一网址再次截断。请改查下面的章节或替代来源。'), selected + '#summary',
+    translate('本次只核对这一点'), question,
+    translate('引用能核对的原文并给出链接。找不到依据时，标为待核实。'),
+  ].join('\n')
+  const search = [
+    englishText('同一网址再次截断。请优先查找同一发布方提供的较短章节页，或另一份公开可访问的原始来源。'),
+    englishText('本次只核对这一点'), question,
+    englishText('原读取地址（作为查找线索）'), original,
+    englishText('引用能核对的原文并给出链接。找不到依据时，标为待核实。'),
+  ].join('\n')
+  function threeTurns(text, edit = () => {}) {
+    return (call, result, events) => {
+      const turns = [1, 2, 3].flatMap(turn => {
+        const seq = (turn - 1) * 5
+        return [
+          { ...events[0], seq, data: { turn } },
+          { type: 'user/message', seq: seq + 1, surfaceOp: 'append',
+            data: { source: { kind: 'user' }, content: [{ type: 'text', text: turn === 3 ? text : 'Read the original.' }] } },
+          { ...call, seq: seq + 2, data: { ...call.data, turn, arguments: JSON.stringify({ url: turn === 3 ? selected : original }) } },
+          { ...result, seq: seq + 3, sourceEventSeqs: [seq + 2], data: {
+            ...result.data, turn, meta: { ...result.data.meta, url: turn === 3 ? resolved : original, truncated: turn !== 3 },
+          } },
+          { ...events.at(-1), seq: seq + 4, data: { turn, reason: { kind: 'completed' } } },
+        ]
+      })
+      edit(turns)
+      events.splice(0, events.length, ...turns)
+    }
+  }
+
+  for (const text of [link(value => value), link(englishText).replaceAll('\n', '\r\n'), search]) {
+    const report = await webReport(threeTurns(text))
+    assert.deepEqual(report.webRecoveryOutcome, { seq: 12, previousUrl: original })
+    assert.equal(report.turns[0].entries[0].webRead.url, resolved)
+    assert.equal(report.webRecovery, undefined)
+    assert.ok(report.turns.every(turn => !Object.hasOwn(turn, 'webComplete')))
+  }
+  const submission = link(englishText)
+  for (const text of ['Read a different page.', '', search.replace(original, selected), submission.replace(question, ' '.repeat(3))]) {
+    assert.equal((await webReport(threeTurns(text))).webRecoveryOutcome, undefined)
+  }
+  const cases = {
+    'wrong native request': events => { events[12].data.arguments = JSON.stringify({ url: 'https://example.com/unselected' }) },
+    'search request reused the original': events => { events[12].data.arguments = JSON.stringify({ url: original }) },
+    'redirect back to the original page': events => { events[13].data.meta.url = original + '#section' },
+    'the alternative truncated': events => { events[13].data.meta.truncated = true },
+    'HTTP error': events => { events[13].data.meta.statusCode = 403 },
+    'a projected result': events => { events[13].surfaceOp = 'replace' },
+    'a result for another call': events => { events[13].sourceEventSeqs = [7] },
+    'no pair of actual truncations': events => { events[3].data.meta.truncated = false },
+    'truncations of different pages': events => { events[3].data.meta.url = original + '-other' },
+    'attachment added': events => { events[11].data.content.push({ type: 'image' }) },
+    'request made before the user message': events => { events[11].seq = 13 },
+    'pending user submission': events => { events.push({ ...events[11], seq: 15 }) },
+    'unfinished latest turn': events => { events.pop() },
+    'intervening empty turn': events => events.splice(5, 0,
+      { type: 'turn/start', seq: 5, data: { turn: 10 } },
+      { type: 'turn/end', seq: 6, data: { turn: 10, reason: { kind: 'completed' } } }),
+  }
+  for (const [label, edit] of Object.entries(cases)) {
+    const report = await webReport(threeTurns(label.startsWith('search request') ? search : submission, edit))
+    assert.equal(report.webRecoveryOutcome, undefined, label)
+  }
+  assert.equal((await webReport(threeTurns(submission), { before: 10 })).webRecoveryOutcome, undefined)
+  assert.equal((await webReport(threeTurns(submission), { inheritedEventCount: 5 })).webRecoveryOutcome, undefined)
+})
