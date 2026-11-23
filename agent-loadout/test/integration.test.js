@@ -1457,6 +1457,8 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const result = async sessionId => (await host.request(endpoint, { action: 'lesson-task-result', sessionId })).value
     const personalDraft = async (sessionId, status) =>
       (await host.request(endpoint, { action: 'lighthouse-combined-personal-draft', sessionId }, status)).value
+    const pairedDraft = async (sessionId, pairSide, status) =>
+      (await host.request(endpoint, { action: 'lighthouse-combined-personal-draft', sessionId, pairSide }, status)).value
     const native = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
     const questions = '/api/loadout-fixture-handoff-question'
     async function choose(sessionId, questionId, choice, beforeAnswer) {
@@ -1589,6 +1591,12 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(compared.lighthousePair.current.mode, 'review')
     assert.equal(compared.deliverables.length, 1)
     assert.deepEqual(await personalDraft(variant.sessionId), { draft: review.draft, heroName: '标准模式' })
+    assert.deepEqual(await pairedDraft(variant.sessionId, 'previous'), { ...carried, mode: 'evidence-review' })
+    assert.deepEqual(await pairedDraft(variant.sessionId, 'current'), { draft: review.draft, heroName: '标准模式', mode: 'review' })
+    await pairedDraft(variant.sessionId, null, 422)
+    await pairedDraft(variant.sessionId, 'unrelated', 422)
+    await pairedDraft(next.sessionId, 'previous', 422)
+    await pairedDraft(sessionId, 'current', 422)
     assert.equal((await replay('preview', { sessionId: variant.sessionId, loadout: 'switch' })).mode, 'evidence-review')
     assert.deepEqual(await native(next.sessionId), verifiedReplay)
 
@@ -1617,6 +1625,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(firstReview.deliverables, [])
     assert.equal(firstReview.lighthousePair, undefined)
     assert.equal((await replay('preview', { sessionId: reviewOpening.sessionId, loadout: 'switch' })).mode, 'evidence-review')
+    await pairedDraft(reviewOpening.sessionId, 'current', 422)
 
     const prepare = async draft => (await host.request(endpoint, draft)).value.presetId
     const open = async presetId => (await host.request('/api/loadout-fixture-session', { presetId, workspacePath: directory })).sessionId
@@ -1644,6 +1653,59 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(ownOpening.task, ownPreview.task)
     assert.equal(ownOpening.workspaceId, personalWorkspace)
     assert.ok(!(await native(ownOpening.sessionId)).events.some(event => event.type === 'user/message'))
+    const pairFields = { workspaceId: personalWorkspace, material: 'handoff.md', task: ownTask.task }
+    const pairInput = pairSide => ({ ...pairFields, lighthousePair: { sessionId: variant.sessionId, pairSide } })
+    const previewOwn = async (fields, status) =>
+      (await host.request(endpoint, { ...fields, action: 'armory-task-preview' }, status)).value
+    const openOwn = async (fields, token, status) =>
+      (await host.request(endpoint, { ...fields, action: 'armory-task-open', token, launchId: '2'.repeat(32) }, status)).value
+    await previewOwn({ ...pairFields, lighthousePair: null }, 422)
+    await previewOwn(pairInput(null), 422)
+    await previewOwn({ ...pairFields, lighthousePair: { sessionId: reviewOpening.sessionId, pairSide: 'current' } }, 422)
+    await previewOwn({ ...pairInput('previous'), workspaceId: variant.workspaceId }, 422)
+    const previousCarry = await previewOwn({ ...pairInput('previous'), draft: review.draft })
+    const currentCarry = await previewOwn(pairInput('current'))
+    assert.deepEqual(previousCarry.gear.map(item => item.id).sort(), ['evidence', 'present', 'review'])
+    assert.deepEqual(currentCarry.gear.map(item => item.id).sort(), ['present', 'review'])
+    assert.equal(previousCarry.task, ownPreview.task)
+    assert.equal(currentCarry.task, ownPreview.task)
+    assert.notEqual(previousCarry.token, currentCarry.token)
+    await openOwn(pairInput('current'), previousCarry.token, 422)
+    await openOwn(pairInput('previous'), currentCarry.token, 422)
+    await openOwn(ownTask, previousCarry.token, 422)
+
+    const previousSample = join(verifiedReplay.workspacePath, combinedPractice.material)
+    const previousBytes = await readFile(previousSample)
+    try {
+      await appendFile(previousSample, '\nMaterial changed after checking both sides.\n')
+      await pairedDraft(variant.sessionId, 'current', 422)
+      await openOwn(pairInput('current'), currentCarry.token, 422)
+      assert.deepEqual(await personalDraft(variant.sessionId), { draft: review.draft, heroName: '标准模式' })
+    } finally {
+      await writeFile(previousSample, previousBytes)
+    }
+    const fromPrevious = await openOwn({ ...pairInput('previous'), draft: null }, previousCarry.token)
+    const fromCurrent = await openOwn(pairInput('current'), currentCarry.token)
+    assert.notEqual(fromPrevious.sessionId, fromCurrent.sessionId)
+    assert.deepEqual(await openOwn(pairInput('previous'), previousCarry.token), fromPrevious)
+    assert.equal((await native(fromPrevious.sessionId)).presetId, verifiedReplay.presetId)
+    assert.equal((await native(fromCurrent.sessionId)).presetId, variantNative.presetId)
+    for (const opened of [fromPrevious, fromCurrent]) {
+      assert.equal(opened.workspaceId, personalWorkspace)
+      assert.equal(opened.task, ownPreview.task)
+      const privateSession = await native(opened.sessionId)
+      assert.ok(!privateSession.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+      const launch = privateSession.events.find(event => event.type === 'plugin:dsh-agent-loadout/plan-task').data
+      assert.equal(launch.armory, true)
+      assert.equal(launch.material, pairFields.material)
+      assert.equal(launch.source, undefined)
+      assert.equal(launch.target.lighthouseCombined, undefined)
+      assert.doesNotMatch(JSON.stringify(launch), /lighthousePair|lighthouseReplayOf|lighthouseReviewOnly|02-lighthouse/)
+      assert.ok(!JSON.stringify(launch).includes(variant.sessionId))
+      assert.ok(!JSON.stringify(launch).includes(next.sessionId))
+    }
+    assert.deepEqual(await native(next.sessionId), verifiedReplay)
+    assert.deepEqual(await native(variant.sessionId), variantNative)
     await resumeLighthouse({ ...draftRun, sessionId: ownOpening.sessionId }, 422)
     assert.deepEqual(await pendingLighthouse(), { runs: [] })
     assert.deepEqual(await native(sessionId), originalNative)

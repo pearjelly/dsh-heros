@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.246.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.247.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -187,6 +187,8 @@ dsh web
 复赛预览也可以只加装或卸下「证据核验」，沿用同一题、标准模式、交付前复核和交付物预览。复赛战报会指出这次变动的装备，并显示两局实际选择和文件。
 
 在已核对的灯塔结果点 **把这套出装用到我的任务**，选自己的工作区和文件，填写这次的任务。核对出装后打开独立草稿，再手动发送。
+
+两局出装不同时，可从灯塔对照表下点 **用原局出装做我的任务** 或 **用复赛出装做我的任务**。先看选中的装备，再挑自己的文件、写新任务。
 
 选路时可以看到两边共用 **标准模式** 和 **交付物预览**。复核路线额外加装 **交付前复核**，把交不交文件的选择留给你。
 

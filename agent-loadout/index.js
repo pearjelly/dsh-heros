@@ -1268,6 +1268,18 @@ export async function apply(ctx) {
     return { ...fields, hash }
   }
 
+  async function requestedPersonalArmoryTask(selection, english, signal) {
+    if (!Object.hasOwn(selection, 'lighthousePair')) return requestedArmoryTask(selection, english)
+    const { lighthousePair } = selection
+    if (!lighthousePair || typeof lighthousePair !== 'object' || Array.isArray(lighthousePair)) {
+      throw new Error(combinedLighthouseReplayUnavailable)
+    }
+    const { draft, binding } = await checkCombinedLighthousePairSide(lighthousePair, signal)
+    const input = requestedArmoryTask({ ...selection, draft }, english)
+    const hash = createHash('sha256').update(JSON.stringify([input.hash, binding])).digest('hex')
+    return { ...input, lighthousePair: true, hash }
+  }
+
   function requestedCombinedLighthouseTask(selection, english) {
     const input = requestedArmoryTask(selection, english)
     const { lighthouseReplayOf, lighthouseReviewOnly } = selection
@@ -1367,7 +1379,7 @@ export async function apply(ctx) {
   const reviewedTaskKinds = {
     plan: { input: requestedPlanTask, check: checkPlanTask, unavailable: '当前 DSH 无法从出装方案开启新任务。' },
     lesson: { input: requestedLessonTask, check: checkLessonTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
-    armory: { input: requestedArmoryTask, check: checkArmoryTask, unavailable: '当前 DSH 无法用当前出装开启任务。' },
+    armory: { input: requestedPersonalArmoryTask, check: checkArmoryTask, unavailable: '当前 DSH 无法用当前出装开启任务。' },
     'lighthouse-combined': { input: requestedCombinedLighthouseTask,
       check: (input, signal) => checkArmoryTask(input, signal, readWorkspaceMaterial),
       readMaterial: readWorkspaceMaterial, unavailable: '灯塔练习工作区不可用。' },
@@ -1387,7 +1399,7 @@ export async function apply(ctx) {
     const webPractice = kind === 'web-source' || webPilot
     const { input: readInput, check, unavailable, readMaterial = readPersonalTaskMaterial } = reviewedTaskKinds[kind]
     const input = await readInput(selection, english, signal)
-    const { sourcePlan, decisionReplayOf } = input
+    const { sourcePlan, decisionReplayOf, lighthousePair } = input
     const controller = ctx.get('sessionController')
     const registry = ctx.get('workspaceRegistry')
     if (!controller?.create || !ctx.get('sessionQuery') || !registry) {
@@ -1420,6 +1432,9 @@ export async function apply(ctx) {
         }
       }
       if (decisionReplayOf && (await readInput(selection, english, signal)).hash !== input.hash) throw new Error(webPilotReplayChanged)
+      if (lighthousePair && (await readInput(selection, english, signal)).hash !== input.hash) {
+        throw new Error(combinedLighthouseReplayUnavailable)
+      }
       if (webPractice) await mkdir(directory, { recursive: true, mode: 0o700 })
       const cwd = webPractice ? join(await realpath(directory), webSourceDirectory, sessionId) : checked.cwd
       if (webPractice) {
@@ -3505,8 +3520,7 @@ export async function apply(ctx) {
 
   const combinedLighthouseReplayUnavailable = '灯塔原局暂时无法核对。请回原会话查看。'
 
-  async function checkCombinedLighthouseLoadout(sessionId, signal) {
-    const original = await readCombinedLighthouseRound(sessionId, signal)
+  async function checkCombinedLighthouseRoundLoadout(original, signal) {
     if (!original) throw new Error(combinedLighthouseReplayUnavailable)
     const current = await checkCombinedLighthouseStart(original.language === 'en', signal, original.mode)
     if (!current.draft || current.identity !== original.target.identity || current.preview.task !== original.target.task) {
@@ -3515,9 +3529,26 @@ export async function apply(ctx) {
     return { ...current, original }
   }
 
-  async function readCombinedLighthousePersonalDraft(sessionId, signal) {
-    const { draft } = await checkCombinedLighthouseLoadout(sessionId, signal)
-    return { draft, heroName: presetLabels.get(draft.presetId)[0] }
+  async function checkCombinedLighthouseLoadout(sessionId, signal) {
+    return checkCombinedLighthouseRoundLoadout(await readCombinedLighthouseRound(sessionId, signal), signal)
+  }
+
+  async function checkCombinedLighthousePairSide({ sessionId, pairSide }, signal) {
+    if (!['previous', 'current'].includes(pairSide)) throw new Error(combinedLighthouseReplayUnavailable)
+    const current = await checkCombinedLighthouseLoadout(sessionId, signal)
+    const original = await combinedLighthousePrevious(current.original, signal)
+    if (!original || original.mode === current.mode) throw new Error(combinedLighthouseReplayUnavailable)
+    const previous = await checkCombinedLighthouseRoundLoadout(original, signal)
+    const selected = pairSide === 'previous' ? previous : current
+    return { draft: selected.draft, mode: selected.mode,
+      binding: [sessionId, original.sessionId, pairSide, previous.identity, current.identity, original.target.digest] }
+  }
+
+  async function readCombinedLighthousePersonalDraft(selection, signal) {
+    const paired = Object.hasOwn(selection, 'pairSide')
+    const { draft, mode } = paired ? await checkCombinedLighthousePairSide(selection, signal)
+      : await checkCombinedLighthouseLoadout(selection.sessionId, signal)
+    return { draft, heroName: presetLabels.get(draft.presetId)[0], ...(paired && { mode }) }
   }
 
   async function checkCombinedLighthouseReplay({ sessionId, loadout = 'same' }, signal) {
@@ -6915,12 +6946,18 @@ export async function apply(ctx) {
     return combinedLighthouseRound(sessionId, result, workflowDecisions, signal)
   }
 
-  async function combinedLighthousePair(current, signal) {
+  async function combinedLighthousePrevious(current, signal) {
     if (!current?.target.lighthouseReplayOf) return
     const previous = await readCombinedLighthouseRound(current.target.lighthouseReplayOf, signal)
     if (!previous || previous.target.workspaceId === current.target.workspaceId || previous.target.digest !== current.target.digest ||
       previous.target.task !== current.target.task ||
       (previous.target.identity === current.target.identity) !== (previous.mode === current.mode)) return
+    return previous
+  }
+
+  async function combinedLighthousePair(current, signal) {
+    const previous = await combinedLighthousePrevious(current, signal)
+    if (!previous) return
     const changingGear = previous.mode !== current.mode
     const side = ({ sessionId, mode, workflowDecisions, deliverables }) => ({
       sessionId, workflowDecisions, deliverables, ...(changingGear && { mode }),
@@ -9081,7 +9118,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-combined-start-open') value = await openCombinedLighthouse(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-combined-replay-preview') value = (await checkCombinedLighthouseReplay(selection, request.signal)).preview
         else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, true)
-        else if (selection?.action === 'lighthouse-combined-personal-draft') value = await readCombinedLighthousePersonalDraft(selection.sessionId, request.signal)
+        else if (selection?.action === 'lighthouse-combined-personal-draft') value = await readCombinedLighthousePersonalDraft(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-pending') value = await combinedLighthousePending(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-resume') value = await resumeCombinedLighthouse(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-preview') value = await previewLighthouseDirectRematch(selection, request.signal)
@@ -9241,7 +9278,8 @@ export async function apply(ctx) {
         } else if (selection?.action === 'armory-task-options') {
           value = { workspaceIds: await personalWorkspaceIds(request.signal) }
         } else if (selection?.action === 'armory-task-preview') {
-          value = await previewReviewedTask(await checkArmoryTask(requestedArmoryTask(selection, english), request.signal), request.signal)
+          const input = await requestedPersonalArmoryTask(selection, english, request.signal)
+          value = await previewReviewedTask(await checkArmoryTask(input, request.signal), request.signal)
         } else if (selection?.action === 'armory-task-open') {
           value = await openReviewedTask(selection, english, request.signal, 'armory')
         } else if (selection?.action === 'lesson-task-result') {

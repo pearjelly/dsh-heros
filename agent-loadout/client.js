@@ -2925,6 +2925,7 @@ window.__ModuleLoader__.load({
       'evidence-review': '证据核验 + 交付前复核',
       review: '只测交付前复核',
     }
+    const lighthouseCarryModeLabels = { ...lighthouseReplayModeLabels, review: '仅交付前复核' }
 
     function LighthouseLoadoutChoices({ heading, options, picked, disabled, onChoose }) {
       const group = useId()
@@ -8619,8 +8620,9 @@ window.__ModuleLoader__.load({
 
     const lighthousePersonalTaskLabel = '把这套出装用到我的任务'
 
-    function PersonalLoadoutTask({ source, armoryDraft, lighthouseSessionId, workspaces, initialWorkspaceId, rebaseline, handoffStyle,
-      handoffAlternateOf, request, onBack, onVisit, backLabel = rebaseline || lighthouseSessionId ? '返回任务结果' : '返回记录' }) {
+    function PersonalLoadoutTask({ source, armoryDraft, lighthouseSessionId, lighthousePairSide, workspaces, initialWorkspaceId,
+      rebaseline, handoffStyle, handoffAlternateOf, request, onBack, onVisit,
+      backLabel = rebaseline || lighthouseSessionId ? '返回任务结果' : '返回记录' }) {
       const language = useLanguage()
       const workspaceSetup = useContext(WorkspaceSetupContext)
       const [loaded, setLoaded] = useState(null)
@@ -8631,8 +8633,9 @@ window.__ModuleLoader__.load({
       const { kind, comparisonId, arm, handoffPairId } = source ?? emptyMap
       const armory = armoryDraft || lighthouseSessionId
       const optionsAction = armory ? 'armory-task-options' : 'lesson-task-options'
-      const reference = JSON.stringify([optionsAction, kind, comparisonId, arm, handoffPairId, lighthouseSessionId])
+      const reference = JSON.stringify([optionsAction, kind, comparisonId, arm, handoffPairId, lighthouseSessionId, lighthousePairSide])
       const membership = JSON.stringify(workspaces.map(item => item.workspaceId).sort())
+      const lighthousePair = lighthousePairSide && { sessionId: lighthouseSessionId, pairSide: lighthousePairSide }
       const current = loaded?.reference === reference ? loaded : null
       const refreshed = current?.membership === membership && current?.attempt === attempt
       const options = current?.value
@@ -8651,10 +8654,12 @@ window.__ModuleLoader__.load({
           let lighthouseDraft
           if (lighthouseSessionId) {
             const action = 'lighthouse-combined-personal-draft'
-            lighthouseDraft = await request(action, { action, sessionId: lighthouseSessionId }, abort.signal, language)
+            lighthouseDraft = await request(action, { action, sessionId: lighthouseSessionId,
+              ...(lighthousePairSide && { pairSide: lighthousePairSide }) }, abort.signal, language)
             if (abort.signal.aborted) return
             if (typeof lighthouseDraft?.draft?.presetId !== 'string' || !Array.isArray(lighthouseDraft.draft.equipmentIds) ||
-              typeof lighthouseDraft.heroName !== 'string' || !lighthouseDraft.heroName) {
+              typeof lighthouseDraft.heroName !== 'string' || !lighthouseDraft.heroName ||
+              (lighthousePairSide && !Object.hasOwn(lighthouseCarryModeLabels, lighthouseDraft.mode))) {
               throw new Error(t('灯塔原局暂时无法核对。请回原会话查看。'))
             }
           }
@@ -8669,7 +8674,7 @@ window.__ModuleLoader__.load({
             }))
           })
         return () => abort.abort()
-      }, [request, optionsAction, kind, comparisonId, arm, handoffPairId, lighthouseSessionId, attempt, language, reference, membership])
+      }, [request, optionsAction, kind, comparisonId, arm, handoffPairId, lighthouseSessionId, lighthousePairSide, attempt, language, reference, membership])
 
       function back() {
         if (lighthouseSessionId) dialog.current?.close()
@@ -8690,7 +8695,7 @@ window.__ModuleLoader__.load({
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t(alternateHandoff
           ? '已带入刚才的文件和任务说明。核对后打开新草稿，再手动发送。'
           : '用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
-        options ? h(LoadoutTaskForm, { lessonSource: options.source, armoryDraft: taskDraft, workspaces: allowed, request, handoffAlternateOf,
+        options ? h(LoadoutTaskForm, { lessonSource: options.source, armoryDraft: taskDraft, lighthousePair, workspaces: allowed, request, handoffAlternateOf,
           initialWorkspaceId: rebaseline?.workspaceId ?? initialWorkspaceId, initialMaterial: rebaseline?.material, initialBrief: rebaseline?.brief, backLabel,
           workspaceSetup: setup, addedWorkspace: addedAllowed ? addedWorkspace : undefined,
           onWorkspaceAdded: id => { setAddedWorkspace({ id }); retry(value => value + 1) },
@@ -8781,7 +8786,7 @@ window.__ModuleLoader__.load({
     }
 
     function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, fixedPlanRevision, lessonSource, armoryDraft, workspaces, initialWorkspaceId,
-      handoffAlternateOf,
+      handoffAlternateOf, lighthousePair,
       initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange,
       workspaceSetup, addedWorkspace, onWorkspaceAdded, onWorkspaceApplied, checkingWorkspace, workspaceStatus, workspaceError, retryWorkspaces }) {
       const language = useLanguage()
@@ -8790,6 +8795,9 @@ window.__ModuleLoader__.load({
       const planGroup = useId()
       const version = choices.find(item => item.id === selectedPlanId)
       const personal = Boolean(lessonSource || armoryDraft)
+      const lighthouseGear = lighthousePair && [
+        t(lighthouseCarryModeLabels[armoryDraft.mode]), t('交付物预览'),
+      ].join(' · ')
       const canReview = personal || Boolean(version)
       const [chosenWorkspaceId, setWorkspace] = useState(() => {
         if (!personal || workspaces.some(item => item.workspaceId === initialWorkspaceId)) return initialWorkspaceId ?? ''
@@ -8890,7 +8898,7 @@ window.__ModuleLoader__.load({
               return
             }
           }
-          const selector = armoryDraft ? { draft: armoryDraft.draft } : lessonSource
+          const selector = lighthousePair ? { lighthousePair } : armoryDraft ? { draft: armoryDraft.draft } : lessonSource
             ? { kind: lessonSource.kind, comparisonId: lessonSource.comparisonId, arm: lessonSource.arm,
               ...(lessonSource.handoffPairId && { handoffPairId: lessonSource.handoffPairId }),
               ...(handoffAlternateOf && { handoffAlternateOf }) }
@@ -8958,7 +8966,9 @@ window.__ModuleLoader__.load({
 
       return !preview ? h('form', { className: 'moba-plan-form moba-plan-task', onSubmit: submit },
         h('div', { className: 'moba-plan-fields' },
-          armoryDraft ? h(InstallFacts, { facts: [[t('选定出装'), armoryDraft.heroName]] })
+          armoryDraft ? h(InstallFacts, { facts: lighthouseGear
+            ? [[t('英雄'), t(armoryDraft.heroName)], [t('选定出装'), lighthouseGear]]
+            : [[t('选定出装'), armoryDraft.heroName]] })
             : origin ? h(Fragment, null, h(InstallFacts, { facts: [[t('练习出装'), sourceLabel], [t('装备来源'), gearSource]] }),
             stockTrialHero?.id === 'minimal' && h('p', { className: 'moba-lighthouse-note' }, t('这套出装适合在对话里交接文字。')),
             h(RematchChangeFacts, { change: origin.change }))
@@ -8995,7 +9005,8 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-plan-fields' },
             h('h3', { ref: reviewHeading, tabIndex: -1 }, t('核对材料和出装')),
             h(InstallFacts, { facts: [
-              [t(armoryDraft ? '选定出装' : origin ? '练习出装' : '出装方案'), armoryDraft?.heroName ?? sourceLabel ?? preview.planName ?? version?.name],
+              ...(lighthouseGear ? [[t('英雄'), t(armoryDraft.heroName)], [t('选定出装'), lighthouseGear]]
+                : [[t(armoryDraft ? '选定出装' : origin ? '练习出装' : '出装方案'), armoryDraft?.heroName ?? sourceLabel ?? preview.planName ?? version?.name]]),
               [t('装备来源'), gearSource],
               [t('工作区'), reviewedWorkspace ? workspaceFileLabel(reviewedWorkspace, workspaces) : preview.workspaceTitle],
               [t('材料文件相对路径'), preview.material],
@@ -12736,7 +12747,7 @@ window.__ModuleLoader__.load({
         })))
     }
 
-    function LighthouseDecisionPair({ pair, onOpenMatch }) {
+    function LighthouseDecisionPair({ pair, onOpenMatch, onCarry, carryButtons }) {
       const heading = useId()
       const sides = [pair.previous, pair.current]
       const bySide = sides.map(run => new Map(workflowDecisionRows(run.workflowDecisions).map(row => [row.gearId, row.choices.join(' / ')])))
@@ -12754,6 +12765,11 @@ window.__ModuleLoader__.load({
             h('tr', null, h('th', { scope: 'row' }, t('交付文件')), sides.map(run =>
               h('td', { key: run.sessionId }, run.deliverables.length
                 ? h(LessonTaskFiles, { files: run.deliverables, sessionId: run.sessionId, compact: true }) : '0'))))),
+        comparedGear && onCarry && h('div', { className: 'moba-lesson-result-options' },
+          ['previous', 'current'].map(side => h('button', { key: side, type: 'button', className: 'moba-match-move moba-lighthouse-carry-side',
+            ref: carryButtons[side], 'aria-haspopup': 'dialog', onClick: () => onCarry(side) },
+            h('span', null, h('strong', null, t(side === 'previous' ? '用原局出装做我的任务' : '用复赛出装做我的任务')),
+              h('small', null, t(lighthouseCarryModeLabels[pair[side].mode]))), h(Glyph, { kind: 'arrow', size: 16 })))),
         h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')))
     }
 
@@ -12777,6 +12793,7 @@ window.__ModuleLoader__.load({
       const sourceTrialButton = useRef(null)
       const lighthouseReplayButton = useRef(null)
       const lighthousePersonalButton = useRef(null)
+      const lighthousePreviousPersonalButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
       const action = 'lesson-task-result'
       const keepButtons = { original: originalReviewButton, alternate: alternateReviewButton, direct: directReviewButton, review: handoffReviewButton }
@@ -12834,7 +12851,8 @@ window.__ModuleLoader__.load({
         restoredPersonalFocus.current = true
         const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton,
           'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton,
-          'lighthouse-combined-replay': lighthouseReplayButton, 'lighthouse-combined-personal': lighthousePersonalButton }
+          'lighthouse-combined-replay': lighthouseReplayButton, 'lighthouse-combined-personal': lighthousePersonalButton,
+          'lighthouse-combined-personal-previous': lighthousePreviousPersonalButton }
         const button = buttons[initialPersonalFocus]?.current
         const target = button ?? rebaselineButton.current ?? reviewHeading.current
         target?.focus()
@@ -12877,10 +12895,12 @@ window.__ModuleLoader__.load({
                 t(result.status === 'unavailable' ? '暂不可核对' : comparisonArmStates[result.status] ?? result.status),
                 result.turn && t('第 ') + result.turn + t(' 回合'),
               ].filter(Boolean).join(' · ')),
-              result.lighthousePair ? h(LighthouseDecisionPair, { pair: result.lighthousePair, onOpenMatch })
+              result.lighthousePair ? h(LighthouseDecisionPair, { pair: result.lighthousePair, onOpenMatch,
+                onCarry: result.lighthouseReplay && (lighthousePairSide => onPersonalFlow({ mode: 'lighthouse-combined-personal', lighthousePairSide })),
+                carryButtons: { previous: lighthousePreviousPersonalButton, current: lighthousePersonalButton } })
                 : h(WorkflowDecisionReceipts, { rows: workflowRows }),
               (result.lighthouseReplay || alternateLabel || handoffAlternate || singleSave) && h('div', { className: 'moba-lesson-result-options' },
-                result.lighthouseReplay === true && h('button', { ref: lighthousePersonalButton, type: 'button', className: 'moba-match-move',
+                result.lighthouseReplay === true && !result.lighthousePair?.current.mode && h('button', { ref: lighthousePersonalButton, type: 'button', className: 'moba-match-move',
                   'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-personal' }) },
                 t(lighthousePersonalTaskLabel), h(Glyph, { kind: 'arrow', size: 16 })),
                 result.lighthouseReplay === true && h('button', { ref: lighthouseReplayButton, type: 'button', className: 'moba-match-move',
@@ -13678,7 +13698,8 @@ window.__ModuleLoader__.load({
         setPersonalFlow({ ...flow, returnAction })
       }
 
-      function closePersonalFlow(focus = personalFlow.mode) {
+      function closePersonalFlow(focus = personalFlow.lighthousePairSide === 'previous'
+        ? 'lighthouse-combined-personal-previous' : personalFlow.mode) {
         const { mode, returnAction } = personalFlow
         setPersonalFlow(null)
         const restore = () => {
@@ -13961,7 +13982,7 @@ window.__ModuleLoader__.load({
         personalFlow?.mode === 'lighthouse-combined-replay' && h(LighthouseCombinedReplay, { sessionId, request,
           onBack: () => closePersonalFlow(), onOpen: visitPersonalFlow }),
         personalFlow?.mode === 'lighthouse-combined-personal' && h(PersonalBaselineTask, { lighthouseSessionId: sessionId,
-          workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
+          lighthousePairSide: personalFlow.lighthousePairSide, workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'rematch' && h(RematchEditor, { ...personalFlow.source, sourceSessionId: sessionId, request,
           evidenceReplayHint: personalFlow.evidenceReplay, backLabel: '返回任务结果',
           onBack: closePersonalFlow, onClose: closePersonalFlow, onVisit: visitPersonalFlow }),
@@ -14667,6 +14688,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-replay-pair th[scope="col"] { color: var(--gold); }
       .moba-lighthouse-replay-pair button { min-block-size: 44px; white-space: normal; overflow-wrap: anywhere; }
       .moba-lighthouse-replay-pair > button { justify-self: start; }
+      .moba-lighthouse-carry-side > span { display: grid; gap: 2px; text-align: start; }
+      .moba-lighthouse-carry-side small { color: var(--muted); font-size: 11px; }
       .moba-lesson-result .moba-lighthouse-results { margin: 0; }
       .moba-lesson-result .moba-settlement-footer button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
       @media (max-width: 600px) {
