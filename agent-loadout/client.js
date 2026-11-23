@@ -10676,12 +10676,12 @@ window.__ModuleLoader__.load({
                 'aria-pressed': fullscreen, title: fullscreen ? t('退出全屏') : t('全屏备战') }, h(Glyph, { kind: 'fullscreen' })))),
           data && h('div', { className: 'moba-lobby-entry-actions' },
             canPracticeWeb && h('button', { type: 'button', className: 'moba-starter-entry moba-web-practice-entry',
-              disabled: pending, 'aria-haspopup': 'dialog', onClick: event => setWebPractice({
+              disabled: pending, 'aria-haspopup': 'dialog', 'data-pilot': canPracticeWebPilot || undefined, onClick: event => setWebPractice({
                 kind: canPracticeWebPilot ? 'pilot' : 'source', trigger: event.currentTarget,
               }) },
               h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'search', size: 20 })),
               h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t('网页检索试玩')),
-                h('span', null, t(canPracticeWebPilot ? webPilotPrompt : '旧表只列 RC，预览版能用吗？'))),
+                h('span', null, t(canPracticeWebPilot ? '同题加装证据核验，补证、降级推荐还是暂缓提交？' : '旧表只列 RC，预览版能用吗？'))),
               h(Glyph, { kind: 'arrow', size: 18 })),
             h('button', { type: 'button', className: 'moba-roster-open moba-choose-loadout', disabled: pending, onClick: chooseLoadout },
               h(Glyph, { kind: 'team', size: 17 }), t('去配装'))),
@@ -14210,6 +14210,9 @@ window.__ModuleLoader__.load({
       @container (max-width: 390px) {
         .moba-web-practice-entry { grid-template-columns: auto minmax(0, 1fr); }
         .moba-web-practice-entry > svg { display: none; }
+        .moba-web-practice-entry[data-pilot] { grid-template-columns: minmax(0, 1fr); padding: 7px 9px; }
+        .moba-web-practice-entry[data-pilot] .moba-starter-symbol { display: none; }
+        .moba-web-practice-entry[data-pilot] .moba-starter-entry-copy strong { font-size: 14px; }
         .moba-lighthouse-entry .moba-starter-entry:not(.moba-hero-trial-entry) { grid-template-columns: auto minmax(0, 1fr); }
         .moba-lighthouse-entry .moba-starter-entry-action { display: none; }
       }
