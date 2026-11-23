@@ -1993,6 +1993,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(draftScenario.scenario, 'confirmed')
     assert.deepEqual(await resumeLighthouse(draftScenario), { sessionId: confirmed.sessionId })
     assert.equal((await result(confirmed.sessionId))?.lighthouseScenarioPair, undefined)
+    await pairedDraft(confirmed.sessionId, 'shared', 422)
     const confirmedTurn = host.request(turnEndpoint, { sessionId: confirmed.sessionId, text: confirmed.task })
     confirmedTurn.catch(() => {})
     await choose(confirmed.sessionId, 'fixture-delivery-review', 'Confirm handoff', async () => {
@@ -2027,12 +2028,76 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await replay('preview', { sessionId: confirmed.sessionId }, 422)
     assert.ok(!(await findChallengeReport()).runs.some(run => run.sessionId === confirmed.sessionId))
     assert.ok(!(await pendingLighthouse()).runs.some(run => run.sessionId === confirmed.sessionId))
-    try {
-      await appendFile(originalSample, '\nOriginal no longer matches the controlled round.\n')
-      assert.equal((await result(confirmed.sessionId)).lighthouseScenarioPair, undefined)
-    } finally {
-      await writeFile(originalSample, sample)
+    await pairedDraft(sessionId, 'shared', 422)
+    await pairedDraft(variant.sessionId, 'shared', 422)
+    await pairedDraft(confirmed.sessionId, 'previous', 422)
+    await pairedDraft(confirmed.sessionId, 'current', 422)
+    await personalDraft(confirmed.sessionId, 422)
+    assert.deepEqual(await pairedDraft(confirmed.sessionId, 'shared'), {
+      draft: carried.draft, heroName: '标准模式', mode: 'evidence-review',
+    })
+
+    const privateMaterial = '证据 材料/配装 台账.md'
+    const privateCard = '# On-call equipment record\nThe record lists two spare radios for the handoff.\n'
+    await mkdir(dirname(join(directory, privateMaterial)), { recursive: true })
+    await writeFile(join(directory, privateMaterial), privateCard)
+    const privateInput = {
+      workspaceId: personalWorkspace, material: privateMaterial, task: '核对值班台账能否证明有一台备用充电器，拟定交接稿。',
+      lighthousePair: { sessionId: confirmed.sessionId, pairSide: 'shared' },
     }
+    await previewOwn({ ...privateInput, workspaceId: confirmed.workspaceId, material: combinedPractice.material }, 422)
+    const sharedPreview = await previewOwn({ ...privateInput, draft: review.draft })
+    assert.deepEqual(sharedPreview.gear.map(item => item.id).sort(), ['evidence', 'present', 'review'])
+    assert.equal(sharedPreview.workspaceId, personalWorkspace)
+    assert.equal(sharedPreview.material, privateMaterial)
+    assert.match(sharedPreview.task, /一台备用充电器/)
+    assert.doesNotMatch(sharedPreview.task, /02-lighthouse|两节备用电池|两罐灯油|暂缓提交/)
+    await openOwn({ ...privateInput, lighthousePair: { sessionId, pairSide: 'shared' } }, sharedPreview.token, 422)
+    await openOwn({ ...privateInput, lighthousePair: { sessionId: variant.sessionId, pairSide: 'previous' } }, sharedPreview.token, 422)
+    const confirmedCard = join(confirmedNative.workspacePath, combinedPractice.material)
+    for (const staleCard of [originalSample, confirmedCard]) {
+      try {
+        await appendFile(staleCard, '\nArchived material changed after private preview.\n')
+        assert.equal((await result(confirmed.sessionId)).lighthouseScenarioPair, undefined)
+        await pairedDraft(confirmed.sessionId, 'shared', 422)
+        await openOwn(privateInput, sharedPreview.token, 422)
+      } finally {
+        await writeFile(staleCard, sample)
+      }
+    }
+    const sharedOpening = await openOwn({ ...privateInput, draft: null }, sharedPreview.token)
+    assert.deepEqual(await openOwn(privateInput, sharedPreview.token), sharedOpening)
+    assert.equal(sharedOpening.task, sharedPreview.task)
+    assert.equal(sharedOpening.workspaceId, personalWorkspace)
+    assert.notEqual(sharedOpening.sessionId, confirmed.sessionId)
+    const ownArchive = await native(sharedOpening.sessionId)
+    assert.ok(!ownArchive.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    const ownLaunch = ownArchive.events.find(event => event.type === 'plugin:dsh-agent-loadout/plan-task').data
+    assert.equal(ownLaunch.material, privateMaterial)
+    assert.equal(ownLaunch.armory, true)
+    assert.equal(ownLaunch.target.lighthouseCombined, undefined)
+    assert.equal(ownLaunch.source, undefined)
+    const ownLaunchText = JSON.stringify(ownLaunch)
+    assert.doesNotMatch(ownLaunchText, /lighthousePair|lighthouseScenarioOf|lighthouseReplayOf|02-lighthouse/)
+    assert.ok(!ownLaunchText.includes(confirmed.sessionId) && !ownLaunchText.includes(sessionId))
+
+    const ownTurn = host.request(turnEndpoint, { sessionId: sharedOpening.sessionId, text: sharedOpening.task })
+    ownTurn.catch(() => {})
+    await choose(sharedOpening.sessionId, 'fixture-lighthouse-evidence', '降级推荐')
+    await choose(sharedOpening.sessionId, 'fixture-delivery-review', 'Confirm handoff')
+    await ownTurn
+    const sharedResult = await result(sharedOpening.sessionId)
+    assert.deepEqual(sharedResult.workflowDecisions, [
+      { gearId: 'evidence', choices: ['降级推荐'] },
+      { gearId: 'review', choices: ['Confirm handoff'] },
+    ])
+    assert.deepEqual(sharedResult.deliverables.map(file => file.name), ['qualified-handoff.md'])
+    assert.equal(sharedResult.lighthouseScenarioPair, undefined)
+    assert.ok(!(await pendingLighthouse()).runs.some(run => run.sessionId === sharedOpening.sessionId))
+    assert.equal(await readFile(join(directory, privateMaterial), 'utf8'), privateCard)
+    assert.equal(await readFile(originalSample, 'utf8'), sample)
+    assert.equal(await readFile(confirmedCard, 'utf8'), sample)
+    assert.deepEqual(await native(confirmed.sessionId), confirmedNative)
     assert.deepEqual(await native(sessionId), originalNative)
     assert.deepEqual(await result(sessionId), original)
 

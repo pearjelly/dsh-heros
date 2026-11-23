@@ -13087,7 +13087,12 @@ window.__ModuleLoader__.load({
             ref: carryButtons[side], 'aria-haspopup': 'dialog', onClick: () => onCarry(side) },
             h('span', null, h('strong', null, t(side === 'previous' ? '用原局出装做我的任务' : '用复赛出装做我的任务')),
               h('small', null, t(lighthouseCarryModeLabels[pair[side].mode]))), h(Glyph, { kind: 'arrow', size: 16 })))),
-        h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')))
+        h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')),
+        scenarioPair && onCarry && h('div', { className: 'moba-lesson-result-options' },
+          h('button', { type: 'button', className: 'moba-match-move moba-lighthouse-carry-side',
+            ref: carryButtons.shared, 'aria-haspopup': 'dialog', onClick: () => onCarry('shared') },
+            h('span', null, h('strong', null, t(lighthousePersonalTaskLabel)),
+              h('small', null, t(lighthouseCarryModeLabels['evidence-review']))), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
     function LessonTaskResult({ sessionId, version, request, onOpenMatch, onUse, onPersonalFlow, initialPersonalFocus }) {
@@ -13125,6 +13130,7 @@ window.__ModuleLoader__.load({
       const current = cached && cached.version === version && cached.retry === retry && cached.language === language ? cached : null
       const result = current?.result
       const lighthousePair = result?.lighthousePair ?? result?.lighthouseScenarioPair
+      const lighthouseScenarioPair = Boolean(result?.lighthouseScenarioPair && !result.lighthousePair)
       const lighthouseSwitch = result?.lighthouseReplay && !result.lighthousePair?.current.mode &&
         Object.hasOwn(lighthouseReplayModeLabels, result.lighthouseMode) &&
         (result.lighthouseMode === 'review' ? '加装证据核验，同题再试' : '卸下证据核验，同题再试')
@@ -13224,9 +13230,9 @@ window.__ModuleLoader__.load({
                 t(result.status === 'unavailable' ? '暂不可核对' : comparisonArmStates[result.status] ?? result.status),
                 result.turn && t('第 ') + result.turn + t(' 回合'),
               ].filter(Boolean).join(' · ')),
-              lighthousePair ? h(LighthouseDecisionPair, { pair: lighthousePair, scenarioPair: Boolean(result.lighthouseScenarioPair), onOpenMatch,
-                onCarry: result.lighthouseReplay && (lighthousePairSide => onPersonalFlow({ mode: 'lighthouse-combined-personal', lighthousePairSide })),
-                carryButtons: { previous: lighthousePreviousPersonalButton, current: lighthousePersonalButton } })
+              lighthousePair ? h(LighthouseDecisionPair, { pair: lighthousePair, scenarioPair: lighthouseScenarioPair, onOpenMatch,
+                onCarry: (lighthouseScenarioPair || result.lighthouseReplay) && (lighthousePairSide => onPersonalFlow({ mode: 'lighthouse-combined-personal', lighthousePairSide })),
+                carryButtons: { previous: lighthousePreviousPersonalButton, current: lighthousePersonalButton, shared: lighthousePersonalButton } })
                 : h(WorkflowDecisionReceipts, { rows: workflowRows }),
               (result.lighthouseReplay || result.lighthouseScenarioReplay || alternateLabel || handoffAlternate || singleSave) &&
                 h('div', { className: 'moba-lesson-result-options' },
@@ -13240,7 +13246,7 @@ window.__ModuleLoader__.load({
                 result.lighthouseReplay === true && h('button', { ref: lighthouseReplayButton, type: 'button', className: 'moba-match-move',
                   'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-replay' }) },
                 t(lighthouseDecisionReplayTitle), h(Glyph, { kind: 'arrow', size: 16 })),
-                result.lighthouseReplay === true && !result.lighthousePair?.current.mode && h('button', { ref: lighthousePersonalButton, type: 'button', className: 'moba-match-move',
+                result.lighthouseReplay === true && !lighthouseScenarioPair && !result.lighthousePair?.current.mode && h('button', { ref: lighthousePersonalButton, type: 'button', className: 'moba-match-move',
                   'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-personal' }) },
                 t(lighthousePersonalTaskLabel), h(Glyph, { kind: 'arrow', size: 16 })),
                 alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',

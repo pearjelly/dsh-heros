@@ -3579,7 +3579,7 @@ export async function apply(ctx) {
 
   async function checkCombinedLighthouseRoundLoadout(original, signal) {
     if (!original) throw new Error(combinedLighthouseReplayUnavailable)
-    const current = await checkCombinedLighthouseStart(original.language === 'en', signal, original.mode)
+    const current = await checkCombinedLighthouseStart(original.language === 'en', signal, original.mode, original.scenario)
     if (!matchesCombinedLighthouseLoadout(original, current)) throw new Error(combinedLighthouseReplayUnavailable)
     return { ...current, original }
   }
@@ -3618,6 +3618,15 @@ export async function apply(ctx) {
   }
 
   async function checkCombinedLighthousePairSide({ sessionId, pairSide }, signal) {
+    if (pairSide === 'shared') {
+      const current = await readCombinedLighthouseRound(sessionId, signal, 'confirmed')
+      const previous = current && await combinedLighthouseScenarioSource(current, signal)
+      if (!previous) throw new Error(combinedLighthouseReplayUnavailable)
+      const shared = await checkCombinedLighthouseRoundLoadout(current, signal)
+      return { draft: shared.draft, mode: shared.mode, binding: [
+        'lighthouse-shared-scenario-v1', sessionId, previous.sessionId, shared.identity, previous.target.digest, previous.language,
+      ] }
+    }
     if (!['previous', 'current'].includes(pairSide)) throw new Error(combinedLighthouseReplayUnavailable)
     const current = await checkCombinedLighthouseLoadout(sessionId, signal)
     const original = await combinedLighthousePrevious(current.original, signal)
@@ -7083,10 +7092,10 @@ export async function apply(ctx) {
     return { sessionId, language, target, mode, scenario, workflowDecisions, deliverables: evidence.deliverables ?? [], receivedReport }
   }
 
-  async function readCombinedLighthouseRound(sessionId, signal) {
+  async function readCombinedLighthouseRound(sessionId, signal, scenario = 'gap') {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return
     const result = await observeLessonTask(sessionId, signal, true)
-    if (result?.target?.lighthouseCombined !== true || result.target.lighthouseScenarioOf !== undefined ||
+    if (result?.target?.lighthouseCombined !== true || combinedLighthouseScenario(result.target) !== scenario ||
       !result.evidence.entries?.some(entry => entry.workflowCandidate)) return
     const ecosystem = await discover()
     const { workflowDecisions } = observedComparisonWorkflows(result.evidence.entries, result.presetId, ecosystem)

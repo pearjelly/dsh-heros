@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.257.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.258.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -188,7 +188,7 @@ dsh web
 
 复赛预览也可以只加装或卸下「证据核验」，沿用同一题、标准模式、交付前复核和交付物预览。复赛战报会指出这次变动的装备，并显示两局实际选择和文件。两局出装不同时，战报也会标示哪件装备没有装上。
 
-用两件装备打完并核对备用电池题后，还可以用同一张卡和同一套出装试另一条调度消息。补给卡确实写了两罐灯油。打开草稿后手动发送，打完对照两局实际记录的选择和交付。可识别的选择用当前界面语言简写，展开后仍可核对两局选择的原文。
+用两件装备打完并核对备用电池题后，还可以用同一张卡和同一套出装试另一条调度消息。补给卡确实写了两罐灯油。打开草稿后手动发送，打完对照两局实际记录的选择和交付。可识别的选择用当前界面语言简写，展开后仍可核对两局选择的原文。点 **把这套出装用到我的任务**，便可带上两局共用的装备，另选文件并填写工作要求。
 
 在已核对的灯塔结果点 **把这套出装用到我的任务**，选自己的工作区和文件，填写这次的任务。核对出装后打开独立草稿，再手动发送。
 

@@ -193,7 +193,7 @@ export async function apply(ctx) {
       const comparisonMaterial = latestText?.match(/^(?:【工作区同题对照】|\[Workspace comparison\])\n(?:选定材料 |Selected material: )"(02-lighthouse\.md|materials\/workspace-fixture\.md)"\n/u)?.[1]
       const taskMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(materials\/reuse-fixture\.md|案件 材料\/交接 记录\.md|会签 文件\.md)"\n/u)?.[1]
       const heroDeliveryMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(值班 材料\/(?:设备|补给) 台账\.md)"\n/u)?.[1]
-      const personalEvidence = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(证据 材料\/(?:设备|更新) 台账\.md)"\n/u)?.[1]
+      const personalEvidence = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(证据 材料\/(?:设备|更新|配装) 台账\.md)"\n/u)?.[1]
       const lighthousePlaybookMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(02-lighthouse\.md)"\n/u)?.[1]
       const evidenceMaterial = personalEvidence ?? lighthousePlaybookMaterial ?? (comparisonMaterial === '02-lighthouse.md' ? comparisonMaterial : undefined)
       const supportedFact = personalEvidence ? 'two spare radios' : '2 cans of lamp oil'
@@ -307,7 +307,8 @@ export async function apply(ctx) {
           .map(block => block.text).join('\n')
         const foundEvidence = results[0]?.content.some(block => block.text?.includes(supportedFact))
         const hasEvidenceCheck = systemText.includes('If a material claim lacks evidence')
-        const review = lighthousePlaybookMaterial && systemText.includes('whether to proceed with the handoff or revise the draft')
+        const review = (lighthousePlaybookMaterial || personalEvidence === '证据 材料/配装 台账.md') &&
+          systemText.includes('whether to proceed with the handoff or revise the draft')
         const replay = evidenceGap && !hasEvidenceCheck && tools?.some(tool => tool.name === 'present')
         const asksFormat = personalEvidence && replay && latestText.includes('交接格式') && tools?.some(tool => tool.name === 'ask_user_question')
         const title = personalEvidence ? 'Equipment handoff' : 'Lighthouse handoff'
