@@ -1318,8 +1318,86 @@ window.__ModuleLoader__.load({
       evidence: { name: '标准模式 + 证据核验', detail: '只加装证据核验', firstUseDetail: '缺少本机试跑记录时，可以继续补证、降级推荐或暂缓提交。', icon: 'plus' },
     }
 
+    const webPilotPendingUnavailable = '找不到这页试玩草稿。'
+    const webPilotPendingChanged = '这份试玩草稿已变化，请重新核对。'
+
+    function useWebPilotPending(request, enabled, language) {
+      const [state, setState] = useState(null)
+      const [query, setQuery] = useState(null)
+      const current = enabled && state?.language === language ? state : null
+      const loading = enabled && (!current || current.query !== query)
+      useEffect(() => {
+        if (!enabled) return
+        const abort = new AbortController()
+        const before = query?.language === language ? query.before : undefined
+        const action = 'web-pilot-pending'
+        const update = changes => setState(previous => ({
+          runs: before && previous?.language === language ? previous.runs : empty,
+          nextBefore: before, ...changes, query, language,
+        }))
+        request(action, { action, ...(before && { before }) }, abort.signal, language).then(value => {
+          if (abort.signal.aborted) return
+          if (!Array.isArray(value?.runs) || value.runs.some(run => typeof run?.sessionId !== 'string' || !run.sessionId ||
+            !Object.hasOwn(webPilotArms, run.arm) || !['en', 'zh'].includes(run.sampleLanguage) ||
+            run.presetChanged !== undefined && run.presetChanged !== true ||
+            !['number', 'string'].includes(typeof run.openedAt) || !Number.isFinite(new Date(run.openedAt).getTime())) ||
+            value.nextBefore !== undefined && (typeof value.nextBefore !== 'string' || !value.nextBefore || value.nextBefore === before)) {
+            throw new Error(t(webPilotPendingUnavailable))
+          }
+          setState(previous => ({ query, language, nextBefore: value.nextBefore,
+            runs: Array.from(new Map([...(before && previous?.language === language ? previous.runs : empty), ...value.runs]
+              .map(run => [run.sessionId, run])).values()) }))
+        }).catch(reason => {
+          if (!abort.signal.aborted) update({ error: reason.message || t(webPilotPendingUnavailable) })
+        })
+        return () => abort.abort()
+      }, [request, enabled, language, query])
+
+      return { runs: current?.runs ?? empty, nextBefore: current?.nextBefore, loading,
+        error: !loading ? current?.error : undefined,
+        read: before => { if (!loading) setQuery({ before, language }) } }
+    }
+
+    function WebPilotPendingDrafts({ page, busy, failure, onResume, onRefresh, summaryRef }) {
+      const language = useLanguage()
+      const group = useId()
+      const more = useRef(null)
+      const restoringMore = useRef(false)
+      const clock = new Intl.DateTimeFormat(language, { dateStyle: 'short', timeStyle: 'short' })
+      useLayoutEffect(() => {
+        if (page.loading || !restoringMore.current) return
+        restoringMore.current = false
+        if (!page.nextBefore && document.activeElement === document.body) summaryRef.current?.focus()
+      }, [page.loading, page.nextBefore, summaryRef])
+
+      return h('details', { className: 'moba-web-pilot-pending' },
+        h('summary', { ref: summaryRef }, t('继续已有试玩草稿')),
+        page.runs.length > 0 && h('ul', { className: 'moba-history-list' }, page.runs.map((run, index) => {
+          const openedAt = new Date(run.openedAt)
+          const loadout = t(webPilotArms[run.arm].name)
+          const description = group + '-draft-' + index
+          return h('li', { key: run.sessionId, className: 'moba-history-entry' },
+            h('header', { id: description }, h('h3', null, loadout),
+              h('time', { dateTime: openedAt.toISOString() }, clock.format(openedAt)),
+              run.sampleLanguage !== language && h('small', null, t(run.sampleLanguage === 'en' ? '英文' : '中文')),
+              run.presetChanged === true && h('small', { className: 'moba-web-pilot-draft-changed' }, t('出装已变化，可在原会话恢复。'))),
+            h('button', { className: 'moba-roster-open', type: 'button', 'aria-disabled': busy, 'aria-describedby': description,
+              onClick: () => onResume(run) }, t(run.presetChanged === true ? '查看原会话' : '继续草稿')))
+        })),
+        page.loading && h('p', { role: 'status' }, t('正在核对试玩草稿…')),
+        (failure || page.error) && h('p', { className: 'moba-alert', role: 'alert' }, failure || page.error),
+        (failure || page.error && !page.nextBefore) && h('button', { className: 'moba-roster-open', type: 'button',
+          'aria-disabled': busy || page.loading, onClick: onRefresh }, t('重新核对')),
+        page.nextBefore && h('button', { className: 'moba-roster-open', type: 'button', ref: more,
+          'aria-disabled': busy || page.loading, onClick: () => {
+            if (busy || page.loading) return
+            restoringMore.current = document.activeElement === more.current
+            page.read(page.nextBefore)
+          } }, t('加载更多记录')))
+    }
+
     function WebPilotPractice({ request, initialArm = '', sampleLanguage, parentSessionId, sourcePlan, decisionReplayOf,
-      dialogRef, onCancel, onOpen }) {
+      dialogRef, pendingDrafts, onCancel, onOpen }) {
       const language = useLanguage()
       const group = useId()
       const [arm, setArm] = useState(initialArm)
@@ -1328,10 +1406,16 @@ window.__ModuleLoader__.load({
       const [state, setState] = useState(null)
       const [busy, setBusy] = useState(false)
       const [openError, setOpenError] = useState('')
+      const [resumeError, setResumeError] = useState('')
       const launch = useRef(null)
       const opening = useRef(null)
+      const pendingSummary = useRef(null)
+      const armRoutes = useRef(null)
       const locked = Boolean(sourcePlan || decisionReplayOf)
       const firstUse = !initialArm && !locked
+      const showPending = firstUse && pendingDrafts && (pendingDrafts.runs.length || pendingDrafts.nextBefore || pendingDrafts.error || resumeError)
+      const focusPending = useRef(Boolean(showPending))
+      const pendingWasVisible = useRef(Boolean(showPending))
       const compact = firstUse || locked
       const choice = firstUse ? openingChoice : ''
       const current = state?.arm === arm && state.language === language && state.attempt === attempt && state.choice === choice ? state : null
@@ -1363,6 +1447,10 @@ window.__ModuleLoader__.load({
         return () => abort.abort()
       }, [request, arm, attempt, language, scope, locked, decisionReplayOf, firstUse, choice])
       useEffect(() => () => opening.current?.abort(), [])
+      useLayoutEffect(() => {
+        if (pendingWasVisible.current && !showPending && document.activeElement === document.body) armRoutes.current?.querySelector('input')?.focus()
+        pendingWasVisible.current = Boolean(showPending)
+      }, [showPending])
 
       async function open(event) {
         event.preventDefault()
@@ -1391,21 +1479,51 @@ window.__ModuleLoader__.load({
         }
       }
 
+      async function resume({ sessionId, presetChanged }) {
+        if (opening.current) return
+        const abort = opening.current = new AbortController()
+        setBusy(true)
+        setResumeError('')
+        try {
+          const action = 'web-pilot-resume'
+          const resumed = await request(action, { action, sessionId, ...(presetChanged === true && { presetChanged: true }) }, abort.signal, language)
+          if (resumed?.sessionId !== sessionId) throw new Error(t(webPilotPendingChanged))
+          if (!abort.signal.aborted) onOpen(sessionId)
+        } catch (reason) {
+          if (!abort.signal.aborted) setResumeError(reason.message || t(webPilotPendingChanged))
+        } finally {
+          opening.current = null
+          if (!abort.signal.aborted) setBusy(false)
+        }
+      }
+
+      function refreshPending() {
+        if (opening.current || pendingDrafts.loading) return
+        const route = armRoutes.current?.querySelector('input:checked') ?? armRoutes.current?.querySelector('input[type="radio"]')
+        route?.focus()
+        setResumeError('')
+        pendingDrafts.read()
+      }
+
       return h(InstallDialog, { title: t(decisionReplayOf ? webPilotDecisionReplayTitle : firstUse ? webPilotPrompt : webPilotTitle),
         className: 'moba-starter-dialog moba-web-source-dialog moba-web-pilot-dialog' +
-          (locked ? ' moba-web-pilot-plan-replay' : firstUse ? ' moba-web-pilot-first-use' : ''),
-        initialFocus: locked ? '.moba-web-pilot-practice-back' : initialArm ? 'input:checked' : 'input[type="radio"]',
+          (locked ? ' moba-web-pilot-plan-replay' : firstUse ? ' moba-web-pilot-first-use' : '') +
+          (showPending ? ' moba-web-pilot-with-drafts' : ''),
+        initialFocus: locked ? '.moba-web-pilot-practice-back' : initialArm ? 'input:checked'
+          : focusPending.current ? '.moba-web-pilot-pending summary' : 'input[type="radio"]',
         dialogRef, busy, onCancel,
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening.current) onCancel() }) },
         !firstUse && h('p', null, t(decisionReplayOf ? webPilotDecisionReplayDescription
           : '两套出装读同一份发布方清单。题目只提供兼容声明，缺少本机试跑记录。')),
         h('form', { onSubmit: open },
           h(compact ? 'div' : Fragment, compact ? { className: 'moba-web-pilot-practice-fields' } : null,
+            Boolean(showPending) && h(WebPilotPendingDrafts, { page: pendingDrafts, busy, failure: resumeError,
+              onResume: resume, onRefresh: refreshPending, summaryRef: pendingSummary }),
             locked ? h(InstallFacts, { facts: [
               [t('出装'), t(webPilotArms[arm].name)], [t('任务语言'), taskLanguage && t(taskLanguage)],
               ...(decisionReplayOf && preview ? [[t('上次决定'), t(evidenceOpeningChoices[preview.previousDecision])]] : empty),
             ] })
-              : h('fieldset', { className: 'moba-starter-routes', disabled: busy },
+              : h('fieldset', { className: 'moba-starter-routes', ref: armRoutes, disabled: busy },
                 h('legend', null, t('选择本局出装')),
                 Object.entries(webPilotArms).map(([id, option]) => h('label', { className: 'moba-starter-route', key: id, 'data-picked': arm === id },
                   h('input', { type: 'radio', name: group, value: id, checked: arm === id, onChange: () => {
@@ -1433,7 +1551,7 @@ window.__ModuleLoader__.load({
             (openError || current?.error) && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
               onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
             h('button', { type: 'submit', className: 'moba-start', disabled: busy || !preview?.token },
-              t(busy ? '正在准备对局…' : '打开试玩草稿'), h(Glyph, { kind: 'arrow', size: 16 })))))
+              t(busy ? '正在准备对局…' : showPending ? '打开新试玩草稿' : '打开试玩草稿'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
     function WebSourcePractice({ request, sampleLanguage, onCancel, onOpen }) {
@@ -10126,6 +10244,7 @@ window.__ModuleLoader__.load({
       const canPracticeWebSource = data?.webPractice?.source === true
       const canPracticeWebPilot = data?.webPractice?.pilot === true
       const canPracticeWeb = canPracticeWebSource || canPracticeWebPilot
+      const webPilotPending = useWebPilotPending(request, canPracticeWebPilot, language)
       const WebPracticeDialog = webPractice?.kind === 'pilot' ? WebPilotPractice : WebSourcePractice
       const roles = data?.roles ?? emptyMap
       const savedBuilds = labelSavedBuilds(data?.saved ?? empty)
@@ -10681,7 +10800,8 @@ window.__ModuleLoader__.load({
               }) },
               h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'search', size: 20 })),
               h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t('网页检索试玩')),
-                h('span', null, t(canPracticeWebPilot ? '同题加装证据核验，补证、降级推荐还是暂缓提交？' : '旧表只列 RC，预览版能用吗？'))),
+                h('span', null, t(canPracticeWebPilot ? webPilotPending.runs.length ? '继续草稿或新开试玩'
+                  : '同题加装证据核验，补证、降级推荐还是暂缓提交？' : '旧表只列 RC，预览版能用吗？'))),
               h(Glyph, { kind: 'arrow', size: 18 })),
             h('button', { type: 'button', className: 'moba-roster-open moba-choose-loadout', disabled: pending, onClick: chooseLoadout },
               h(Glyph, { kind: 'team', size: 17 }), t('去配装'))),
@@ -10756,12 +10876,13 @@ window.__ModuleLoader__.load({
             setStarterOpen(false)
             openDraftSession(sessionId, task)
           } }),
-          webPractice && h(WebPracticeDialog, { request, onCancel: () => {
+          webPractice && h(WebPracticeDialog, { request, ...(webPractice.kind === 'pilot' && { pendingDrafts: webPilotPending }), onCancel: () => {
             setWebPractice(null)
             requestAnimationFrame(() => webPractice.trigger.focus())
           }, onOpen: (sessionId, task) => {
             setWebPractice(null)
-            openDraftSession(sessionId, task)
+            if (task === undefined) openDraftSession(sessionId)
+            else openDraftSession(sessionId, task)
           } }),
           reviewStartOpen && h(LighthouseReviewStart, { request, onCancel: () => {
             setReviewStartOpen(false)
@@ -15011,6 +15132,22 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-practice-fields dl { margin-block: 6px; }
       .moba-web-pilot-first-use .moba-starter-routes { margin-block: 4px 8px; }
       .moba-web-pilot-first-use .moba-rematch-fields select { min-block-size: 44px; }
+      .moba-web-pilot-pending { margin: 2px 0 5px; min-inline-size: 0; }
+      .moba-web-pilot-pending > summary { box-sizing: border-box; align-content: center; min-block-size: 44px;
+        padding-inline: 8px; border: 1px solid #607d78; color: #e1eeea; background: #192c33; cursor: pointer; font-size: 13px; }
+      .moba-web-pilot-pending > summary:focus-visible { outline: 2px solid #9ed4ec; outline-offset: -2px; }
+      .moba-web-pilot-pending .moba-history-list { margin-block: 5px; }
+      .moba-web-pilot-pending .moba-history-entry { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+      .moba-web-pilot-pending .moba-history-entry header { display: grid; min-inline-size: 0; gap: 1px; overflow-wrap: anywhere; }
+      .moba-web-pilot-pending .moba-history-entry :is(h3, time, small) { margin: 0; font-size: 12px; }
+      .moba-web-pilot-draft-changed { color: #eac993; }
+      .moba-web-pilot-pending button { min-block-size: 44px; }
+      .moba-web-pilot-with-drafts .moba-starter-actions:not(:has(> button:nth-child(3))) { display: grid;
+        grid-template-columns: auto minmax(0, 1fr); }
+      .moba-web-pilot-with-drafts .moba-starter-actions button { justify-content: center; white-space: normal; }
+      @media (max-width: 390px) and (max-height: 550px) {
+        .moba-web-pilot-first-use.moba-web-pilot-with-drafts > h2 { font-size: 18px; margin-block-end: 5px; }
+      }
       .moba-web-pilot-plan-replay .moba-web-challenge-task textarea { resize: vertical; }
       @media (max-width: 400px) {
         .moba-web-pilot-tested-empty .moba-starter-actions { display: grid; gap: 6px;

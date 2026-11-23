@@ -1955,15 +1955,60 @@ export async function apply(ctx) {
       async id => (await readWebPilotReplay(id, reference, signal))?.run)
   }
 
+  async function webPilotPracticeRoot() {
+    const profileDirectory = await realpath(directory).catch(error => {
+      if (error.code !== 'ENOENT') throw error
+    })
+    if (profileDirectory) return join(profileDirectory, webSourceDirectory)
+  }
+
+  async function pendingFirstWebPilotDraft(sessionId, registry, root, signal) {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return
+    const saved = await planTaskSession(sessionId, signal)
+    const { launch, header } = saved ?? {}
+    const binding = launch?.webSourcePractice
+    if (!binding || !['standard', 'evidence'].includes(binding.arm) || saved.started ||
+      header.parentSession || header.agentPreset !== binding.presetId) return
+    const workspace = registry.get(binding.workspaceId)
+    if (header.cwd !== workspace?.path || !webPilotWorkspace(workspace, root, sessionId)) return
+    const sampleLanguage = ['en', 'zh'].find(language => launch.task === webPilotTask(language === 'en'))
+    const choice = launch.webPilotOpeningChoice
+    if (!sampleLanguage || (choice !== undefined && !lighthouseEvidenceChoices.includes(choice)) ||
+      launch.request !== webPilotOpeningHash(binding.arm, launch.task, choice)) return
+    return { run: { sessionId, arm: binding.arm, openedAt: header.createdAt, sampleLanguage,
+      ...(saved.presetChanged && { presetChanged: true }) }, binding }
+  }
+
+  async function webPilotPending({ before }, signal) {
+    const previous = webPilotPageBoundary(before, '找不到这页试玩草稿。')
+    const registry = ctx.get('workspaceRegistry')
+    const root = await webPilotPracticeRoot()
+    if (!registry || !root) return { runs: [] }
+    return webPilotRunPage({ registry, root, previous }, signal,
+      async id => (await pendingFirstWebPilotDraft(id, registry, root, signal))?.run)
+  }
+
+  async function resumeFirstWebPilotDraft({ sessionId, presetChanged }, signal) {
+    const unavailable = '这份试玩草稿已变化，请重新核对。'
+    if (presetChanged !== undefined && presetChanged !== true) throw new Error(unavailable)
+    const registry = ctx.get('workspaceRegistry')
+    const root = await webPilotPracticeRoot()
+    const pending = registry && root && await pendingFirstWebPilotDraft(sessionId, registry, root, signal)
+    if (!pending || pending.run.presetChanged !== presetChanged) throw new Error(unavailable)
+    await verifiedWebPilotBinding(pending.binding, signal)
+    if (!isDeepStrictEqual(await pendingFirstWebPilotDraft(sessionId, registry, root, signal), pending)) {
+      throw new Error(unavailable)
+    }
+    signal?.throwIfAborted()
+    return { sessionId }
+  }
+
   async function findWebPilotReports({ code, before }, signal) {
     const friend = decodeWebPilotReport(code)
     const previous = webPilotPageBoundary(before, '找不到这页网页试玩战报。')
     const registry = ctx.get('workspaceRegistry')
-    const profileDirectory = await realpath(directory).catch(error => {
-      if (error.code !== 'ENOENT') throw error
-    })
-    if (!registry || !profileDirectory) return { friend, runs: [] }
-    const root = join(profileDirectory, webSourceDirectory)
+    const root = await webPilotPracticeRoot()
+    if (!registry || !root) return { friend, runs: [] }
     const handoffTask = webPilotTask(friend.sampleLanguage === 'en')
     const page = await webPilotRunPage({ registry, root, previous }, signal, async sessionId => {
       const result = await inspectWebSourcePractice({ sessionId }, signal, { handoff: true, handoffTask })
@@ -8703,6 +8748,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-source-open') value = await openReviewedTask(selection, english, request.signal, 'web-source')
         else if (selection?.action === 'web-pilot-preview') value = await previewWebPilot(selection, english, request.signal)
         else if (selection?.action === 'web-pilot-open') value = await openReviewedTask(selection, english, request.signal, 'web-pilot')
+        else if (selection?.action === 'web-pilot-pending') value = await webPilotPending(selection, request.signal)
+        else if (selection?.action === 'web-pilot-resume') value = await resumeFirstWebPilotDraft(selection, request.signal)
         else if (selection?.action === 'web-pilot-result') value = await readWebPilot(selection, request.signal)
         else if (selection?.action === 'web-pilot-challenge-share') value = await shareWebPilotChallenge(selection, request.signal)
         else if (selection?.action === 'web-pilot-handoff-report') value = await shareWebPilotReport(selection, request.signal)
