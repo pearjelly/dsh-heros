@@ -1454,7 +1454,7 @@ window.__ModuleLoader__.load({
         } }))
     }
 
-    function WebSourcePersonalDraft({ sessionId, request, workspaces, onCancel, onOpen }) {
+    function WebSourcePersonalDraft({ sessionId, arm, request, workspaces, onCancel, onOpen }) {
       const language = useLanguage()
       const workspaceSetup = useContext(WorkspaceSetupContext)
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
@@ -1465,6 +1465,8 @@ window.__ModuleLoader__.load({
       const [openError, setOpenError] = useState('')
       const opening = useRef(null)
       const launchIds = useRef(new Map())
+      const route = arm ? 'web-pilot-personal' : 'web-source-personal'
+      const loadout = arm ? webPilotArms[arm].name : '极简模式 + 网页检索'
       const membership = JSON.stringify(items.map(item => item.workspaceId).sort())
       const current = checked?.attempt === attempt && checked.language === language && checked.membership === membership ? checked : null
       const available = current?.options ? items.filter(item => current.options.workspaceIds.includes(item.workspaceId)) : empty
@@ -1473,12 +1475,12 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         const abort = new AbortController()
-        const action = 'web-source-personal-options'
-        request(action, { action, sessionId }, abort.signal, language)
+        const action = route + '-options'
+        request(action, { action, sessionId, ...(arm && { arm }) }, abort.signal, language)
           .then(options => { if (!abort.signal.aborted) setChecked({ options, attempt, language, membership }) })
           .catch(reason => { if (!abort.signal.aborted) setChecked({ error: reason.message, attempt, language, membership }) })
         return () => abort.abort()
-      }, [request, sessionId, attempt, language, membership])
+      }, [request, sessionId, arm, route, attempt, language, membership])
       useEffect(() => () => opening.current?.abort(), [])
 
       async function open(event) {
@@ -1492,8 +1494,8 @@ window.__ModuleLoader__.load({
           launchIds.current.set(workspaceId, launchId)
         }
         try {
-          const action = 'web-source-personal-open'
-          const result = await request(action, { action, sessionId, workspaceId, launchId: launchIds.current.get(workspaceId) },
+          const action = route + '-open'
+          const result = await request(action, { action, sessionId, ...(arm && { arm }), workspaceId, launchId: launchIds.current.get(workspaceId) },
             abort.signal, language)
           if (!abort.signal.aborted) onOpen(result.sessionId)
         } catch (reason) {
@@ -1507,7 +1509,7 @@ window.__ModuleLoader__.load({
       return h(InstallDialog, { title: t(lessonTaskLabel),
         className: 'moba-starter-dialog moba-web-source-dialog moba-web-personal-dialog',
         initialFocus: '.moba-web-source-back', busy, onCancel },
-        h(InstallFacts, { facts: [[t('出装'), t('极简模式 + 网页检索')]] }),
+        h(InstallFacts, { facts: [[t('出装'), t(loadout)]] }),
         h('p', { className: 'moba-starter-note' }, t('在新草稿中粘贴要核对的链接，写下问题，再手动发送。')),
         !current && h('p', { role: 'status' }, t('正在核对可用工作区…')),
         (openError || current?.error) && h('p', { className: 'moba-alert', role: 'alert' }, openError || current.error),
@@ -1632,23 +1634,35 @@ window.__ModuleLoader__.load({
         complete && view.deliverables?.length === 0 && h('p', null, t('本局没有交付文件。')))
     }
 
-    function WebPilotComparison({ comparison, onCancel, onVisit }) {
-      return h(InstallDialog, { title: t('对照两局'), className: 'moba-starter-dialog moba-web-pilot-comparison',
-        onCancel, initialFocus: '.moba-web-pilot-comparison-back',
-        onKeyDown: event => closeDialogOnEscape(event, onCancel) },
-        h('a', { href: comparison.url, target: '_blank', rel: 'noopener noreferrer' }, t('查看发布方清单')),
-        h('div', { className: 'moba-lighthouse-arms' }, comparison.runs.map((run, index) =>
-          h('article', { className: 'moba-lighthouse-arm', key: run.sessionId },
-            h('div', null, h('h3', null, t(index === 0 ? '原局' : '复赛')),
-              h('span', { className: 'moba-lighthouse-arm-hero' }, t(webPilotArms[run.arm].name))),
-            h(WebPilotOutcome, { view: run, complete: true }),
-            h('button', { type: 'button', className: 'moba-roster-open', onClick: () => onVisit(run.sessionId) },
-              t(index === 0 ? '打开原局会话' : '打开复赛会话'))))),
-        h('div', { className: 'moba-market-actions moba-starter-actions' },
-          h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-comparison-back', onClick: onCancel }, t('返回'))))
+    function WebPilotComparison({ sessionId, comparison, request, workspaces, onCancel, onVisit }) {
+      const [personal, setPersonal] = useState(null)
+      return h(Fragment, null,
+        h(InstallDialog, { title: t('对照两局'), className: 'moba-starter-dialog moba-web-pilot-comparison',
+          onCancel, initialFocus: '.moba-web-pilot-comparison-back',
+          onKeyDown: event => closeDialogOnEscape(event, onCancel) },
+          h('a', { href: comparison.url, target: '_blank', rel: 'noopener noreferrer' }, t('查看发布方清单')),
+          h('div', { className: 'moba-lighthouse-arms' }, comparison.runs.map((run, index) => {
+            const loadout = t(webPilotArms[run.arm].name)
+            return h('article', { className: 'moba-lighthouse-arm', key: run.sessionId },
+              h('div', null, h('h3', null, t(index === 0 ? '原局' : '复赛')),
+                h('span', { className: 'moba-lighthouse-arm-hero' }, loadout)),
+              h(WebPilotOutcome, { view: run, complete: true }),
+              h('footer', null,
+                h('button', { type: 'button', className: 'moba-roster-open', onClick: () => onVisit(run.sessionId) },
+                  t(index === 0 ? '打开原局会话' : '打开复赛会话')),
+                h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-personal-entry', 'aria-haspopup': 'dialog',
+                  'aria-label': t(lessonTaskLabel) + ' · ' + loadout,
+                  onClick: event => setPersonal({ arm: run.arm, trigger: event.currentTarget }) }, t(lessonTaskLabel))))
+          })),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-comparison-back', onClick: onCancel }, t('返回')))),
+        personal && h(WebSourcePersonalDraft, { key: personal.arm, sessionId, arm: personal.arm, request, workspaces, onCancel: () => {
+          setPersonal(null)
+          requestAnimationFrame(() => personal.trigger.focus())
+        }, onOpen: onVisit }))
     }
 
-    function WebPilotPracticeResult({ sessionId, arm, request, onOpen, reportId, reporting, onReport }) {
+    function WebPilotPracticeResult({ sessionId, arm, request, workspaces, onOpen, reportId, reporting, onReport }) {
       const language = useLanguage()
       const [state, setState] = useState(null)
       const [attempt, retry] = useState(0)
@@ -1710,7 +1724,7 @@ window.__ModuleLoader__.load({
             'aria-controls': reportId, 'aria-expanded': reporting }, t('查看对局战报')),
           canReplay && h('button', { type: 'button', ref: replayTrigger, className: 'moba-settlement-button',
             'aria-haspopup': 'dialog', onClick: () => setReplayOpen(true) }, t('换另一套出装再试'))),
-        comparison && comparisonOpen && h(WebPilotComparison, { comparison, onCancel: closeComparison, onVisit: targetId => {
+        comparison && comparisonOpen && h(WebPilotComparison, { sessionId, comparison, request, workspaces, onCancel: closeComparison, onVisit: targetId => {
           if (targetId === sessionId) closeComparison()
           else {
             setComparisonOpen(false)
@@ -11530,7 +11544,7 @@ window.__ModuleLoader__.load({
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
         snapshot?.webSourcePractice && h(WebSourcePracticeResult, { key: sessionId, sessionId, request, workspaces, onOpen: openDraftSession }),
-        snapshot?.webPilotPractice && h(WebPilotPracticeResult, { key: sessionId, sessionId, arm: snapshot.webPilotPractice, request,
+        snapshot?.webPilotPractice && h(WebPilotPracticeResult, { key: sessionId, sessionId, arm: snapshot.webPilotPractice, request, workspaces,
           onOpen: openDraftSession, reportId: id, reporting: open && reporting,
           onReport: event => show(event, { kind: 'report', item: { name: t('对局战报') } }) }),
         snapshot?.heroTrial && h(HeroTrialAnchor, { key: sessionId, member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
@@ -13005,7 +13019,9 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-comparison .moba-lighthouse-arms { margin: 6px 0 0; }
       .moba-web-pilot-comparison .moba-lighthouse-arm { gap: 5px; align-content: start; }
       .moba-web-pilot-comparison .moba-lighthouse-arm p { margin: 0; overflow-wrap: anywhere; }
-      .moba-web-pilot-comparison .moba-lighthouse-arm button { justify-self: start; text-align: start; }
+      .moba-web-pilot-comparison .moba-lighthouse-arm footer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .moba-web-pilot-comparison .moba-lighthouse-arm button { min-inline-size: 0; text-align: start; overflow-wrap: anywhere; }
+      .moba-web-pilot-comparison .moba-web-pilot-personal-entry { color: #ffe3ab; background: #392e20; border-color: #ad8c52; }
       @media (max-width: 600px) {
         .moba-web-pilot-result { box-sizing: border-box; align-content: start;
           max-block-size: max(88px, calc(100dvh - 444px)); overflow: auto; scroll-padding-block: 8px; }

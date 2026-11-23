@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.206.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.207.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -34,6 +34,8 @@ dsh web
 从同一入口也可以玩 **兼容声明够不够推荐试用？** 选 **原装标准模式** 或 **标准模式 + 证据核验**，检查草稿后手动发出。两套出装读取同一份发布方清单，判断缺少本机试跑记录时该不该建议试用。原生提问卡出现后由你选择。打开战报核对实际来源、选择和交付稿。
 
 核验完成后，点 **换另一套出装再试** 并打开草稿。两局都核验同一份清单后，可从复赛对照两局的实际选择和交付文件，也可回到各自会话。
+
+在 **对照两局** 里，任选一边点 **用这套出装做自己的任务**。选自己的工作区，打开配好装备的空白草稿，粘贴新链接、写下自己的问题，再手动发送。
 
 原文缺失或对局标为待核实时，可以点 **用同一题再试**，用原题另开草稿。已经记录的选择保留在原会话里。
 

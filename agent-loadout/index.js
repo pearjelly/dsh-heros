@@ -54,6 +54,7 @@ const webSourceUnavailable = '本机暂时无法装配原生网页读取。'
 const webSourceDirectory = 'web-source-practice'
 const webSourceChanged = '试玩出装已变化，请重新核对。'
 const webPilotReplayChanged = '无法核对原局的题目或网页来源，请返回原局。'
+const webPilotPersonalUnavailable = '请从已核对的两局对照里选择一套出装。'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
 const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).digest('hex')
@@ -1585,22 +1586,28 @@ export async function apply(ctx) {
     return ['standard', 'evidence'].includes(result?.binding?.arm) && result.view.status === 'complete' && result.view.verified
   }
 
-  async function readWebPilot({ sessionId }, signal) {
-    const result = await inspectWebSourcePractice({ sessionId }, signal)
-    if (!result?.binding?.arm) return null
+  async function verifiedWebPilotPair(sessionId, result, signal) {
+    if (!completedWebPilot(result)) return
     const { binding, view, replayOf } = result
-    if (!completedWebPilot(result) || !replayOf || replayOf === sessionId) return view
+    if (!replayOf || replayOf === sessionId) return
     const original = await inspectWebSourcePractice({ sessionId: replayOf }, signal).catch(() => {
       signal?.throwIfAborted()
       return null
     })
     if (!completedWebPilot(original) || original.task !== result.task || original.view.url !== view.url ||
       original.binding.arm === binding.arm || original.binding.workspaceId === binding.workspaceId ||
-      original.binding.id !== binding.id || original.binding.sourceId !== binding.sourceId) return view
-    function comparedRun(id, { arm, choice, deliverables }) {
-      return { sessionId: id, arm, ...(choice && { choice }), deliverables }
-    }
-    return { ...view, comparison: { url: view.url, runs: [comparedRun(replayOf, original.view), comparedRun(sessionId, view)] } }
+      original.binding.id !== binding.id || original.binding.sourceId !== binding.sourceId) return
+    return [{ ...original, sessionId: replayOf }, { ...result, sessionId }]
+  }
+
+  async function readWebPilot({ sessionId }, signal) {
+    const result = await inspectWebSourcePractice({ sessionId }, signal)
+    if (!result?.binding?.arm) return null
+    const pair = await verifiedWebPilotPair(sessionId, result, signal)
+    if (!pair) return result.view
+    const runs = pair.map(({ sessionId, view: { arm, choice, deliverables } }) =>
+      ({ sessionId, arm, ...(choice && { choice }), deliverables }))
+    return { ...result.view, comparison: { url: result.view.url, runs } }
   }
 
   async function verifiedWebSourceLoadout(sessionId, signal) {
@@ -1619,7 +1626,26 @@ export async function apply(ctx) {
     return { workspaceIds: await personalWorkspaceIds(signal) }
   }
 
-  async function openWebSourcePersonal({ sessionId, workspaceId, launchId }, signal) {
+  async function verifiedWebPilotLoadout({ sessionId, arm }, signal) {
+    if (!['standard', 'evidence'].includes(arm)) throw new Error(webPilotPersonalUnavailable)
+    const result = await inspectWebSourcePractice({ sessionId }, signal)
+    const pair = await verifiedWebPilotPair(sessionId, result, signal)
+    const picked = pair?.find(run => run.binding.arm === arm)
+    if (!picked) throw new Error(webPilotPersonalUnavailable)
+    const { binding } = picked
+    const planned = await plannedWebSourceLoadout(signal, arm)
+    if (planned.candidate.id !== binding.presetId || planned.webToolId !== binding.id || planned.webToolSource !== binding.sourceId) {
+      throw new Error(webSourceChanged)
+    }
+    return { ...planned, binding }
+  }
+
+  async function webPilotPersonalOptions(selection, signal) {
+    const { binding } = await verifiedWebPilotLoadout(selection, signal)
+    return { workspaceIds: await personalWorkspaceIds(signal), arm: binding.arm }
+  }
+
+  async function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm }, signal, kind = 'web-source-personal') {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId) || !validOpeningId(launchId)) {
       throw new Error('开局请求无效，请重试。')
     }
@@ -1631,12 +1657,15 @@ export async function apply(ctx) {
     if (!controller?.create || !controller.resolveAgent || !registry || !ctx.get('sessionQuery')) {
       throw new Error(webSourceUnavailable)
     }
-    const key = JSON.stringify([planTaskOwner, 'web-source-personal', sessionId, workspaceId, launchId])
+    const pilot = kind === 'web-pilot-personal'
+    if (pilot && !['standard', 'evidence'].includes(arm)) throw new Error(webPilotPersonalUnavailable)
+    const key = JSON.stringify([planTaskOwner, kind, sessionId, ...(pilot ? [arm] : []), workspaceId, launchId])
     const next = 'session-' + createHash('sha256').update(key).digest('hex').slice(0, 32)
     if (openingMatches.has(next)) return openingMatches.get(next)
 
     const open = async () => {
-      const { draft, candidate, binding } = await verifiedWebSourceLoadout(sessionId, signal)
+      const { draft, candidate, binding } = pilot ? await verifiedWebPilotLoadout({ sessionId, arm }, signal)
+        : await verifiedWebSourceLoadout(sessionId, signal)
       const { presetId, verifyLive: verify } = await prepare(draft, candidate)
       const includesPath = await personalTaskPathFilter()
       const workspace = await checkedPersonalWorkspace(registry.get(workspaceId), includesPath)
@@ -1662,7 +1691,7 @@ export async function apply(ctx) {
       const { agent, error } = await controller.resolveAgent(next)
       if (!agent) throw new Error(error?.message ?? '无法打开新对局。')
       if (verify) verifyLive({ presetId, sessionId: next })
-      const live = liveWebSourceBinding(agent, presetId, workspaceId, binding.id)
+      const live = liveWebSourceBinding(agent, presetId, workspaceId, binding.id, binding.arm, binding.sourceId)
       if (live.sourceId !== binding.sourceId) throw new Error(webSourceChanged)
       return { sessionId: next, workspaceId }
     }
@@ -7637,6 +7666,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-pilot-preview') value = await previewWebPilot(selection, english, request.signal)
         else if (selection?.action === 'web-pilot-open') value = await openReviewedTask(selection, english, request.signal, 'web-pilot')
         else if (selection?.action === 'web-pilot-result') value = await readWebPilot(selection, request.signal)
+        else if (selection?.action === 'web-pilot-personal-options') value = await webPilotPersonalOptions(selection, request.signal)
+        else if (selection?.action === 'web-pilot-personal-open') value = await openWebSourcePersonal(selection, request.signal, 'web-pilot-personal')
         else if (selection?.action === 'web-source-result') value = await readWebSourcePractice(selection, request.signal)
         else if (selection?.action === 'web-source-choice') value = await chooseWebSourcePractice(selection, request.signal)
         else if (selection?.action === 'web-source-personal-options') value = await webSourcePersonalOptions(selection, request.signal)
