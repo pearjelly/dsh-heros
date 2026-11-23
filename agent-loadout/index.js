@@ -94,6 +94,11 @@ const webPilotTools = [
   ['ask_user_question', equipmentById.get('evidence').requires],
   ['present', equipmentById.get('present').module],
 ]
+const fieldPlaybookEquipment = new Map([
+  ['direct', ['present']],
+  ['review', ['present', 'review']],
+  ['evidence-review', ['present', 'evidence', 'review']],
+])
 const presetLabels = new Map(Object.entries(presetCopy))
 
 function flatten(rows) {
@@ -5453,11 +5458,11 @@ export async function apply(ctx) {
   }
 
   function deliveryPlaybookDraft(ecosystem, id) {
-    return standardDeliveryDraft(ecosystem, id === 'review' ? ['present', 'review'] : ['present'])
+    return standardDeliveryDraft(ecosystem, fieldPlaybookEquipment.get(id) ?? fieldPlaybookEquipment.get('direct'))
   }
 
   async function previewFieldPlaybook({ id, againstDraft, sourceSessionId }) {
-    if (id !== 'direct' && id !== 'review') throw new Error('请选择大厅里的实战打法。')
+    if (!fieldPlaybookEquipment.has(id)) throw new Error('请选择大厅里的实战打法。')
     const ecosystem = await discover()
     const draft = deliveryPlaybookDraft(ecosystem, id)
     return { draft, comparison: await compare({ ...draft, againstDraft, sourceSessionId }, ecosystem) }

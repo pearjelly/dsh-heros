@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.238.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.239.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -310,7 +310,7 @@ For your own tasks, try gear in the armory, compare the capabilities, and start 
 
 ## Use a playbook in your workspace
 
-Open **Playbooks** in the lobby. Both **Direct delivery** and **Review before delivery** use Standard Mode and Deliverable Preview. Direct delivery suits a file that is ready to inspect. For work with a distinct handoff, the review playbook prompts the model to show a draft first and ask whether to hand it over or revise it.
+Open **Playbooks** in the lobby. All three options use Standard Mode and Deliverable Preview. Choose **Deliver directly** for a file that is ready to inspect, or **Review before delivery** to confirm or request changes before a distinct handoff. Choose **Check evidence, then review delivery** when you also need to decide what to do about missing evidence. The task result can show the evidence and delivery decisions separately when both occur.
 
 Preview what changes in your current loadout, then adopt the playbook to update the lobby draft. Your workspace and choice to start or continue carry through. The loadout takes effect when you lock it in. Save a playbook you use often as a build plan.
 

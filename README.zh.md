@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.238.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.239.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -314,7 +314,7 @@ dsh web
 
 ## 把打法用到自己的工作区
 
-在大厅打开 **实战打法**，选 **直接交付** 或 **复核后交付**。两套都用标准模式和交付物预览。直接交付适合已经能验收的文件，复核打法会提示模型先展示草稿，在有明确交接步骤时让你确认交付或退回修改。
+在大厅打开 **实战打法**。三套打法都用标准模式和交付物预览。文件已能验收时可以选 **直接交付**，交接前想看草稿时选 **复核后交付**。如果材料还有证据缺口，选 **先核验，再复核交付**。可以先决定补证、降级或暂缓，再核对准备交付的草稿。两道选择都发生时，可以在任务结果里分别查看。
 
 选中一套打法即可看清与当前出装的变化。确认采用后，它会替换大厅草稿并保留你选的工作区和开局或续战方式。锁定阵容后生效。常用搭配可以保存为出装方案。
 

@@ -1396,6 +1396,17 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const effect = review.comparison.gained.find(card => card.id === 'review')
     assert.equal(effect?.kind, 'effect')
     assert.deepEqual(effect.decisions.map(([label]) => label), ['确认交付', '退回修改'])
+
+    const both = await preview('evidence-review', { againstDraft: direct.draft })
+    assert.equal(both.draft.presetId, 'standard')
+    assert.deepEqual(both.draft.equipmentIds, ['present', 'evidence', 'review'])
+    const evidenceEffect = both.comparison.gained.find(card => card.id === 'evidence')
+    assert.equal(evidenceEffect?.kind, 'effect')
+    assert.deepEqual(evidenceEffect.decisions.map(([label]) => label), ['继续补证', '降级推荐', '暂缓提交'])
+    assert.deepEqual(both.comparison.gained.find(card => card.id === 'review')?.decisions, effect.decisions)
+    const fromReview = await preview('evidence-review', { againstDraft: review.draft })
+    assert.ok(fromReview.comparison.gained.some(card => card.id === 'evidence'))
+    assert.ok(!fromReview.comparison.gained.some(card => card.id === 'review'))
     assert.deepEqual(await saved(), existing)
 
     const prepare = async draft => (await host.request(endpoint, draft)).value.presetId

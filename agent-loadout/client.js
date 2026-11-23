@@ -7507,13 +7507,18 @@ window.__ModuleLoader__.load({
         !replaced.length && !groups.length && h('p', { className: 'moba-empty' }, t('已知能力、工具来源和就绪时机均一致。')))
     }
 
+    const lobbyFieldPlaybooks = [...fieldPlaybooks, {
+      id: 'evidence-review', icon: 'crest', name: '先核验，再复核交付', gear: '证据核验 + 交付前复核 + 交付物预览',
+      note: '证据不足时，先选补证、降级或暂缓。交接前，再确认交付或退回修改。',
+    }]
+
     function FieldPlaybooks({ request, draftKey, sourceSessionId, hasOpening, onClose, onAdopt }) {
       const language = useLanguage()
-      const [selected, setSelected] = useState(fieldPlaybooks[0].id)
+      const [selected, setSelected] = useState(lobbyFieldPlaybooks[0].id)
       const [checked, setChecked] = useState(null)
       const [attempt, retry] = useState(0)
       const group = useId()
-      const choice = fieldPlaybooks.find(item => item.id === selected)
+      const choice = lobbyFieldPlaybooks.find(item => item.id === selected)
       const key = JSON.stringify([selected, draftKey, sourceSessionId, language, attempt])
       const preview = checked?.key === key ? checked : null
       const baseline = draftKey ? t('现有出装') : sourceSessionId ? t('当前会话') : t('标准模式基础出装')
@@ -7528,32 +7533,34 @@ window.__ModuleLoader__.load({
         return () => abort.abort()
       }, [request, selected, draftKey, sourceSessionId, language, key])
 
-      return h(InstallDialog, { title: t('实战打法'), className: 'moba-playbook-dialog', onCancel: onClose,
+      return h(InstallDialog, { title: t('实战打法'), className: 'moba-playbook-dialog moba-field-playbooks', onCancel: onClose,
         initialFocus: 'input:checked', onKeyDown: event => {
           if (event.key !== 'Escape') return
           event.preventDefault()
           event.stopPropagation()
           onClose()
         } },
-        h('fieldset', { className: 'moba-starter-routes' },
-          h('legend', null, t('选择交付方式')),
-          fieldPlaybooks.map(item => h('label', { className: 'moba-starter-route', key: item.id, 'data-picked': item.id === selected },
-            h('input', { type: 'radio', name: group, value: item.id, checked: item.id === selected,
-              onChange: () => { setChecked(null); setSelected(item.id) } }),
-            h('span', null, h('strong', null, h(Glyph, { kind: item.icon, size: 16 }), t(item.name)),
-              h('span', { className: 'moba-playbook-gear' }, t(item.gear)), h('small', null, t(item.note)))))),
-        !draftKey && h('p', { className: 'moba-empty' }, t('当前出装暂时无法对照，预览改用下方标出的基准。')),
-        !preview && h('p', { className: 'moba-empty', role: 'status' }, t('正在比较出装…')),
-        preview?.error && h('p', { className: 'moba-alert', role: 'alert' }, preview.error, ' ',
-          h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重试'))),
-        preview?.value && h(FieldPlaybookComparison, { result: preview.value.comparison, draft: preview.value.draft, baseline }),
-        h('p', { className: 'moba-starter-note' }, t('确认后替换大厅中的出装草稿。'),
-          hasOpening && ' ' + t('当前筹备的开局委托也会清空。')),
-        h('div', { className: 'moba-market-actions moba-starter-actions' },
-          h('button', { type: 'button', className: 'moba-roster-open', onClick: onClose }, t('返回大厅')),
-          h('button', { type: 'button', className: 'moba-start', disabled: !preview?.value,
-            onClick: () => onAdopt(choice.id, t(choice.name), preview.value.draft) },
-          t('确认采用打法'), h(Glyph, { kind: 'arrow', size: 16 }))))
+        h('div', { className: 'moba-field-playbook-body' },
+          h('fieldset', { className: 'moba-starter-routes' },
+            h('legend', null, t('选择交付方式')),
+            lobbyFieldPlaybooks.map(item => h('label', { className: 'moba-starter-route', key: item.id, 'data-picked': item.id === selected },
+              h('input', { type: 'radio', name: group, value: item.id, checked: item.id === selected,
+                onChange: () => { setChecked(null); setSelected(item.id) } }),
+              h('span', null, h('strong', null, h(Glyph, { kind: item.icon, size: 16 }), t(item.name)),
+                h('span', { className: 'moba-playbook-gear' }, t(item.gear)), h('small', null, t(item.note)))))),
+          !draftKey && h('p', { className: 'moba-empty' }, t('当前出装暂时无法对照，预览改用下方标出的基准。')),
+          !preview && h('p', { className: 'moba-empty', role: 'status' }, t('正在比较出装…')),
+          preview?.error && h('p', { className: 'moba-alert', role: 'alert' }, preview.error, ' ',
+            h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重试'))),
+          preview?.value && h(FieldPlaybookComparison, { result: preview.value.comparison, draft: preview.value.draft, baseline })),
+        h('div', { className: 'moba-field-playbook-footer' },
+          h('p', { className: 'moba-starter-note' }, t('确认后替换大厅中的出装草稿。'),
+            hasOpening && ' ' + t('当前筹备的开局委托也会清空。')),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open', onClick: onClose }, t('返回大厅')),
+            h('button', { type: 'button', className: 'moba-start', disabled: !preview?.value,
+              onClick: () => onAdopt(choice.id, t(choice.name), preview.value.draft) },
+            t('确认采用打法'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
     function ComparisonHero({ hero, label, planName }) {
@@ -10441,7 +10448,7 @@ window.__ModuleLoader__.load({
 
       function adoptPlaybook(id, name, draft) {
         const labels = Object.fromEntries(draft.equipmentIds.map(item => [item, catalog.get(item)?.name ?? item]))
-        const preferred = id === 'review' ? 'review' : 'present'
+        const preferred = { review: 'review', 'evidence-review': 'evidence' }[id] ?? 'present'
         const inspectId = draft.equipmentIds.includes(preferred) ? preferred : draft.equipmentIds[0] ?? preferred
         applyHistoricalDraft(draft, labels, inspectId, t('已采用「%s」打法。').replace('%s', name), { preserveMatchMode: true })
         closePlaybooks()
@@ -15312,6 +15319,19 @@ window.__ModuleLoader__.load({
       .moba-playbook-button { border-color: #677d70; background: #182c2a; color: #bfe3d5 !important; }
       .moba-playbook-dialog { width: min(550px, calc(100vw - 28px)); }
       .moba-playbook-dialog h2 { margin: 0; font-size: 22px; }
+      .moba-field-playbooks[open] { display: flex; flex-direction: column; overflow: clip; }
+      .moba-field-playbooks > :is(h2, .moba-field-playbook-footer) { flex: none; }
+      .moba-field-playbook-body { min-block-size: 0; overflow: auto; padding: 2px; }
+      .moba-field-playbook-footer > p { margin: 5px 0 0; }
+      @media (max-width: 390px) {
+        .moba-field-playbooks { padding: 12px; }
+        .moba-field-playbooks .moba-starter-routes { gap: 5px; margin-block: 5px 8px; }
+        .moba-field-playbooks .moba-starter-route { min-block-size: 44px; padding: 6px; }
+        .moba-field-playbooks .moba-starter-route > span { gap: 2px; }
+        .moba-field-playbooks .moba-starter-route small { line-height: 1.3; }
+        .moba-field-playbooks .moba-market-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); margin-top: 7px; }
+        .moba-field-playbooks .moba-market-actions button { min-block-size: 44px; min-inline-size: 0; justify-content: center; white-space: normal; }
+      }
       .moba-playbook-gear { color: #a5d9d1; font-size: 12px; }
       .moba-playbook-comparison { padding: 0 8px; background: #131a25; border: 1px solid var(--line); }
       .moba-playbook-lineup { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center;
