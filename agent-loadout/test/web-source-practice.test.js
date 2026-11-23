@@ -70,7 +70,7 @@ test('Web practice handoff reports carry only canonical outcomes from linked nat
   const file = (seq, turn, callId) => ({ seq, type: 'deliverables/presented', data: { turn, callId, files: [{ path: 'private.md' }] } })
   const reply = (seq, callId) => ({ seq, type: 'user/message', surfaceOp: 'append', data: {
     source: { kind: 'user-question-reply', outcome: 'answered', callId }, content: [{ type: 'text',
-      text: JSON.stringify({ answers: [{ id: 'choice', selected: [], custom: 'private free text' }] }) }],
+      text: JSON.stringify({ answers: [{ id: 'choice', selected: [], custom: 'private free text'.repeat(1_200) }] }) }],
   } })
   const events = Array.from({ length: 18 }, (_, seq) => ({ seq, type: 'time-context', data: {} }))
   const native = [call(1, 1, 'ask_user_question', 'before-read'), call(3, 1, 'ask_user_question', 'ask'),
@@ -85,6 +85,12 @@ test('Web practice handoff reports carry only canonical outcomes from linked nat
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: true })
   events[15].sourceEventSeqs = [4]
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: false })
+  const immediate = result(8, 1, 'ask', 3)
+  immediate.data.message.content = [{ type: 'text', text: JSON.stringify({
+    answers: [{ id: 'choice', selected: [], custom: 'private free text'.repeat(1_200) }],
+  }) }]
+  events[8] = immediate
+  assert.deepEqual(webPilotHandoffOutcome(events, [first], 2), { choices: [], custom: true, delivered: false })
 })
 
 test('saving a web pilot arm deduplicates concurrent requests and retains its source until the recipe changes', async t => {

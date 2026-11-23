@@ -222,9 +222,9 @@ export function matchToolRecords(appendRecord, notify) {
   return { observe, capture, record, activity, share, end, teammateActivity }
 }
 
-function questionAnswers(message) {
+function questionAnswers(message, maxLength = Infinity) {
   const text = message.content.find(part => part.type === 'text')?.text
-  if (!text || text.length > 16_384) return
+  if (!text || text.length > maxLength) return
   try {
     const { answers } = JSON.parse(text)
     if (Array.isArray(answers)) return answers
@@ -234,7 +234,7 @@ function questionAnswers(message) {
 }
 
 function answerChoices(message) {
-  const labels = questionAnswers(message)?.flatMap(answer => Array.isArray(answer?.selected) ? answer.selected : [])
+  const labels = questionAnswers(message, 16_384)?.flatMap(answer => Array.isArray(answer?.selected) ? answer.selected : [])
     .filter(label => typeof label === 'string' && label.length <= 200)
   if (labels?.length) return labels
 }
