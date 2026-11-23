@@ -9,12 +9,12 @@ const evidencePrefix = 'lighthouse-evidence-'
 const evidenceReplayPrefix = 'lighthouse-evidence-replay-'
 export const lighthouseEvidenceScenarios = ['gap', 'confirmed']
 const evidenceDecisionLabels = new Map([
-  ['继续补证', 'gather'], ['Gather more evidence', 'gather'], ['Continue gathering evidence', 'gather'],
-  ['降级推荐', 'qualify'], ['Qualify the recommendation', 'qualify'], ['Lower the recommendation to a qualified draft', 'qualify'],
-  ['暂缓提交', 'pause'], ['Pause submission', 'pause'],
+  ['继续补证', 'gather'], ['gather more evidence', 'gather'], ['continue gathering evidence', 'gather'],
+  ['降级推荐', 'qualify'], ['qualify the recommendation', 'qualify'], ['lower the recommendation to a qualified draft', 'qualify'],
+  ['暂缓提交', 'pause'], ['pause submission', 'pause'],
 ])
 export const lighthouseEvidenceChoices = ['gather', 'qualify', 'pause']
-export const lighthouseEvidenceDecision = choices => choices.length === 1 ? evidenceDecisionLabels.get(choices[0]) : undefined
+export const lighthouseEvidenceDecision = choices => choices.length === 1 ? evidenceDecisionLabels.get(choices[0].normalize('NFKC').trim().toLowerCase()) : undefined
 const reviewDecisionLabels = new Map([
   ['确认交付', 'confirm'], ['确认交接', 'confirm'], ['confirm handoff', 'confirm'], ['confirm delivery', 'confirm'], ['approve delivery', 'confirm'],
   ['退回修改', 'revise'], ['请求修改', 'revise'], ['revise draft', 'revise'], ['request changes', 'revise'],

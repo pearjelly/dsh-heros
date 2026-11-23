@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.212.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.213.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -34,6 +34,8 @@ dsh web
 核验完成后，点 **换另一套出装再试** 并打开草稿。两局都核验同一份清单后，可从复赛对照两局的实际选择和交付文件，也可回到各自会话。
 
 公开试玩核验通过后，点 **邀请好友同题试玩** 并复制邀请。好友从大厅打开 **加入试玩挑战**，粘贴整段邀请，查看你用的出装和原题语言，再从自己可用的出装里选一套，打开草稿并手动发送。邀请带上固定公开题和你用的出装，实战选择、文件和会话留在本机。
+
+两人打完同一道题后，各自从本局结果点 **交换试玩战报**。可以复制自己的战报发给好友，也可以粘贴收到的整段消息。两张卡对照出装、实际选择和有没有交付文件。本机一侧由本局记录核验，好友一侧显示对方分享的结果。战报码不包含文件名、文件或会话内容。
 
 回到原会话点 **查看复赛**，可以继续已有的待发送草稿，或选一局已核验的复赛对照。每局完成记录显示当时的选择和交付。有意试另一种决定时，可以另开一局复赛。
 

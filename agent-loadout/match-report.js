@@ -222,18 +222,21 @@ export function matchToolRecords(appendRecord, notify) {
   return { observe, capture, record, activity, share, end, teammateActivity }
 }
 
-function answerChoices(message) {
+function questionAnswers(message) {
   const text = message.content.find(part => part.type === 'text')?.text
   if (!text || text.length > 16_384) return
   try {
     const { answers } = JSON.parse(text)
-    if (!Array.isArray(answers)) return
-    const labels = answers.flatMap(answer => Array.isArray(answer?.selected) ? answer.selected : [])
-      .filter(label => typeof label === 'string' && label.length <= 200)
-    if (labels.length) return labels
+    if (Array.isArray(answers)) return answers
   } catch (error) {
     if (!(error instanceof SyntaxError) && !(error instanceof TypeError)) throw error
   }
+}
+
+function answerChoices(message) {
+  const labels = questionAnswers(message)?.flatMap(answer => Array.isArray(answer?.selected) ? answer.selected : [])
+    .filter(label => typeof label === 'string' && label.length <= 200)
+  if (labels?.length) return labels
 }
 
 function settleTool(call, outcome, error, time) {
@@ -581,7 +584,7 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
   const windows = []
   for (const [from, finish] of turns) {
     const number = events[from].data.turn
-    if (includeWindows && finish >= 0) windows.push({ endSeq: events[finish].seq, turn: number })
+    if (includeWindows && finish >= 0) windows.push({ startSeq: events[from].seq, endSeq: events[finish].seq, turn: number })
     for (const event of events.slice(from + 1, finish < 0 ? undefined : finish)) {
       if (finish >= 0 && event.type === 'deliverables/presented' && event.data.turn === number) {
         noteDeliveredFiles(files, event.data, includeWindows || includeFileCoordinates ? event.seq : undefined)
@@ -607,6 +610,51 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     ...(verifyMaterialDelivery && { materialDelivered }),
     ...(materialState && { materialState }), ...(pendingQuestions.length && { pendingQuestions }),
     ...(followUps.continuationReason && { continuationReason: followUps.continuationReason }), ...(includeWindows && { windows }) }
+}
+
+export function webPilotHandoffOutcome(events, windows, receiptSeq) {
+  const questions = new Map()
+  let answer
+  let delivered = false
+  function recordAnswer(call, message) {
+    if (!call || answer && call.seq < answer.seq) return
+    const answers = questionAnswers(message)
+    const choices = answers?.flatMap(item => Array.isArray(item?.selected) ? item.selected : [])
+      .filter(label => typeof label === 'string' && label.trim())
+    const custom = answers?.some(item => typeof item?.custom === 'string' && item.custom.trim())
+    if (choices?.length || custom) answer = { seq: call.seq, choices, custom }
+  }
+
+  for (const { startSeq, endSeq, turn } of windows) {
+    const calls = new Map()
+    const presents = new Set()
+    const files = new Set()
+    for (const event of events.slice(Math.max(startSeq, receiptSeq) + 1, endSeq)) {
+      const { type, data, seq, surfaceOp, sourceEventSeqs } = event
+      if (type === 'user/message' && surfaceOp === 'append' && data.source.kind === 'user-question-reply' &&
+        data.source.outcome === 'answered') {
+        recordAnswer(questions.get(data.source.callId), data)
+      }
+      if (data?.turn !== turn) continue
+      if (type === 'tool/call') {
+        if (data.name !== 'ask_user_question' && data.name !== 'present') continue
+        calls.set(data.callId, event)
+        if (data.name === 'ask_user_question') questions.set(data.callId, event)
+      } else if (type === 'tool/result' && surfaceOp === 'append' && data.message.isError === false) {
+        const id = data.message.toolCallId
+        const call = calls.get(id)
+        if (!call || seq <= call.seq || data.step !== call.data.step ||
+          (sourceEventSeqs !== undefined && sourceEventSeqs[0] !== call.seq)) continue
+        if (call.data.name === 'present') presents.add(id)
+        else recordAnswer(call, data.message)
+      } else if (type === 'deliverables/presented' && calls.get(data.callId)?.data.name === 'present' &&
+        data.files.some(file => typeof file.path === 'string' && file.path.trim())) {
+        files.add(data.callId)
+      }
+    }
+    delivered ||= [...files].some(id => presents.has(id))
+  }
+  return { ...(answer && { choices: answer.choices, custom: Boolean(answer.custom) }), delivered }
 }
 
 function recordedHandoffTool(events, call) {

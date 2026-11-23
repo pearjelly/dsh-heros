@@ -1977,14 +1977,13 @@ window.__ModuleLoader__.load({
       const [replayOpen, setReplayOpen] = useState(false)
       const [comparisonOpen, setComparisonOpen] = useState(false)
       const [replayListOpen, setReplayListOpen] = useState(false)
-      const [shareOpen, setShareOpen] = useState(false)
+      const [exchangeView, setExchangeView] = useState('')
       const replayTrigger = useRef(null)
       const comparisonTrigger = useRef(null)
       const replayListTrigger = useRef(null)
       const returnFromReplayList = useRef(false)
-      const shareTrigger = useRef(null)
-      const shareDialog = useRef(null)
-      const returnFromShare = useRef(false)
+      const exchangeTrigger = useRef(null)
+      const exchangeDialog = useRef(null)
       const current = state?.language === language && state.attempt === attempt ? state : null
       const view = current?.view
 
@@ -2011,10 +2010,10 @@ window.__ModuleLoader__.load({
         replayListTrigger.current?.focus()
       }, [replayListOpen])
       useLayoutEffect(() => {
-        if (shareOpen || !returnFromShare.current) return
-        returnFromShare.current = false
-        shareTrigger.current?.focus()
-      }, [shareOpen])
+        if (exchangeView) return
+        exchangeTrigger.current?.focus()
+        exchangeTrigger.current = null
+      }, [exchangeView])
 
       const complete = view?.status === 'complete'
       const unavailable = view?.status === 'unavailable'
@@ -2032,6 +2031,17 @@ window.__ModuleLoader__.load({
         setComparisonOpen(false)
         requestAnimationFrame(() => comparisonTrigger.current?.focus())
       }
+
+      function openExchange(view, event) {
+        exchangeTrigger.current = event.currentTarget
+        setExchangeView(view)
+      }
+
+      function closeExchange() {
+        exchangeDialog.current?.close()
+        setExchangeView('')
+      }
+
       return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-result', tabIndex: 0, 'aria-label': t(webPilotTitle) },
         h('div', null, h('strong', null, t(webPilotTitle)), armName && h('span', null, t(armName))),
         (comparison || canReviewReplays || canShare) && h('div', { className: 'moba-web-pilot-primary-actions' },
@@ -2040,9 +2050,11 @@ window.__ModuleLoader__.load({
           canReviewReplays && h('button', { type: 'button', ref: replayListTrigger,
             className: 'moba-settlement-button moba-web-pilot-review', 'data-primary': !comparison || undefined,
             'aria-haspopup': 'dialog', onClick: () => setReplayListOpen(true) }, t(webPilotReplaysLabel)),
-          canShare && h('button', { type: 'button', ref: shareTrigger, className: 'moba-settlement-button',
-            'aria-haspopup': 'dialog', onClick: () => setShareOpen(true) }, t(webPilotInviteTitle)),
-          canReviewReplays && !comparison && startReplay),
+          canShare && h('button', { type: 'button', className: 'moba-settlement-button',
+            'aria-haspopup': 'dialog', onClick: event => openExchange('invite', event) }, t(webPilotInviteTitle)),
+          canReviewReplays && !comparison && startReplay,
+          canShare && h('button', { type: 'button', className: 'moba-settlement-button',
+            'aria-haspopup': 'dialog', onClick: event => openExchange('report', event) }, t(webPilotReportTitle))),
         current?.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
           h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重新核对'))),
         unavailable && h('p', null, t('这次任务或出装已变化，无法核对本局。')),
@@ -2058,11 +2070,10 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-settlement-button', onClick: onReport,
             'aria-controls': reportId, 'aria-expanded': reporting }, t('查看对局战报')),
           (!canReviewReplays || comparison) && startReplay),
-        canShare && shareOpen && h(LighthouseChallengeShare, { webPilotSessionId: sessionId, request, dialogRef: shareDialog, onBack: () => {
-          shareDialog.current?.close()
-          returnFromShare.current = true
-          setShareOpen(false)
-        } }),
+        canShare && exchangeView === 'invite' && h(LighthouseChallengeShare, {
+          webPilotSessionId: sessionId, request, dialogRef: exchangeDialog, onBack: closeExchange }),
+        canShare && exchangeView === 'report' && h(WebPilotHandoffReport, {
+          sessionId, request, dialogRef: exchangeDialog, onBack: closeExchange }),
         canReviewReplays && replayListOpen && h(WebPilotReplayList, { sessionId, request, workspaces, onCancel: () => {
           returnFromReplayList.current = true
           setReplayListOpen(false)
@@ -2214,6 +2225,7 @@ window.__ModuleLoader__.load({
 
     const challengeJoinTitle = '加入试玩挑战'
     const webPilotInviteTitle = '邀请好友同题试玩'
+    const webPilotReportTitle = '交换试玩战报'
 
     function LighthouseChallengeShare({ comparisonId, request, onBack, heroTrial = false, playedHero, reviewSource,
       webPilotSessionId, dialogRef }) {
@@ -2791,6 +2803,145 @@ window.__ModuleLoader__.load({
     const reviewHandoffReportCode = /^DSHR3\.[A-Za-z0-9_-]+$/u
     const reviewHandoffInvalidCode = '灯塔交接战报码无效或版本不受支持。'
     const reviewHandoffDecisions = { confirm: '确认交付', revise: '退回修改', answered: '已作出复核选择' }
+    const webPilotReportDecisions = {
+      none: '未记录选择', gather: '继续补证', qualify: '降级推荐', pause: '暂缓提交', answered: '已作选择',
+    }
+
+    function pastedWebPilotReport(text) {
+      if (text.length > lighthouseInvitationLimit) return { problem: '这段消息太长，请只粘贴战报或战报码。' }
+      let code
+      for (const [candidate] of text.matchAll(/(?<![A-Za-z0-9_.-])DSHR[1-4]\.[A-Za-z0-9_-]+/g)) {
+        if (!candidate.startsWith('DSHR4.')) return { problem: '请粘贴网页试玩战报。灯塔战报可在灯塔挑战里对照。' }
+        if (code && code !== candidate) return { problem: '找到多个不同的试玩战报码，请只保留要对照的那一个。' }
+        code = candidate
+      }
+      return code && code.length <= lighthouseHandoffReportCodeLimit ? { code }
+        : { problem: '没有找到网页试玩战报码。请粘贴战报或战报码。' }
+    }
+
+    function WebPilotReportSide({ side, label }) {
+      const language = { en: '英文', zh: '中文' }[side.sampleLanguage]
+      const arm = webPilotArms[side.played]
+      return h('article', { className: 'moba-web-pilot-handoff-side' },
+        h('h4', null, t(label)),
+        h(InstallFacts, { facts: [[t('任务语言'), language && t(language)], [t('出装'), arm && t(arm.name)],
+          [t('实际选择'), t(webPilotReportDecisions[side.decision])], [t('交付文件'), t(side.delivered ? '有交付记录' : '没有交付记录')]] }))
+    }
+
+    function WebPilotHandoffReport({ sessionId, request, dialogRef, onBack }) {
+      const language = useLanguage()
+      const [result, setResult] = useState(null)
+      const [input, setInput] = useState('')
+      const [error, setError] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [attempt, retry] = useState(0)
+      const [notice, setNotice] = useState('')
+      const [manualCopy, setManualCopy] = useState(false)
+      const field = useRef(null)
+      const reportField = useRef(null)
+      const heading = useRef(null)
+      const pending = useRef(null)
+      const report = result?.code && t('这是我的深度荣耀网页试玩战报。从你打完的同题对局点「交换试玩战报」，粘贴这整段即可对照。') + '\n\n' + result.code
+
+      useEffect(() => {
+        const abort = new AbortController()
+        setResult(null)
+        setError('')
+        setBusy(false)
+        setNotice('')
+        setManualCopy(false)
+        const action = 'web-pilot-handoff-report'
+        request(action, { action, sessionId }, abort.signal, language)
+          .then(value => { if (!abort.signal.aborted) setResult(value) })
+          .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
+        return () => {
+          abort.abort()
+          pending.current?.abort()
+        }
+      }, [request, sessionId, language, attempt])
+
+      useLayoutEffect(() => {
+        if (result?.friend) heading.current?.focus()
+      }, [result?.friend])
+
+      useLayoutEffect(() => {
+        if (!manualCopy) return
+        reportField.current?.focus()
+        reportField.current?.select()
+      }, [manualCopy])
+
+      function clearComparison() {
+        setResult(current => current?.friend ? { code: current.code, local: current.local } : current)
+      }
+
+      async function compare(event) {
+        event.preventDefault()
+        if (pending.current || !result?.local) return
+        const { code, problem } = pastedWebPilotReport(input)
+        if (!code) {
+          setError(t(problem))
+          field.current?.focus()
+          return
+        }
+        const abort = pending.current = new AbortController()
+        clearComparison()
+        setBusy(true)
+        setError('')
+        setNotice('')
+        setManualCopy(false)
+        try {
+          const action = 'web-pilot-handoff-compare'
+          const value = await request(action, { action, sessionId, code }, abort.signal, language)
+          if (!abort.signal.aborted) setResult(value)
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          if (pending.current === abort) pending.current = null
+          if (!abort.signal.aborted) setBusy(false)
+        }
+      }
+
+      async function copy() {
+        if (!report) return
+        try {
+          await navigator.clipboard.writeText(report)
+          setNotice(t('战报已复制。'))
+        } catch {
+          if (manualCopy) {
+            reportField.current?.focus()
+            reportField.current?.select()
+          } else setManualCopy(true)
+          setNotice(t('战报已选中，可以手动复制。'))
+        }
+      }
+
+      return h(InstallDialog, { title: t(webPilotReportTitle), className: 'moba-starter-dialog moba-web-pilot-handoff',
+        dialogRef, onCancel: onBack, initialFocus: '.moba-web-pilot-handoff-input',
+        onKeyDown: event => closeDialogOnEscape(event, onBack) },
+        h('form', { onSubmit: compare },
+          h('div', { className: 'moba-plan-fields moba-share-fields' },
+            result?.local && h('section', { className: 'moba-web-pilot-handoff-outcome' },
+              result.friend && h('h3', { ref: heading, tabIndex: -1 }, t('同题对照')),
+              h('div', { className: 'moba-web-pilot-handoff-sides' },
+                h(WebPilotReportSide, { side: result.local, label: '本机核对的取舍' }),
+                result.friend && h(WebPilotReportSide, { side: result.friend, label: '好友分享的取舍' }))),
+            report && h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-handoff-copy', disabled: busy,
+              onClick: copy }, t('复制战报给好友')),
+            manualCopy && report && h('label', null, t('我的试玩战报'),
+              h('textarea', { className: 'moba-share-code', ref: reportField, value: report, readOnly: true, rows: 3,
+                spellCheck: false, onFocus: event => event.currentTarget.select() })),
+            notice && h('p', { className: 'moba-empty', role: 'status' }, notice),
+            h('label', null, t('好友试玩战报或战报码'),
+              h('textarea', { className: 'moba-share-code moba-web-pilot-handoff-input', ref: field, value: input, rows: 2,
+                spellCheck: false, readOnly: busy, autoComplete: 'off', autoCapitalize: 'off', maxLength: lighthouseInvitationLimit + 1,
+                onChange: event => { setInput(event.target.value); setError(''); clearComparison() } })),
+            error && h('p', { className: 'moba-alert', role: 'alert' }, error),
+            (busy || !result && !error) && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对战报…'))),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open', onClick: onBack }, t('返回')),
+            error && !result && h('button', { type: 'button', className: 'moba-roster-open', onClick: () => retry(value => value + 1) }, t('重新核对')),
+            h('button', { type: 'submit', className: 'moba-start', disabled: busy || !result?.local || !input.trim() }, t('对照好友战报')))))
+    }
 
     function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal, onPersonalTask,
       initialInput = '', initialCompareCode, onCompareOwn }) {
@@ -13506,6 +13657,21 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-save .moba-plan-fields :is(input, textarea) { box-sizing: border-box; min-block-size: 44px; }
       .moba-web-pilot-save [role="status"] { overflow-wrap: anywhere; }
       .moba-web-pilot-replay-list .moba-history-entry button { max-inline-size: 100%; overflow-wrap: anywhere; }
+      .moba-web-pilot-handoff[open] { box-sizing: border-box; display: flex; flex-direction: column; overflow: clip; }
+      .moba-web-pilot-handoff h2, .moba-web-pilot-handoff .moba-starter-actions { flex: none; }
+      .moba-web-pilot-handoff form { display: flex; flex-direction: column; min-block-size: 0; }
+      .moba-web-pilot-handoff .moba-share-fields { min-block-size: 0; padding: 4px; }
+      .moba-web-pilot-handoff :is(button, textarea) { box-sizing: border-box; min-block-size: 44px; }
+      .moba-web-pilot-handoff :is(button, textarea, h3):focus-visible { outline: 2px solid #9ed4ec; outline-offset: 2px; }
+      .moba-web-pilot-handoff .moba-web-pilot-handoff-copy { justify-self: start; }
+      .moba-web-pilot-handoff-outcome h3 { margin: 0 0 7px; color: var(--gold); }
+      .moba-web-pilot-handoff-sides { display: grid; gap: 7px;
+        grid-template-columns: repeat(auto-fit, minmax(min(196px, 100%), 1fr)); }
+      .moba-web-pilot-handoff-side { min-inline-size: 0; padding: 7px 8px;
+        background: #172930; border: 1px solid #607d78; }
+      .moba-web-pilot-handoff-side + .moba-web-pilot-handoff-side { background: #202737; border-color: #67748d; }
+      .moba-web-pilot-handoff-side h4 { margin: 0 0 5px; color: var(--ink); font-size: 13px; }
+      .moba-web-pilot-handoff-side dl { margin: 0; gap: 4px 8px; }
       @media (max-width: 600px) {
         .moba-web-pilot-result { box-sizing: border-box; align-content: start;
           max-block-size: max(88px, calc(100dvh - 444px)); overflow: auto; scroll-padding-block: 8px; }

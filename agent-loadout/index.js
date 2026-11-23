@@ -10,7 +10,7 @@ import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, 
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
 import { openBuildPlans, planTaskPrompt, planTaskSessionId as heroAlternateSessionId } from './build-plans.js'
-import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, decodeLighthouseReviewChallenge, decodeLighthouseReviewReport, decodeWebPilotChallenge, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, encodeLighthouseReviewChallenge, encodeLighthouseReviewReport, encodeWebPilotChallenge, isLighthouseHeroChallenge, isLighthouseReviewChallenge, isWebPilotChallenge, lighthouseChallengeName } from './build-sharing.js'
+import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, decodeLighthouseReviewChallenge, decodeLighthouseReviewReport, decodeWebPilotChallenge, decodeWebPilotReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, encodeLighthouseReviewChallenge, encodeLighthouseReviewReport, encodeWebPilotChallenge, encodeWebPilotReport, isLighthouseHeroChallenge, isLighthouseReviewChallenge, isWebPilotChallenge, lighthouseChallengeName } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
 import { customActionStore } from './custom-actions.js'
@@ -27,7 +27,7 @@ import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
 import { observedWebSource, observedWebSourceResult, webPilotTask, webSourceHostVersion, webSourceModule, webSourceOldVersion, webSourceTask, webSourceUrl, webSourceVersion } from './web-source-practice.js'
-import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, panelActivityRecord, toolSourceRecord, webRecoveryFingerprint } from './match-report.js'
+import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, panelActivityRecord, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
 import { planReviewActivities } from './plan-reviews.js'
@@ -1594,9 +1594,8 @@ export async function apply(ctx) {
     return { id, sourceId, workspaceId, presetId, ...(arm && { arm }) }
   }
 
-  function webPilotResult(source, outcome, binding, task) {
-    const { status, turn, entries = [], deliverables = [] } = outcome
-    const receipt = observedWebSourceResult(source.events, turn, binding)
+  function webPilotResult(outcome, binding, task, receipt) {
+    const { status, entries = [], deliverables = [] } = outcome
     const decision = receipt && entries.findLast(entry => entry.name === 'ask_user_question' && !entry.nested &&
       entry.state === 'completed' && entry.seq > receipt.seq && entry.choices?.length)
     return { status, arm: binding.arm, sampleLanguage: task.startsWith('[') ? 'en' : 'zh', verified: Boolean(receipt),
@@ -1605,7 +1604,7 @@ export async function apply(ctx) {
       ...(status === 'complete' && { deliverables: completedPresentDelivery(outcome) ? deliverables.map(file => file.name) : [] }) }
   }
 
-  async function inspectWebSourcePractice({ sessionId }, signal) {
+  async function inspectWebSourcePractice({ sessionId }, signal, { handoff = false } = {}) {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return null
     const source = await observePlanTask(sessionId, signal, 'all')
     if (!source) return null
@@ -1619,10 +1618,20 @@ export async function apply(ctx) {
       if (!started) return { view: { status: 'waiting', ...(pilot && { arm: binding.arm, verified: false }) }, binding }
       const outcome = await comparisonEvidence(source, {
         cwd: header.cwd, task: launch.task, presetId: binding.presetId, exactMessages: true,
-        ...(pilot && { includeQuestions: true, includeToolCoordinates: true, linkedChoicesOnly: true, verifyMaterialProof: false }),
+        ...(pilot && { includeQuestions: true, includeToolCoordinates: true, linkedChoicesOnly: true, verifyMaterialProof: false,
+          includeWindows: handoff }),
       }, receipts)
-      if (pilot) return { view: webPilotResult(source, outcome, binding, launch.task), binding,
-        task: launch.task, replayOf: launch.webPilotReplayOf }
+      if (pilot) {
+        const receipt = observedWebSourceResult(source.events, outcome.turn, binding)
+        const result = { view: webPilotResult(outcome, binding, launch.task, receipt), binding,
+          task: launch.task, replayOf: launch.webPilotReplayOf }
+        if (handoff && completedCanonicalWebPilot(result)) {
+          const { choices, custom, delivered } = webPilotHandoffOutcome(source.events, outcome.windows, receipt.seq)
+          const decision = choices ? (!custom && lighthouseEvidenceDecision(choices)) || 'answered' : 'none'
+          result.handoff = { sampleLanguage: result.view.sampleLanguage, played: binding.arm, decision, delivered }
+        }
+        return result
+      }
       const { status, turn } = outcome
       if (status !== 'complete') return { view: { status } }
       const verified = observedWebSource(source.events, turn, binding)
@@ -1650,14 +1659,31 @@ export async function apply(ctx) {
     return ['standard', 'evidence'].includes(result?.binding?.arm) && result.view.status === 'complete' && result.view.verified
   }
 
+  function completedCanonicalWebPilot(result) {
+    return completedWebPilot(result) && result.task === webPilotTask(result.view.sampleLanguage === 'en')
+  }
+
   async function shareWebPilotChallenge({ sessionId }, signal) {
     const result = await inspectWebSourcePractice({ sessionId }, signal)
-    if (!completedWebPilot(result) || result.task !== webPilotTask(result.view.sampleLanguage === 'en')) {
+    if (!completedCanonicalWebPilot(result)) {
       throw new Error('请先完成并核验一局公开网页试玩。')
     }
     const { sampleLanguage } = result.view
     const played = result.binding.arm
     return { code: encodeWebPilotChallenge(sampleLanguage, played), sampleLanguage, played }
+  }
+
+  async function shareWebPilotReport({ sessionId }, signal) {
+    const result = await inspectWebSourcePractice({ sessionId }, signal, { handoff: true })
+    if (!result?.handoff) throw new Error('请先完成并核验一局公开网页试玩。')
+    return { code: encodeWebPilotReport(result.handoff), local: result.handoff }
+  }
+
+  async function compareWebPilotReport({ sessionId, code }, signal) {
+    const friend = decodeWebPilotReport(code)
+    const report = await shareWebPilotReport({ sessionId }, signal)
+    if (friend.sampleLanguage !== report.local.sampleLanguage) throw new Error('这份试玩战报的原题语言和本局不同。')
+    return { ...report, friend }
   }
 
   function matchesWebPilotReplay(original, task, binding) {
@@ -7921,6 +7947,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-pilot-open') value = await openReviewedTask(selection, english, request.signal, 'web-pilot')
         else if (selection?.action === 'web-pilot-result') value = await readWebPilot(selection, request.signal)
         else if (selection?.action === 'web-pilot-challenge-share') value = await shareWebPilotChallenge(selection, request.signal)
+        else if (selection?.action === 'web-pilot-handoff-report') value = await shareWebPilotReport(selection, request.signal)
+        else if (selection?.action === 'web-pilot-handoff-compare') value = await compareWebPilotReport(selection, request.signal)
         else if (selection?.action === 'web-pilot-replays') value = await webPilotReplays(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-options') value = await webPilotPersonalOptions(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-open') value = await openWebSourcePersonal(selection, request.signal, 'web-pilot-personal')

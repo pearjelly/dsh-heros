@@ -281,6 +281,37 @@ export function decodeWebPilotChallenge(value) {
   throw new Error(invalidWebPilotChallenge)
 }
 
+const webPilotReportPrefix = 'DSHR4.'
+const invalidWebPilotReport = '网页试玩战报码无效或版本不受支持。'
+
+export function encodeWebPilotReport({ sampleLanguage, played, decision, delivered }) {
+  if (typeof sampleLanguage !== 'string' || !Object.hasOwn(webPilotChallengeSamples, sampleLanguage) ||
+    !['standard', 'evidence'].includes(played) || !['none', ...lighthouseEvidenceChoices, 'answered'].includes(decision) ||
+    typeof delivered !== 'boolean') throw new Error(invalidWebPilotReport)
+  const sample = webPilotChallengeSamples[sampleLanguage]
+  return webPilotReportPrefix + Buffer.from(JSON.stringify({ sample, played, decision, delivered })).toString('base64url')
+}
+
+export function decodeWebPilotReport(value) {
+  if (typeof value !== 'string' || value.length > 192) throw new Error(invalidWebPilotReport)
+  const code = value.trim()
+  if (!code.startsWith(webPilotReportPrefix)) throw new Error(invalidWebPilotReport)
+  const payload = code.slice(webPilotReportPrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidWebPilotReport)
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (shape(data, ['sample', 'played', 'decision', 'delivered'])) {
+      const { sample, played, decision, delivered } = data
+      const sampleLanguage = Object.keys(webPilotChallengeSamples).find(key => webPilotChallengeSamples[key] === sample)
+      const report = { sampleLanguage, played, decision, delivered }
+      if (sampleLanguage && encodeWebPilotReport(report) === code) return report
+    }
+  } catch {
+    // Reports accept only the canonical fixed public sample and result fields.
+  }
+  throw new Error(invalidWebPilotReport)
+}
+
 const reviewReportPrefix = 'DSHR3.'
 const invalidReviewReport = '灯塔交接战报码无效或版本不受支持。'
 

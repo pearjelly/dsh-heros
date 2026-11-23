@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { openBuildPlans } from '../build-plans.js'
-import { decodeWebPilotChallenge, encodeWebPilotChallenge } from '../build-sharing.js'
-import { matchReport, toolSourceRecord, webRecoveryFingerprint } from '../match-report.js'
+import { decodeWebPilotChallenge, decodeWebPilotReport, encodeWebPilotChallenge, encodeWebPilotReport } from '../build-sharing.js'
+import { matchReport, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from '../match-report.js'
 import { englishText } from '../localization.js'
 import { observedWebSource, observedWebSourceResult, webSourceUrl } from '../web-source-practice.js'
 
@@ -47,6 +47,44 @@ test('Web practice invitations disclose only the fixed public sample and inviter
     { ...valid, played: 'minimal' },
     { played: valid.played, sample: valid.sample },
   ]) assert.throws(() => decodeWebPilotChallenge(encode(altered)))
+})
+
+test('Web practice handoff reports carry only canonical outcomes from linked native events', () => {
+  const encode = json => 'DSHR4.' + Buffer.from(json).toString('base64url')
+  const data = { sample: 'web-pilot-1-en', played: 'standard', decision: 'answered', delivered: true }
+  const report = { sampleLanguage: 'en', played: data.played, decision: data.decision, delivered: true }
+  const canonical = JSON.stringify(data)
+  assert.equal(encodeWebPilotReport(report), encode(canonical))
+  assert.deepEqual(decodeWebPilotReport(' ' + encode(canonical) + '\n'), report)
+  for (const invalid of [
+    { ...data, sessionId: 'private' }, { ...data, filename: 'private.md' }, { ...data, decision: 'private reply' },
+    { ...data, sample: 'web-pilot-2-en' }, { ...data, delivered: 1 },
+    { sample: data.sample, decision: data.decision, played: data.played, delivered: true },
+  ]) assert.throws(() => decodeWebPilotReport(encode(JSON.stringify(invalid))))
+  assert.throws(() => decodeWebPilotReport(encode(canonical.replace('true', 'true,"delivered":true'))))
+  assert.throws(() => decodeWebPilotReport(encode(canonical).replace('DSHR4', 'DSHR3')))
+
+  const call = (seq, turn, name, callId) => ({ seq, type: 'tool/call', data: { turn, name, callId, step: 2 } })
+  const result = (seq, turn, callId, origin, isError = false) => ({ seq, type: 'tool/result', surfaceOp: 'append',
+    sourceEventSeqs: [origin], data: { turn, step: 2, message: { toolCallId: callId, isError, content: [] } } })
+  const file = (seq, turn, callId) => ({ seq, type: 'deliverables/presented', data: { turn, callId, files: [{ path: 'private.md' }] } })
+  const reply = (seq, callId) => ({ seq, type: 'user/message', surfaceOp: 'append', data: {
+    source: { kind: 'user-question-reply', outcome: 'answered', callId }, content: [{ type: 'text',
+      text: JSON.stringify({ answers: [{ id: 'choice', selected: [], custom: 'private free text' }] }) }],
+  } })
+  const events = Array.from({ length: 18 }, (_, seq) => ({ seq, type: 'time-context', data: {} }))
+  const native = [call(1, 1, 'ask_user_question', 'before-read'), call(3, 1, 'ask_user_question', 'ask'),
+    call(4, 1, 'present', 'prepared'), call(5, 1, 'present', 'unmatched'),
+    file(6, 1, 'unmatched'), result(7, 1, 'prepared', 4), result(8, 1, 'unmatched', 5, true),
+    reply(11, 'before-read'), reply(12, 'ask'), call(13, 2, 'present', 'real'),
+    file(14, 2, 'real'), result(15, 2, 'real', 13)]
+  for (const event of native) events[event.seq] = event
+  const first = { startSeq: 0, endSeq: 9, turn: 1 }
+  const followUp = { startSeq: 10, endSeq: 16, turn: 2 }
+  assert.deepEqual(webPilotHandoffOutcome(events, [first], 2), { delivered: false })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: true })
+  events[15].sourceEventSeqs = [4]
+  assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: false })
 })
 
 test('saving a web pilot arm deduplicates concurrent requests and retains its source until the recipe changes', async t => {
