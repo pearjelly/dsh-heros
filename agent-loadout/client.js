@@ -2949,13 +2949,14 @@ window.__ModuleLoader__.load({
     const lighthousePendingTitle = '灯塔试玩记录'
     const lighthousePendingUnavailable = '找不到这页灯塔试玩记录。'
     const lighthousePendingChanged = '这局灯塔试玩已变化，请重新核对。'
+    const lighthouseHistoryTitle = '灯塔战报'
     const lighthousePendingActions = {
       waiting: ['等待发送任务', '继续草稿'],
       'waiting-choice': ['等待你的选择', '回到提问'],
       'loadout-changed': ['出装已变化，可在原会话恢复。', '查看原会话'],
     }
 
-    function useLighthousePending(request, enabled, language) {
+    function useLighthouseRunPage(request, enabled, language, history = false) {
       const [page, setPage] = useState(null)
       const [query, setQuery] = useState(null)
       const current = enabled && page?.language === language ? page : null
@@ -2964,14 +2965,15 @@ window.__ModuleLoader__.load({
         if (!enabled) return
         const abort = new AbortController()
         const before = query?.language === language ? query.before : undefined
-        const action = 'lighthouse-combined-pending'
+        const action = history ? 'lighthouse-combined-history' : 'lighthouse-combined-pending'
         request(action, { action, ...(before && { before }) }, abort.signal, language).then(value => {
           if (abort.signal.aborted) return
           if (!Array.isArray(value?.runs) || value.runs.some(run => typeof run?.sessionId !== 'string' || !run.sessionId ||
-            !['original', 'replay'].includes(run.kind) || !Object.hasOwn(lighthousePendingActions, run.status) ||
-            run.mode !== undefined && run.mode !== 'review' ||
-            !['en', 'zh'].includes(run.sampleLanguage) || typeof run.resumeToken !== 'string' || !run.resumeToken ||
-            !['number', 'string'].includes(typeof run.openedAt) || !Number.isFinite(new Date(run.openedAt).getTime())) ||
+            !['original', 'replay'].includes(run.kind) || !['en', 'zh'].includes(run.sampleLanguage) ||
+            !['number', 'string'].includes(typeof run.openedAt) || !Number.isFinite(new Date(run.openedAt).getTime()) ||
+            (history ? !Object.hasOwn(lighthouseReplayModeLabels, run.mode) || !Number.isSafeInteger(run.deliveredCount) || run.deliveredCount < 0
+              : !Object.hasOwn(lighthousePendingActions, run.status) || run.mode !== undefined && run.mode !== 'review' ||
+                typeof run.resumeToken !== 'string' || !run.resumeToken)) ||
             value.nextBefore !== undefined && (typeof value.nextBefore !== 'string' || !value.nextBefore || value.nextBefore === before)) {
             throw new Error(t(lighthousePendingUnavailable))
           }
@@ -2984,10 +2986,10 @@ window.__ModuleLoader__.load({
             error: reason.message || t(lighthousePendingUnavailable) }))
         })
         return () => abort.abort()
-      }, [request, enabled, language, query])
+      }, [request, enabled, language, query, history])
       const runs = current?.runs ?? empty
       return { runs, loading, nextBefore: current?.nextBefore, error: loading ? undefined : current?.error,
-        waitingChoice: runs.some(run => run.status === 'waiting-choice'), read: before => setQuery({ before, language }) }
+        waitingChoice: !history && runs.some(run => run.status === 'waiting-choice'), read: before => setQuery({ before, language }) }
     }
 
     function LighthousePendingRuns({ page, busy, failure, onResume, onRefresh }) {
@@ -3033,6 +3035,89 @@ window.__ModuleLoader__.load({
             focusAfterMore.current = document.activeElement === more.current
             page.read(page.nextBefore)
           } }, t('加载更多记录')))
+    }
+
+    function LighthouseCompletedRuns({ page, request, onClose, onView }) {
+      const language = useLanguage()
+      const heading = useId()
+      const dialog = useRef(null)
+      const list = useRef(null)
+      const alert = useRef(null)
+      const pending = useRef(null)
+      const [opening, setOpening] = useState(false)
+      const [error, setError] = useState('')
+      const clock = new Intl.DateTimeFormat(language, { dateStyle: 'short', timeStyle: 'short' })
+
+      useEffect(() => () => pending.current?.abort(), [])
+      useLayoutEffect(() => {
+        if (error || page.error) alert.current?.focus()
+      }, [error, page.error])
+
+      function close() {
+        pending.current?.abort()
+        dialog.current?.close()
+        onClose()
+      }
+
+      function load(before) {
+        if (pending.current) return
+        list.current?.focus()
+        setError('')
+        page.read(before)
+      }
+
+      async function view(sessionId) {
+        if (pending.current || page.loading) return
+        const abort = pending.current = new AbortController()
+        setOpening(true)
+        setError('')
+        try {
+          const action = 'lighthouse-combined-history-open'
+          const verified = await request(action, { action, sessionId }, abort.signal, language)
+          if (verified?.sessionId !== sessionId) throw new Error(t(lighthousePendingChanged))
+          if (!abort.signal.aborted) {
+            dialog.current?.close()
+            onView(sessionId)
+          }
+        } catch (reason) {
+          if (!abort.signal.aborted) {
+            setError(reason.message || t(lighthousePendingChanged))
+            page.read()
+          }
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setOpening(false)
+        }
+      }
+
+      return h(InstallDialog, { title: t(lighthouseHistoryTitle), dialogRef: dialog, onCancel: close,
+        className: 'moba-starter-dialog moba-lighthouse-combined-start moba-lighthouse-pending',
+        initialFocus: '.moba-lighthouse-history-list', onKeyDown: event => closeDialogOnEscape(event, close) },
+        h('div', { className: 'moba-lighthouse-combined-fields moba-lighthouse-pending-fields moba-lighthouse-history-list',
+          ref: list, tabIndex: -1, 'aria-busy': opening || page.loading },
+          (error || page.error) && h('p', { className: 'moba-alert', role: 'alert', ref: alert, tabIndex: -1 }, error || page.error),
+          page.runs.length > 0 && h('ul', { className: 'moba-history-list' }, page.runs.map((run, index) => {
+            const opened = new Date(run.openedAt)
+            const detailsId = heading + '-' + index
+            return h('li', { className: 'moba-history-entry', key: run.sessionId },
+              h('header', { id: detailsId },
+                h('h3', null, t(run.kind === 'replay' ? '复赛' : '原局')),
+                h('time', { dateTime: opened.toISOString() }, clock.format(opened)),
+                h('small', null, t(lighthouseCarryModeLabels[run.mode])),
+                run.sampleLanguage !== language && h('small', null, t(run.sampleLanguage === 'en' ? '英文' : '中文')),
+                h('small', null, t('已交付的文件') + ' · ' + run.deliveredCount)),
+              h('button', { type: 'button', className: 'moba-roster-open', 'aria-describedby': detailsId,
+                'aria-disabled': opening || page.loading, onClick: () => view(run.sessionId) }, t('查看任务结果')))
+          })),
+          page.loading && h('p', { role: 'status' }, t('正在核对灯塔战报…')),
+          !page.loading && !page.runs.length && !error && !page.error &&
+            h('p', { role: 'status' }, t(page.nextBefore ? '可查看更早的灯塔试玩。' : '还没有核对通过的灯塔战报。')),
+          page.error && h('button', { type: 'button', className: 'moba-roster-open',
+            disabled: opening || page.loading, onClick: () => load() }, t('重新核对')),
+          page.nextBefore && !page.error && h('button', { type: 'button', className: 'moba-roster-open',
+            'aria-disabled': opening || page.loading, onClick: () => { if (!page.loading) load(page.nextBefore) } }, t('加载更多记录'))),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open', onClick: close }, t('返回大厅'))))
     }
 
     function LighthouseReviewStart({ request, onCancel, onOpen, startCombined = false, pendingRuns, canStartCombined }) {
@@ -10958,7 +11043,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-text', disabled: pending, onClick: onReturn }, t('回原对局'))))
     }
 
-    function Lobby({ request, workspaces, open, manage, openSource, openPlanSource, openDraftSession, getReturnDraft, consumeReturnDraft }) {
+    function Lobby({ request, workspaces, open, manage, openSource, openPlanSource, openDraftSession, openTaskResult, getReturnDraft, consumeReturnDraft }) {
       const language = useLanguage()
       const workspaceList = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [returning] = useState(getReturnDraft)
@@ -10997,6 +11082,8 @@ window.__ModuleLoader__.load({
       const [reviewStartOpen, setReviewStartOpen] = useState('')
       const reviewStartButton = useRef(null)
       const combinedStartButton = useRef(null)
+      const [lighthouseHistoryOpen, setLighthouseHistoryOpen] = useState(false)
+      const lighthouseHistoryButton = useRef(null)
       const [webPractice, setWebPractice] = useState(null)
       const starterChallengeButton = useRef(null)
       const [lighthouseRunsView, setLighthouseRunsView] = useState(null)
@@ -11165,7 +11252,11 @@ window.__ModuleLoader__.load({
         : webPilotPending.hasWaitingChoice ? '有选择待继续' : webPilotPending.runs.length ? '继续草稿或新开试玩'
           : '同题加装证据核验，补证、降级推荐还是暂缓提交？'
       const canStartCombined = presets.some(preset => preset.id === 'standard' && !preset.broken)
-      const lighthousePending = useLighthousePending(request, Boolean(data), language)
+      const lighthousePending = useLighthouseRunPage(request, Boolean(data), language)
+      const lighthouseHistory = useLighthouseRunPage(request, data?.hasCombinedLighthouseTrials === true, language, true)
+      const canReviewLighthouseHistory = lighthouseHistory.runs.length > 0 || Boolean(lighthouseHistory.nextBefore)
+      const showLighthouseHistory = canReviewLighthouseHistory || lighthouseHistoryOpen
+      const showCombinedStart = canStartCombined || lighthousePending.runs.length > 0 || Boolean(lighthousePending.nextBefore)
       const lighthouseCombinedHint = lighthousePending.waitingChoice ? '回到提问或开新局'
         : lighthousePending.runs.length ? '继续灯塔试玩或开新局' : '调度说有两节备用电池，补给卡能证明吗？'
       const WebPracticeDialog = webPractice?.kind === 'pilot' ? WebPilotPractice : WebSourcePractice
@@ -11727,14 +11818,18 @@ window.__ModuleLoader__.load({
               h(Glyph, { kind: 'arrow', size: 18 })),
             h('button', { type: 'button', className: 'moba-roster-open moba-choose-loadout', disabled: pending, onClick: chooseLoadout },
               h(Glyph, { kind: 'team', size: 17 }), t('去配装'))),
-          data && h('div', { className: 'moba-lighthouse-entry' },
-            (canStartCombined || lighthousePending.runs.length > 0 || lighthousePending.nextBefore) && h('button', { type: 'button',
+          data && h('div', { className: 'moba-lighthouse-entry', 'data-combined-history': showLighthouseHistory && showCombinedStart || undefined },
+            showCombinedStart && h('button', { type: 'button',
               className: 'moba-starter-entry moba-lighthouse-case-entry', disabled: pending, ref: combinedStartButton,
               'aria-haspopup': 'dialog', onClick: () => setReviewStartOpen('combined') },
               h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'flag', size: 20 })),
               h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t(lighthouseCombinedTitle)),
                 h('span', null, t(lighthouseCombinedHint))),
               h(Glyph, { kind: 'arrow', size: 18 })),
+            showLighthouseHistory && h('button', { type: 'button',
+              className: 'moba-roster-open moba-lighthouse-entry-button moba-lighthouse-combined-history-entry', disabled: pending,
+              ref: lighthouseHistoryButton, 'aria-haspopup': 'dialog', onClick: () => setLighthouseHistoryOpen(true) },
+              t(lighthouseHistoryTitle)),
             h('div', { className: 'moba-handoff-entry-actions' },
               h('button', { type: 'button', className: 'moba-roster-open moba-review-start-button', disabled: pending,
                 ref: reviewStartButton, 'aria-haspopup': 'dialog', 'data-review-challenge-start': true,
@@ -11824,6 +11919,14 @@ window.__ModuleLoader__.load({
             setReviewStartOpen('')
             if (task === undefined) openDraftSession(sessionId)
             else openDraftSession(sessionId, task)
+          } }),
+          lighthouseHistoryOpen && h(LighthouseCompletedRuns, { page: lighthouseHistory, request, onClose: () => {
+            setLighthouseHistoryOpen(false)
+            const source = canReviewLighthouseHistory ? lighthouseHistoryButton : showCombinedStart ? combinedStartButton : reviewStartButton
+            source.current?.focus()
+          }, onView: sessionId => {
+            setLighthouseHistoryOpen(false)
+            openTaskResult(sessionId)
           } }),
           challengeJoin && h(LighthouseChallengeJoin, { request, initialInput: challengeJoin.input,
             firstHeroes: trialHeroes.length === 2 ? trialHeroes : undefined,
@@ -15408,6 +15511,9 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; margin-block-end: 15px; }
       .moba-lighthouse-entry .moba-starter-entry { margin: 0; }
       .moba-lighthouse-case-entry { grid-column: 1 / -1; min-block-size: 52px; }
+      .moba-lighthouse-entry[data-combined-history] > .moba-lighthouse-case-entry { grid-column: 1; }
+      .moba-lighthouse-entry > .moba-lighthouse-combined-history-entry { grid-column: 1 / -1; min-block-size: 44px; white-space: normal; }
+      .moba-lighthouse-entry[data-combined-history] > .moba-lighthouse-combined-history-entry { grid-column: 2; inline-size: clamp(5.75rem, 30cqi, 9rem); }
       .moba-lighthouse-case-entry > svg { color: var(--gold); }
       .moba-lighthouse-entry .moba-hero-trial-entry { grid-column: 1 / -1; grid-template-columns: auto minmax(0, 1fr) auto;
         min-height: 61px; border-color: #a38757; }
@@ -16930,7 +17036,7 @@ window.__ModuleLoader__.load({
           ({ sessionId }) => sessionId ? h(InteractionReturn, { sessionId, status: ctx.uiSession.sessionStatus, openLobby }) : null))
         ctx.slots.inject('main', () => ctx.slots.register(
           { name: 'main', key: panelId, inject: () => ({
-            request, workspaces: ctx.workspaces.list, manage, openSource: id => ctx.uiWorkspace.openSession(id), openPlanSource, openDraftSession,
+            request, workspaces: ctx.workspaces.list, manage, openSource: id => ctx.uiWorkspace.openSession(id), openPlanSource, openDraftSession, openTaskResult,
             getReturnDraft: () => returnDraft, consumeReturnDraft,
             async open(workspaceId, { presetId: agentPreset, verifyLive }, matchMode, sourceSessionId) {
               if (!matchMode && !verifyLive) return ctx.uiWorkspace.openWorkspace(workspaceId, undefined, { agentPreset })

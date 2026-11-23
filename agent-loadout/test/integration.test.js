@@ -1415,8 +1415,15 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       (await host.request(endpoint, { action: 'lighthouse-combined-pending', before }, status)).value
     const resumeLighthouse = async ({ sessionId, resumeToken }, status) =>
       (await host.request(endpoint, { action: 'lighthouse-combined-resume', sessionId, resumeToken }, status)).value
+    const lighthouseHistory = async (before, status) =>
+      (await host.request(endpoint, { action: 'lighthouse-combined-history', before }, status)).value
+    const openLighthouseHistory = async (sessionId, status) =>
+      (await host.request(endpoint, { action: 'lighthouse-combined-history-open', sessionId }, status)).value
     await pendingLighthouse('invalid cursor', 422)
     assert.deepEqual(await pendingLighthouse(), { runs: [] })
+    await lighthouseHistory('invalid cursor', 422)
+    assert.deepEqual(await lighthouseHistory(), { runs: [] })
+    assert.equal((await host.request(endpoint)).value.hasCombinedLighthouseTrials, undefined)
     const practiceDirectories = () => readdir(join(env.DSH_HOME, 'profiles', 'web', 'agent-loadouts'))
       .then(names => names.filter(name => name.startsWith('lighthouse-evidence-')))
       .catch(error => { if (error.code === 'ENOENT') return []; throw error })
@@ -1448,6 +1455,9 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     })
     assert.match(draftRun.resumeToken, /^[a-f0-9]{64}$/)
     assert.deepEqual(await resumeLighthouse(draftRun), { sessionId: practiceDraft.sessionId })
+    assert.equal((await host.request(endpoint)).value.hasCombinedLighthouseTrials, true)
+    assert.deepEqual(await lighthouseHistory(), { runs: [] })
+    await openLighthouseHistory(practiceDraft.sessionId, 422)
     assert.deepEqual(await host.request('/api/loadout-fixture-history?sessionId=' + practiceDraft.sessionId), practiceHistory)
     const practiceCreated = await practiceDirectories()
     assert.equal(practiceCreated.length, practiceBefore.length + 1)
@@ -1495,6 +1505,8 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       assert.equal(waiting.kind, 'original')
       assert.equal(waiting.status, 'waiting-choice')
       assert.deepEqual(await resumeLighthouse(waiting), { sessionId })
+      assert.deepEqual(await lighthouseHistory(), { runs: [] })
+      await openLighthouseHistory(sessionId, 422)
     })
     await originalTurn
     const original = await result(sessionId)
@@ -1875,6 +1887,8 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       await appendFile(archivedSample, '\nChanged after opening the received report.\n')
       assert.ok(!(await findChallengeReport()).runs.some(run => run.sessionId === variant.sessionId))
       await readChallengeReport(variant.sessionId, { code: pausedReport.code }, 422)
+      assert.ok(!(await lighthouseHistory()).runs.some(run => run.sessionId === variant.sessionId))
+      await openLighthouseHistory(variant.sessionId, 422)
     } finally {
       await writeFile(archivedSample, archivedBytes)
     }
@@ -1964,6 +1978,29 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await readChallengeReport(receivedDraft.sessionId, { received: true, code: alternativeReport }, 422)
     assert.deepEqual(await readChallengeReport(variant.sessionId), deliveredReport)
     assert.deepEqual(await readChallengeReport(invited.sessionId), pausedReport)
+
+    const completedTrials = await lighthouseHistory()
+    assert.equal(completedTrials.nextBefore, undefined)
+    assert.equal(completedTrials.runs[0].sessionId, receivedDraft.sessionId)
+    const bySession = new Map(completedTrials.runs.map(({ sessionId, openedAt, ...summary }) => {
+      assert.ok(Number.isFinite(Date.parse(openedAt)))
+      return [sessionId, summary]
+    }))
+    assert.deepEqual(bySession.get(sessionId), { mode: 'evidence-review', sampleLanguage: 'zh', kind: 'original', deliveredCount: 0 })
+    assert.deepEqual(bySession.get(variant.sessionId), { mode: 'review', sampleLanguage: 'zh', kind: 'replay', deliveredCount: 1 })
+    assert.deepEqual(bySession.get(receivedDraft.sessionId), { mode: 'review', sampleLanguage: 'en', kind: 'original', deliveredCount: 1 })
+    assert.ok(!bySession.has(withEvidence.sessionId))
+    assert.ok(!bySession.has(ownOpening.sessionId))
+    const [{ openedAt: latestTrialTime, sessionId: latestTrial }, ...olderTrials] = completedTrials.runs
+    assert.deepEqual((await lighthouseHistory(`${Date.parse(latestTrialTime)}:${latestTrial}`)).runs, olderTrials)
+    assert.deepEqual(await openLighthouseHistory(sessionId), { sessionId })
+    assert.deepEqual(await openLighthouseHistory(variant.sessionId), { sessionId: variant.sessionId })
+    assert.deepEqual(await openLighthouseHistory(receivedDraft.sessionId), { sessionId: receivedDraft.sessionId })
+    await openLighthouseHistory(withEvidence.sessionId, 422)
+    await openLighthouseHistory(ownOpening.sessionId, 422)
+    await openLighthouseHistory('session-a076' + '0'.repeat(28), 422)
+    assert.deepEqual(await native(sessionId), originalNative)
+    assert.deepEqual(await native(receivedDraft.sessionId), receivedFinishedNative)
 
     const scenario = (phase, fields, status) => challenge('lighthouse-combined-scenario-' + phase, fields, status)
     const beforeScenario = (await practiceDirectories()).sort()
@@ -2190,6 +2227,10 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(await readChallengeReport(receivedDraft.sessionId, { received: true }), receivedComparison)
     assert.deepEqual(await readChallengeReport(invited.sessionId), pausedReport)
     await readChallengeReport(invited.sessionId, { received: true }, 422)
+    assert.deepEqual(await lighthouseHistory(), completedTrials)
+    assert.deepEqual(await openLighthouseHistory(receivedDraft.sessionId), { sessionId: receivedDraft.sessionId })
+    await openLighthouseHistory(confirmed.sessionId, 422)
+    await openLighthouseHistory(directSession, 422)
   } finally {
     await host?.stop()
     await rm(directory, { recursive: true, force: true })

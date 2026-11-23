@@ -841,9 +841,11 @@ export async function apply(ctx) {
   }
 
   async function list() {
-    const [ecosystem, uploaded, sampleWorkspace] = await Promise.all([
+    const registry = ctx.get('workspaceRegistry')
+    const [ecosystem, uploaded, sampleWorkspace, lighthouseRoot] = await Promise.all([
       discover(), appearance.index(),
-      ctx.get('workspaceRegistry')?.resolveByPath?.(lighthouseDirectory(directory)).catch(() => undefined),
+      registry?.resolveByPath?.(lighthouseDirectory(directory)).catch(() => undefined),
+      registry && combinedLighthousePracticeRoot().catch(() => undefined),
     ])
     const profile = await profileGrowthGear(undefined, ecosystem.bundleRows ?? [])
     const panelActivities = profilePanelActivities(profile)
@@ -884,6 +886,8 @@ export async function apply(ctx) {
     const lastHeroTrial = heroTrials.latest()
     const hasLighthouseHandoffs = Boolean(workspaceComparisons.latest(lighthouseReviewLanguage) ||
       rematchComparisons.latest(lighthouseReviewLanguage))
+    const hasCombinedLighthouseTrials = lighthouseRoot && registry.list().some(workspace =>
+      isLighthouseEvidenceWorkspace(lighthouseRoot, workspace.path) && workspace.sessionIds.some(id => heroAlternateSessionId.test(id)))
     const [heroTrialReady, webPractice] = await Promise.all([heroTrialAvailable(ecosystem), webPracticeAvailability(ecosystem)])
     return {
       roles,
@@ -893,6 +897,7 @@ export async function apply(ctx) {
       webPractice,
       ...(lastHeroTrial && { lastHeroTrial: { id: lastHeroTrial.id, need: lastHeroTrial.need } }),
       ...(hasLighthouseHandoffs && { hasLighthouseHandoffs }),
+      ...(hasCombinedLighthouseTrials && { hasCombinedLighthouseTrials }),
       ...((lastHeroTrial || workspaceComparisons.latest(record => record.lesson === evidenceLesson || record.reviewChallengeArm)) &&
         { hasLighthouseRuns: true }),
       equipment: [
@@ -3758,6 +3763,33 @@ export async function apply(ctx) {
     if (!registry || !root) return { runs: [] }
     const candidates = combinedLighthouseCandidates(registry, root)
     return planTaskRunPage([...candidates.values()], previous, signal, id => pendingCombinedLighthouseRun(id, registry, root, signal))
+  }
+
+  async function combinedLighthouseHistory({ before }, signal) {
+    const previous = planTaskPageBoundary(before, '找不到这页灯塔试玩记录。')
+    const registry = ctx.get('workspaceRegistry')
+    const root = await combinedLighthousePracticeRoot()
+    if (!registry || !root) return { runs: [] }
+    const candidates = combinedLighthouseCandidates(registry, root)
+    let ecosystem
+    const getEcosystem = () => (ecosystem ??= discover())
+    return planTaskRunPage([...candidates.values()], previous, signal, async sessionId => {
+      const round = await readCombinedLighthouseRound(sessionId, signal, 'gap', getEcosystem)
+      if (!round) return
+      return { sessionId, openedAt: new Date(candidates.get(sessionId).createdAt).toISOString(), mode: round.mode,
+        sampleLanguage: round.language, kind: round.target.lighthouseReplayOf ? 'replay' : 'original',
+        deliveredCount: round.deliverables.length }
+    })
+  }
+
+  async function openCombinedLighthouseHistory({ sessionId }, signal) {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error(combinedLighthousePendingChanged)
+    const registry = ctx.get('workspaceRegistry')
+    const root = await combinedLighthousePracticeRoot()
+    if (!registry || !root || !combinedLighthouseCandidates(registry, root).has(sessionId) ||
+      !await readCombinedLighthouseRound(sessionId, signal)) throw new Error(combinedLighthousePendingChanged)
+    signal?.throwIfAborted()
+    return { sessionId }
   }
 
   async function findCombinedLighthouseReports({ code, before }, signal) {
@@ -7166,12 +7198,12 @@ export async function apply(ctx) {
     return { sessionId, language, target, mode, scenario, workflowDecisions, deliverables: evidence.deliverables ?? [], receivedReport }
   }
 
-  async function readCombinedLighthouseRound(sessionId, signal, scenario = 'gap') {
+  async function readCombinedLighthouseRound(sessionId, signal, scenario = 'gap', getEcosystem = discover) {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return
     const result = await observeLessonTask(sessionId, signal, true)
     if (result?.target?.lighthouseCombined !== true || combinedLighthouseScenario(result.target) !== scenario ||
       !result.evidence.entries?.some(entry => entry.workflowCandidate)) return
-    const ecosystem = await discover()
+    const ecosystem = await getEcosystem()
     const { workflowDecisions } = observedComparisonWorkflows(result.evidence.entries, result.presetId, ecosystem)
     return combinedLighthouseRound(sessionId, result, workflowDecisions, signal)
   }
@@ -9517,6 +9549,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-combined-personal-draft') value = await readCombinedLighthousePersonalDraft(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-pending') value = await combinedLighthousePending(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-resume') value = await resumeCombinedLighthouse(selection, request.signal)
+        else if (selection?.action === 'lighthouse-combined-history') value = await combinedLighthouseHistory(selection, request.signal)
+        else if (selection?.action === 'lighthouse-combined-history-open') value = await openCombinedLighthouseHistory(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-preview') value = await previewLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-open') value = await openLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-challenge-share') value = await shareReviewChallenge(selection, request.signal)
