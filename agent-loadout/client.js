@@ -1320,6 +1320,7 @@ window.__ModuleLoader__.load({
 
     const webPilotPendingUnavailable = '找不到这页试玩草稿。'
     const webPilotPendingChanged = '这份试玩草稿已变化，请重新核对。'
+    const webPilotContinueChoice = '回到提问'
 
     function useWebPilotPending(request, enabled, language) {
       const [state, setState] = useState(null)
@@ -1335,11 +1336,12 @@ window.__ModuleLoader__.load({
           runs: before && previous?.language === language ? previous.runs : empty,
           nextBefore: before, ...changes, query, language,
         }))
-        request(action, { action, ...(before && { before }) }, abort.signal, language).then(value => {
+        request(action, { action, includeWaitingChoices: true, ...(before && { before }) }, abort.signal, language).then(value => {
           if (abort.signal.aborted) return
           if (!Array.isArray(value?.runs) || value.runs.some(run => typeof run?.sessionId !== 'string' || !run.sessionId ||
             !Object.hasOwn(webPilotArms, run.arm) || !['en', 'zh'].includes(run.sampleLanguage) ||
             run.presetChanged !== undefined && run.presetChanged !== true ||
+            run.waitingChoice !== undefined && (run.waitingChoice !== true || run.presetChanged || run.arm !== 'evidence') ||
             !['number', 'string'].includes(typeof run.openedAt) || !Number.isFinite(new Date(run.openedAt).getTime())) ||
             value.nextBefore !== undefined && (typeof value.nextBefore !== 'string' || !value.nextBefore || value.nextBefore === before)) {
             throw new Error(t(webPilotPendingUnavailable))
@@ -1353,7 +1355,8 @@ window.__ModuleLoader__.load({
         return () => abort.abort()
       }, [request, enabled, language, query])
 
-      return { runs: current?.runs ?? empty, nextBefore: current?.nextBefore, loading,
+      const runs = current?.runs ?? empty
+      return { runs, hasWaitingChoice: runs.some(run => run.waitingChoice === true), nextBefore: current?.nextBefore, loading,
         error: !loading ? current?.error : undefined,
         read: before => { if (!loading) setQuery({ before, language }) } }
     }
@@ -1371,18 +1374,21 @@ window.__ModuleLoader__.load({
       }, [page.loading, page.nextBefore, summaryRef])
 
       return h('details', { className: 'moba-web-pilot-pending' },
-        h('summary', { ref: summaryRef }, t('继续已有试玩草稿')),
+        h('summary', { ref: summaryRef }, t(page.hasWaitingChoice ? '继续已有试玩' : '继续已有试玩草稿')),
         page.runs.length > 0 && h('ul', { className: 'moba-history-list' }, page.runs.map((run, index) => {
           const openedAt = new Date(run.openedAt)
           const loadout = t(webPilotArms[run.arm].name)
           const description = group + '-draft-' + index
+          const status = run.waitingChoice ? '等待你的选择' : run.presetChanged ? '出装已变化，可在原会话恢复。'
+            : page.hasWaitingChoice ? '等待发送任务' : null
           return h('li', { key: run.sessionId, className: 'moba-history-entry' },
             h('header', { id: description }, h('h3', null, loadout),
               h('time', { dateTime: openedAt.toISOString() }, clock.format(openedAt)),
               run.sampleLanguage !== language && h('small', null, t(run.sampleLanguage === 'en' ? '英文' : '中文')),
-              run.presetChanged === true && h('small', { className: 'moba-web-pilot-draft-changed' }, t('出装已变化，可在原会话恢复。'))),
+              status && h('small', { className: run.presetChanged ? 'moba-web-pilot-draft-changed' : 'moba-history-state',
+                'data-state': run.waitingChoice ? 'waiting-choice' : undefined }, t(status))),
             h('button', { className: 'moba-roster-open', type: 'button', 'aria-disabled': busy, 'aria-describedby': description,
-              onClick: () => onResume(run) }, t(run.presetChanged === true ? '查看原会话' : '继续草稿')))
+              onClick: () => onResume(run) }, t(run.waitingChoice ? webPilotContinueChoice : run.presetChanged ? '查看原会话' : '继续草稿')))
         })),
         page.loading && h('p', { role: 'status' }, t('正在核对试玩草稿…')),
         (failure || page.error) && h('p', { className: 'moba-alert', role: 'alert' }, failure || page.error),
@@ -1479,14 +1485,15 @@ window.__ModuleLoader__.load({
         }
       }
 
-      async function resume({ sessionId, presetChanged }) {
+      async function resume({ sessionId, presetChanged, waitingChoice }) {
         if (opening.current) return
         const abort = opening.current = new AbortController()
         setBusy(true)
         setResumeError('')
         try {
           const action = 'web-pilot-resume'
-          const resumed = await request(action, { action, sessionId, ...(presetChanged === true && { presetChanged: true }) }, abort.signal, language)
+          const resumed = await request(action, { action, sessionId, ...(presetChanged === true && { presetChanged: true }),
+            ...(waitingChoice === true && { waitingChoice: true }) }, abort.signal, language)
           if (resumed?.sessionId !== sessionId) throw new Error(t(webPilotPendingChanged))
           if (!abort.signal.aborted) onOpen(sessionId)
         } catch (reason) {
@@ -2108,7 +2115,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         const abort = new AbortController()
         const action = 'web-pilot-replays'
-        request(action, { action, sessionId, before: query.before }, abort.signal, language).then(value => {
+        request(action, { action, sessionId, before: query.before, includeWaitingChoices: true }, abort.signal, language).then(value => {
           if (abort.signal.aborted) return
           setState(previous => {
             const earlier = query.before && previous?.language === language ? previous.runs : empty
@@ -2155,12 +2162,13 @@ window.__ModuleLoader__.load({
         setReadError(null)
         try {
           const action = 'web-pilot-result'
-          const result = await request(action, { action, sessionId: run.sessionId, originalSessionId: sessionId }, abort.signal, language)
+          const result = await request(action, { action, sessionId: run.sessionId, originalSessionId: sessionId,
+            includeWaitingChoices: true }, abort.signal, language)
           if (abort.signal.aborted) return
           if (result?.sessionId !== run.sessionId || result.arm !== run.arm || result.status !== run.status) {
             throw new Error(t(webPilotReplayChanged))
           }
-          if (run.status === 'waiting') {
+          if (run.status === 'waiting' || run.status === 'waiting-choice') {
             visit(run.sessionId)
             return
           }
@@ -2188,12 +2196,14 @@ window.__ModuleLoader__.load({
           onKeyDown: event => closeDialogOnEscape(event, closeList) },
           current?.runs.length > 0 && h('ul', { className: 'moba-history-list' }, current.runs.map(run => {
             const complete = run.status === 'complete'
+            const waitingChoice = run.status === 'waiting-choice'
             const opened = new Date(run.openedAt)
             const hasDate = Number.isFinite(opened.getTime())
             return h('li', { className: 'moba-history-entry', key: run.sessionId },
               h('header', null, h('h3', null, t(webPilotArms[run.arm].name)),
                 hasDate && h('time', { dateTime: opened.toISOString() }, clock.format(opened))),
-              h('p', null, t(complete ? '已完成' : '等待发送任务'), run.decisionReplay && (' · ' + t('同一套出装'))),
+              h('p', null, t(complete ? '已完成' : waitingChoice ? '等待你的选择' : '等待发送任务'),
+                run.decisionReplay && (' · ' + t('同一套出装'))),
               complete && h(WebPilotOutcome, { view: run, complete }),
               readError?.sessionId === run.sessionId && h('p', { className: 'moba-alert', role: 'alert' }, readError.message),
               reading === run.sessionId && h('p', { role: 'status' }, t('正在核对实战来源…')),
@@ -2202,7 +2212,7 @@ window.__ModuleLoader__.load({
                   disabled: loading, onClick: () => { setReadError(null); setQuery({}) } }, t('重新核对')),
                 h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': complete ? 'dialog' : undefined,
                   'aria-disabled': Boolean(reading), onClick: event => openReplay(run, event.currentTarget) },
-                  t(complete ? '查看对照' : '继续草稿'))))
+                  t(complete ? '查看对照' : waitingChoice ? webPilotContinueChoice : '继续草稿'))))
           })),
           loading && h('p', { className: 'moba-empty', role: 'status' }, t('正在读取复赛…')),
           !loading && current.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error),
@@ -10245,6 +10255,9 @@ window.__ModuleLoader__.load({
       const canPracticeWebPilot = data?.webPractice?.pilot === true
       const canPracticeWeb = canPracticeWebSource || canPracticeWebPilot
       const webPilotPending = useWebPilotPending(request, canPracticeWebPilot, language)
+      const webPracticeHint = !canPracticeWebPilot ? '旧表只列 RC，预览版能用吗？'
+        : webPilotPending.hasWaitingChoice ? '有选择待继续' : webPilotPending.runs.length ? '继续草稿或新开试玩'
+          : '同题加装证据核验，补证、降级推荐还是暂缓提交？'
       const WebPracticeDialog = webPractice?.kind === 'pilot' ? WebPilotPractice : WebSourcePractice
       const roles = data?.roles ?? emptyMap
       const savedBuilds = labelSavedBuilds(data?.saved ?? empty)
@@ -10800,8 +10813,7 @@ window.__ModuleLoader__.load({
               }) },
               h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'search', size: 20 })),
               h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t('网页检索试玩')),
-                h('span', null, t(canPracticeWebPilot ? webPilotPending.runs.length ? '继续草稿或新开试玩'
-                  : '同题加装证据核验，补证、降级推荐还是暂缓提交？' : '旧表只列 RC，预览版能用吗？'))),
+                h('span', null, t(webPracticeHint))),
               h(Glyph, { kind: 'arrow', size: 18 })),
             h('button', { type: 'button', className: 'moba-roster-open moba-choose-loadout', disabled: pending, onClick: chooseLoadout },
               h(Glyph, { kind: 'team', size: 17 }), t('去配装'))),

@@ -1880,7 +1880,12 @@ export async function apply(ctx) {
     return { original: { ...original, sessionId }, registry, root }
   }
 
-  async function readWebPilotReplay(sessionId, reference, signal, { details = false } = {}) {
+  function waitingWebPilotChoice(result, binding) {
+    return binding.arm === 'evidence' && result?.view.status === 'waiting-choice' && result.view.verified &&
+      isDeepStrictEqual(result.binding, binding)
+  }
+
+  async function readWebPilotReplay(sessionId, reference, signal, { details = false, includeWaitingChoices = false } = {}) {
     const { original, registry, root } = reference
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId) || sessionId === original.sessionId) return
     const saved = await planTaskSession(sessionId, signal)
@@ -1907,6 +1912,9 @@ export async function apply(ctx) {
       return { run: { ...run, status: 'waiting' } }
     }
     const result = await inspectWebSourcePractice({ sessionId }, signal, { practiceDecision: details || decisionReplay })
+    if (includeWaitingChoices && !saved.presetChanged && waitingWebPilotChoice(result, binding)) {
+      return { run: { ...run, status: 'waiting-choice' } }
+    }
     const decisionComparison = decisionReplay ? webPilotDecisionComparison(sessionId, result, reference) : undefined
     const pair = decisionReplay ? undefined : await verifiedWebPilotPair(sessionId, result, signal, original)
     if (pair || decisionComparison) {
@@ -1948,11 +1956,11 @@ export async function apply(ctx) {
     return { runs, ...(last && inspected < candidates.length && { nextBefore: `${last.createdAt}:${last.id}` }) }
   }
 
-  async function webPilotReplays({ sessionId, before }, signal) {
+  async function webPilotReplays({ sessionId, before, includeWaitingChoices }, signal) {
     const previous = webPilotPageBoundary(before, webPilotReplayUnavailable)
     const reference = await webPilotReplayParent(sessionId, signal)
     return webPilotRunPage({ ...reference, previous, exclude: sessionId }, signal,
-      async id => (await readWebPilotReplay(id, reference, signal))?.run)
+      async id => (await readWebPilotReplay(id, reference, signal, { includeWaitingChoices: includeWaitingChoices === true }))?.run)
   }
 
   async function webPilotPracticeRoot() {
@@ -1962,41 +1970,50 @@ export async function apply(ctx) {
     if (profileDirectory) return join(profileDirectory, webSourceDirectory)
   }
 
-  async function pendingFirstWebPilotDraft(sessionId, registry, root, signal) {
+  async function pendingFirstWebPilotDraft(sessionId, registry, root, signal, { includeWaitingChoices = false } = {}) {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return
     const saved = await planTaskSession(sessionId, signal)
     const { launch, header } = saved ?? {}
     const binding = launch?.webSourcePractice
-    if (!binding || !['standard', 'evidence'].includes(binding.arm) || saved.started ||
-      header.parentSession || header.agentPreset !== binding.presetId) return
+    if (!binding || !['standard', 'evidence'].includes(binding.arm) || header.parentSession ||
+      header.agentPreset !== binding.presetId || (saved.started && (!includeWaitingChoices || saved.presetChanged))) return
     const workspace = registry.get(binding.workspaceId)
     if (header.cwd !== workspace?.path || !webPilotWorkspace(workspace, root, sessionId)) return
     const sampleLanguage = ['en', 'zh'].find(language => launch.task === webPilotTask(language === 'en'))
     const choice = launch.webPilotOpeningChoice
     if (!sampleLanguage || (choice !== undefined && !lighthouseEvidenceChoices.includes(choice)) ||
       launch.request !== webPilotOpeningHash(binding.arm, launch.task, choice)) return
-    return { run: { sessionId, arm: binding.arm, openedAt: header.createdAt, sampleLanguage,
-      ...(saved.presetChanged && { presetChanged: true }) }, binding }
+    const run = { sessionId, arm: binding.arm, openedAt: header.createdAt, sampleLanguage,
+      ...(saved.presetChanged && { presetChanged: true }) }
+    if (saved.started) {
+      if (binding.arm !== 'evidence') return
+      const result = await inspectWebSourcePractice({ sessionId }, signal)
+      if (!waitingWebPilotChoice(result, binding)) return
+      run.waitingChoice = true
+    }
+    return { run, binding }
   }
 
-  async function webPilotPending({ before }, signal) {
+  async function webPilotPending({ before, includeWaitingChoices }, signal) {
     const previous = webPilotPageBoundary(before, '找不到这页试玩草稿。')
     const registry = ctx.get('workspaceRegistry')
     const root = await webPilotPracticeRoot()
     if (!registry || !root) return { runs: [] }
     return webPilotRunPage({ registry, root, previous }, signal,
-      async id => (await pendingFirstWebPilotDraft(id, registry, root, signal))?.run)
+      async id => (await pendingFirstWebPilotDraft(id, registry, root, signal, { includeWaitingChoices: includeWaitingChoices === true }))?.run)
   }
 
-  async function resumeFirstWebPilotDraft({ sessionId, presetChanged }, signal) {
-    const unavailable = '这份试玩草稿已变化，请重新核对。'
-    if (presetChanged !== undefined && presetChanged !== true) throw new Error(unavailable)
+  async function resumeFirstWebPilotDraft({ sessionId, presetChanged, waitingChoice }, signal) {
+    const unavailable = waitingChoice === true ? '这局已不在等待选择，请重新核对。' : '这份试玩草稿已变化，请重新核对。'
+    if (![undefined, true].includes(presetChanged) || ![undefined, true].includes(waitingChoice) ||
+      (presetChanged && waitingChoice)) throw new Error(unavailable)
     const registry = ctx.get('workspaceRegistry')
     const root = await webPilotPracticeRoot()
-    const pending = registry && root && await pendingFirstWebPilotDraft(sessionId, registry, root, signal)
-    if (!pending || pending.run.presetChanged !== presetChanged) throw new Error(unavailable)
+    const options = { includeWaitingChoices: waitingChoice === true }
+    const pending = registry && root && await pendingFirstWebPilotDraft(sessionId, registry, root, signal, options)
+    if (!pending || pending.run.presetChanged !== presetChanged || pending.run.waitingChoice !== waitingChoice) throw new Error(unavailable)
     await verifiedWebPilotBinding(pending.binding, signal)
-    if (!isDeepStrictEqual(await pendingFirstWebPilotDraft(sessionId, registry, root, signal), pending)) {
+    if (!isDeepStrictEqual(await pendingFirstWebPilotDraft(sessionId, registry, root, signal, options), pending)) {
       throw new Error(unavailable)
     }
     signal?.throwIfAborted()
@@ -2019,10 +2036,11 @@ export async function apply(ctx) {
     return { friend, ...page }
   }
 
-  async function readWebPilot({ sessionId, originalSessionId }, signal) {
+  async function readWebPilot({ sessionId, originalSessionId, includeWaitingChoices }, signal) {
     if (originalSessionId !== undefined) {
       const reference = await webPilotReplayParent(originalSessionId, signal)
-      const replay = await readWebPilotReplay(sessionId, reference, signal, { details: true })
+      const replay = await readWebPilotReplay(sessionId, reference, signal,
+        { details: true, includeWaitingChoices: includeWaitingChoices === true })
       if (!replay) throw new Error(webPilotReplayUnavailable)
       if (replay.decisionComparison) return { ...replay.result.view, sessionId, decisionReplay: true,
         decisionComparison: replay.decisionComparison }
