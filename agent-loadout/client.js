@@ -9378,6 +9378,7 @@ window.__ModuleLoader__.load({
       const materialField = useRef(null)
       const briefField = useRef(null)
       const reviewHeading = useRef(null)
+      const lighthouseError = useRef(null)
       const materialBusy = Boolean(working || checkingWorkspace)
       const workspace = workspaces.find(item => item.workspaceId === chosenWorkspaceId)
       const preview = reviewed?.value
@@ -9424,6 +9425,9 @@ window.__ModuleLoader__.load({
         if (preview) reviewHeading.current?.focus()
         else (workspaceField.current?.disabled ? materialField.current : workspaceField.current)?.focus()
       }, [preview])
+      useLayoutEffect(() => {
+        if (lighthouseSource?.sessionId && error) lighthouseError.current?.focus()
+      }, [lighthouseSource?.sessionId, error])
 
       function editTask() {
         if (pending.current) return
@@ -9523,7 +9527,8 @@ window.__ModuleLoader__.load({
       }
 
       const messages = h(Fragment, null,
-        error && h('p', { className: 'moba-alert', role: 'alert' }, error),
+        error && h('p', { className: 'moba-alert', role: 'alert',
+          ...(lighthouseSource && { ref: lighthouseError, tabIndex: -1 }) }, error),
         working && h('p', { className: 'moba-empty', role: 'status' }, t(working === 'review' ? '正在核对材料和出装…' : '正在准备对局…')))
 
       return !preview ? h('form', { className: 'moba-plan-form moba-plan-task', onSubmit: submit },
