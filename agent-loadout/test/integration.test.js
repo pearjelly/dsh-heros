@@ -1409,6 +1409,41 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.ok(!fromReview.comparison.gained.some(card => card.id === 'review'))
     assert.deepEqual(await saved(), existing)
 
+    const practice = async (phase, fields = {}, status) =>
+      (await host.request(endpoint, { action: 'lighthouse-combined-start-' + phase, ...fields }, status)).value
+    const practiceDirectories = () => readdir(join(env.DSH_HOME, 'profiles', 'web', 'agent-loadouts'))
+      .then(names => names.filter(name => name.startsWith('lighthouse-evidence-')))
+      .catch(error => { if (error.code === 'ENOENT') return []; throw error })
+    const practiceBefore = await practiceDirectories()
+    const plansBefore = (await host.request(endpoint)).value.plans
+    const combinedPractice = await practice('preview')
+    assert.equal(combinedPractice.material, '02-lighthouse.md')
+    assert.match(combinedPractice.task, /两节备用电池/)
+    assert.match(combinedPractice.token, /^[a-f0-9]{64}$/)
+    const practiceLaunch = { launchId: 'f'.repeat(32), token: combinedPractice.token }
+    await practice('open', { ...practiceLaunch, token: 'e'.repeat(64) }, 422)
+    assert.deepEqual(await practiceDirectories(), practiceBefore)
+    assert.deepEqual(await saved(), existing)
+    const practiceDraft = await practice('open', practiceLaunch)
+    assert.deepEqual(await practice('open', practiceLaunch), practiceDraft)
+    assert.equal(practiceDraft.task, combinedPractice.task)
+    const practiceHistory = await host.request('/api/loadout-fixture-history?sessionId=' + practiceDraft.sessionId)
+    assert.equal(practiceHistory.workspaceId, practiceDraft.workspaceId)
+    assert.ok(!practiceHistory.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    const practiceCreated = await practiceDirectories()
+    assert.equal(practiceCreated.length, practiceBefore.length + 1)
+    const sampleDirectory = practiceCreated.find(name => !practiceBefore.includes(name))
+    const sample = await readFile(join(env.DSH_HOME, 'profiles', 'web', 'agent-loadouts', sampleDirectory, '02-lighthouse.md'), 'utf8')
+    assert.match(sample, /2 cans of lamp oil/)
+    assert.doesNotMatch(sample, /batteries/)
+    assert.deepEqual((await host.request(endpoint)).value.plans, plansBefore)
+
+    const { sessionId, task } = practiceDraft
+    await host.request(turnEndpoint, { sessionId, text: task })
+    const combinedResult = (await host.request(endpoint, { action: 'lesson-task-result', sessionId })).value
+    assert.equal(combinedResult.status, 'complete')
+    assert.equal(combinedResult.materialState, 'verified')
+
     const prepare = async draft => (await host.request(endpoint, draft)).value.presetId
     const open = async presetId => (await host.request('/api/loadout-fixture-session', { presetId, workspacePath: directory })).sessionId
     const history = async sessionId => (await host.request('/api/loadout-fixture-history?sessionId=' + sessionId)).events

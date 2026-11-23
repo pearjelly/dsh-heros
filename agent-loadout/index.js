@@ -1268,8 +1268,8 @@ export async function apply(ctx) {
     return { ...fields, hash }
   }
 
-  async function checkArmoryTask({ draft, workspaceId, material, task, hash }, signal) {
-    const { workspace, digest } = await readPersonalTaskMaterial(workspaceId, material, signal)
+  async function checkArmoryTask({ draft, workspaceId, material, task, hash }, signal, readMaterial = readPersonalTaskMaterial) {
+    const { workspace, digest } = await readMaterial(workspaceId, material, signal)
     const ecosystem = await discover()
     const hero = ecosystem.presets.find(preset => preset.id === draft.presetId)
     if (!hero) throw new Error('请从基础预设开始搭配。')
@@ -1358,6 +1358,9 @@ export async function apply(ctx) {
     plan: { input: requestedPlanTask, check: checkPlanTask, unavailable: '当前 DSH 无法从出装方案开启新任务。' },
     lesson: { input: requestedLessonTask, check: checkLessonTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
     armory: { input: requestedArmoryTask, check: checkArmoryTask, unavailable: '当前 DSH 无法用当前出装开启任务。' },
+    'lighthouse-combined': { input: requestedArmoryTask,
+      check: (input, signal) => checkArmoryTask(input, signal, readWorkspaceMaterial),
+      readMaterial: readWorkspaceMaterial, unavailable: '灯塔练习工作区不可用。' },
     alternate: { input: requestedHeroAlternateTask, check: checkHeroAlternateTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
     'web-source': { input: requestedWebSourcePractice, check: checkWebSourcePractice, unavailable: webSourceUnavailable },
     'web-pilot': { input: requestedWebPilot, check: checkWebSourcePractice, unavailable: webSourceUnavailable },
@@ -1372,7 +1375,7 @@ export async function apply(ctx) {
     }
     const webPilot = kind === 'web-pilot' || kind === 'web-pilot-challenge'
     const webPractice = kind === 'web-source' || webPilot
-    const { input: readInput, check, unavailable } = reviewedTaskKinds[kind]
+    const { input: readInput, check, unavailable, readMaterial = readPersonalTaskMaterial } = reviewedTaskKinds[kind]
     const input = await readInput(selection, english, signal)
     const { sourcePlan, decisionReplayOf } = input
     const controller = ctx.get('sessionController')
@@ -1401,7 +1404,7 @@ export async function apply(ctx) {
       const { presetId, verifyLive: verify } = await prepare(checked.draft, checked.candidate)
       if (kind === 'plan') buildPlans.read(input.id, input.revision)
       else if (!webPractice) {
-        const target = await readPersonalTaskMaterial(input.workspaceId, input.material, signal)
+        const target = await readMaterial(input.workspaceId, input.material, signal)
         if (target.digest !== checked.digest || target.workspace.path !== checked.cwd) {
           throw new Error('材料、任务或出装已变化，请重新核对。')
         }
@@ -1441,8 +1444,9 @@ export async function apply(ctx) {
       if (checked.stockBindings && !stockTrialLive(source.arm, presetId, agent, checked.stockBindings)) throw new Error(stockTransferChanged)
       const webSourcePractice = webPractice && liveWebSourceBinding(agent, presetId, workspace.id, checked.webToolId,
         input.arm, checked.webToolSource)
-      const armory = kind === 'armory'
+      const armory = kind === 'armory' || kind === 'lighthouse-combined'
       const target = (source || armory) && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
+        ...(kind === 'lighthouse-combined' && { lighthouseCombined: true }),
         ...(source && isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
       if (sourcePlan) buildPlans.read(sourcePlan.id, sourcePlan.revision)
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, task,
@@ -3436,6 +3440,48 @@ export async function apply(ctx) {
   function openReviewChallenge(selection, signal) {
     return openCheckedReviewChallenge(selection, () => checkReviewChallenge(selection.code, signal),
       ['lighthouse-review-challenge-v1', selection.code.trim()], signal)
+  }
+
+  async function checkCombinedLighthouseStart(english, signal) {
+    const brief = lighthouseEvidenceTask(english, 'gap')
+    const view = planTaskPrompt({ material: lighthouseHeroMaterial, task: brief }, english)
+    const unready = { preview: { ...view, reason: reviewRoutesUnavailable } }
+    try {
+      const ecosystem = await discover()
+      const draft = deliveryPlaybookDraft(ecosystem, 'evidence-review')
+      const { candidate, choices } = await plannedGrowth(draft, { ecosystem })
+      const canonical = recordedLoadoutDraft(candidate.record, draft.presetId, ecosystem)
+      const identity = comparisonLoadoutIdentity(canonical, candidate, ecosystem)
+      const tools = new Set(choices.filter(item => item.kind === 'tool' && !item.timing).map(item => item.name))
+      signal?.throwIfAborted()
+      if (!identity || !['read', 'write', 'present', 'ask_user_question'].every(tool => tools.has(tool))) return unready
+      const token = createHash('sha256').update(JSON.stringify([
+        planTaskOwner, 'lighthouse-combined-v1', view, candidate.id, identity,
+      ])).digest('hex')
+      return { preview: { ...view, token }, draft, identity, brief }
+    } catch {
+      signal?.throwIfAborted()
+      return unready
+    }
+  }
+
+  async function openCombinedLighthouseStart({ token, launchId }, english, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+      throw new Error('请先核对新任务的材料和出装。')
+    }
+    const { preview, draft, identity, brief } = await checkCombinedLighthouseStart(english, signal)
+    if (!draft || preview.token !== token) throw new Error(preview.reason ?? '材料、任务或出装已变化，请重新核对。')
+    const registry = ctx.get('workspaceRegistry')
+    if (!registry?.create || !ctx.get('sessionController')?.create || !ctx.get('sessionQuery')) {
+      throw new Error('灯塔练习工作区不可用。')
+    }
+    const opening = createHash('sha256').update(JSON.stringify(['lighthouse-combined-v1', token, launchId])).digest('hex').slice(0, 32)
+    const { workspace, material } = await lighthouseEvidenceLesson(directory, registry, opening, english, 'gap')
+    const input = { draft, workspaceId: workspace.id, material, task: brief }
+    const checked = await checkArmoryTask(requestedArmoryTask(input, english), signal, readWorkspaceMaterial)
+    if (!checked.token || checked.identity !== identity) throw new Error('材料、任务或出装已变化，请重新核对。')
+    return openReviewedTask({ ...input, token: checked.token, launchId: opening }, english, signal, 'lighthouse-combined')
   }
 
   function openReviewStart(selection, english, signal) {
@@ -5764,8 +5810,15 @@ export async function apply(ctx) {
     if (validWorkspaceComparison(current)) return current
   }
 
-  async function personalTaskMaterialState({ workspaceId, cwd, material, digest }, signal) {
+  async function personalTaskMaterialState(target, signal) {
+    const { workspaceId, cwd, material, digest } = target
     try {
+      if (target.lighthouseCombined === true) {
+        const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
+        if (workspace?.path !== cwd || material !== lighthouseHeroMaterial ||
+          !lighthousePracticeContains(await realpath(directory), cwd)) return 'unavailable'
+        return workspaceMaterialState(target, signal)
+      }
       const { workspace, digest: current } = await readPersonalTaskMaterial(workspaceId, material, signal)
       if (workspace.path !== cwd) return 'unavailable'
       return current === digest ? 'verified' : 'changed'
@@ -8849,6 +8902,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-review-repeat') value = await repeatLighthouseReview(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-review-start-preview') value = (await checkReviewStart(english, request.signal)).preview
         else if (selection?.action === 'lighthouse-review-start-open') value = await openReviewStart(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-combined-start-preview') value = (await checkCombinedLighthouseStart(english, request.signal)).preview
+        else if (selection?.action === 'lighthouse-combined-start-open') value = await openCombinedLighthouseStart(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-preview') value = await previewLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-open') value = await openLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-challenge-share') value = await shareReviewChallenge(selection, request.signal)
