@@ -3045,6 +3045,7 @@ window.__ModuleLoader__.load({
       const [opening, setOpening] = useState(false)
       const [openError, setOpenError] = useState('')
       const [resumeError, setResumeError] = useState('')
+      const [needsModelSetup, setNeedsModelSetup] = useState(false)
       const dialog = useRef(null)
       const pending = useRef(null)
       const launchIds = useRef(new Map())
@@ -3063,6 +3064,16 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (step === 'checking' && !pendingRuns.loading) setStep(pendingRuns.runs.length || pendingRuns.nextBefore || pendingRuns.error ? 'pending' : 'combined')
       }, [step, pendingRuns.loading, pendingRuns.runs.length, pendingRuns.nextBefore, pendingRuns.error])
+      useEffect(() => {
+        setNeedsModelSetup(false)
+        if (!combined) return
+        const abort = new AbortController()
+        const action = 'lighthouse-model-setup'
+        void request(action, { action }, abort.signal).then(value => {
+          if (!abort.signal.aborted && value?.needsSetup === true) setNeedsModelSetup(true)
+        }).catch(() => {})
+        return () => abort.abort()
+      }, [combined, request])
       useEffect(() => {
         if (showRuns) return
         const abort = new AbortController()
@@ -3207,8 +3218,10 @@ window.__ModuleLoader__.load({
                 h('textarea', { readOnly: true, rows: 4, value: preview.task }))),
             !state && h('p', { role: 'status' }, t('正在核对试玩出装…')),
             error && h('p', { className: 'moba-alert', role: 'alert' }, t(error)),
-            preview?.token && h('p', { className: 'moba-starter-note', role: opening ? 'status' : undefined },
+            preview?.token && (!needsModelSetup || opening) && h('p', { className: 'moba-starter-note', role: opening ? 'status' : undefined },
               t(opening ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。'))),
+          needsModelSetup && h('p', { className: 'moba-starter-note moba-lighthouse-model-prerequisite', role: 'status' },
+            t('发送前请在「设置 → 模型」配置模型。')),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open', disabled: opening, onClick: back },
               t(returningToRuns.current ? '返回灯塔试玩记录' : startCombined ? '返回大厅' : '返回交接试玩')),
@@ -7161,18 +7174,51 @@ window.__ModuleLoader__.load({
       blocked: '可以复制任务，再粘贴到会话输入栏。',
     }
 
-    function PlanTaskDraftAnchor({ plan, sessionId, request, consumeDraft, putTask }) {
+    function useLighthouseDraftModel(sessionId, modelDirectory, enabled) {
+      const [instruction, setInstruction] = useState('')
+      useEffect(() => {
+        if (!enabled) return
+        const directory = modelDirectory(sessionId)
+        if (!directory) return
+        const { store } = directory
+        function update() {
+          const selection = store.getSnapshot()
+          if (selection.status !== 'ready' || selection.routable !== false || !Array.isArray(selection.groups)) {
+            setInstruction('')
+            return
+          }
+          const canChoose = selection.groups.some(group => group.models.length)
+          setInstruction(canChoose ? '请先用输入栏的模型选择器选一个可用模型。'
+            : selection.failures?.length ? '' : '没有可用模型。请在 Harness 的设置 → 模型里完成配置，再回来发送。')
+        }
+        const unsubscribe = store.subscribe(update)
+        update()
+        void directory.load().catch(() => {})
+        return unsubscribe
+      }, [sessionId, modelDirectory, enabled])
+      return enabled ? instruction : ''
+    }
+
+    function PlanTaskDraftAnchor({ plan, sessionId, request, consumeDraft, putTask, modelDirectory }) {
       const [notice, setNotice] = useState('')
       const [showText, setShowText] = useState(false)
       const [restoring, setRestoring] = useState('')
       const [error, setError] = useState('')
       const field = useRef(null)
       const fillButton = useRef(null)
+      const modelStatus = useRef(null)
+      const revealedModelStatus = useRef(false)
       const pending = useRef(null)
       const observedMismatch = useRef(false)
       const presetChanged = plan.presetChanged === true
+      const modelInstruction = useLighthouseDraftModel(sessionId, modelDirectory, plan.lighthouseCombined === true)
 
       useEffect(() => () => pending.current?.abort(), [])
+      useLayoutEffect(() => {
+        if (!modelInstruction || revealedModelStatus.current) return
+        revealedModelStatus.current = true
+        modelStatus.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      }, [modelInstruction])
       useEffect(() => {
         if (presetChanged) {
           observedMismatch.current = true
@@ -7256,7 +7302,8 @@ window.__ModuleLoader__.load({
         presetChanged && h('p', null, t('当前出装和你核对过的出装不同。恢复后可以填入任务。')),
         restoring && h('p', { role: 'status' }, t('正在恢复核对过的出装…')),
         error && h('p', { className: 'moba-alert', role: 'alert' }, t(error)),
-        notice && h('p', { role: 'status' }, t(notice)),
+        modelInstruction && h('p', { className: 'moba-alert', role: 'status', ref: modelStatus }, t(modelInstruction)),
+        notice && h('p', { role: 'status' }, t(modelInstruction && notice === planTaskDraftNotices.applied ? '任务已填入输入栏。' : notice)),
         showText && h('textarea', { ref: field, readOnly: true, rows: 4, value: plan.task, 'aria-label': t('即将填入会话的任务') }))
     }
 
@@ -13910,7 +13957,7 @@ window.__ModuleLoader__.load({
     }
 
     function MatchEquipment({ sessionId, blankSession, request, openLobby, openContinuation, openDraftSession, openTaskResult, consumeTaskResult,
-      consumeTaskDraft, putTaskDraft, focusTaskDraft, draftStore, send, workspaces, planSourceStore, returnToPlan, replayPeer }) {
+      consumeTaskDraft, putTaskDraft, focusTaskDraft, draftStore, send, workspaces, planSourceStore, returnToPlan, replayPeer, modelDirectory }) {
       const language = useLanguage()
       const planVisit = useSyncExternalStore(planSourceStore.subscribe, planSourceStore.getSnapshot)
       const id = useId()
@@ -14311,7 +14358,7 @@ window.__ModuleLoader__.load({
             'aria-description': planVisit.plan.name, onClick: () => returnToPlan(planVisit) },
           h(Glyph, { kind: 'back', size: 14 }), t('返回这份方案'))),
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
-          consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
+          consumeDraft: consumeTaskDraft, putTask: putTaskDraft, modelDirectory }),
         snapshot?.webSourcePractice && h(WebSourcePracticeResult, { key: sessionId, sessionId, request, workspaces, onOpen: openDraftSession }),
         snapshot?.webPilotPractice && h(WebPilotPracticeResult, { key: sessionId, sessionId, arm: snapshot.webPilotPractice, request, workspaces,
           onOpen: openDraftSession, reportId: id, reporting: open && reporting,
@@ -16112,8 +16159,9 @@ window.__ModuleLoader__.load({
       .moba-starter-actions .moba-roster-open { min-height: 44px; }
       .moba-lighthouse-combined-entry { min-block-size: 44px; white-space: normal; }
       .moba-lighthouse-combined-start[open] { display: flex; flex-direction: column; overflow: clip; }
-      .moba-lighthouse-combined-start > :is(h2, .moba-starter-actions) { flex: none; }
+      .moba-lighthouse-combined-start > :is(h2, .moba-starter-actions, .moba-lighthouse-model-prerequisite) { flex: none; }
       .moba-lighthouse-combined-fields { min-block-size: 0; overflow: auto; padding: 2px; }
+      .moba-lighthouse-model-prerequisite { margin: 0; }
       .moba-lighthouse-pending-fields .moba-history-entry { grid-template-columns: minmax(0, 1fr) minmax(0, min(46%, 10rem)); align-items: center; }
       .moba-lighthouse-pending-fields .moba-history-entry header { display: grid; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
       .moba-lighthouse-pending-fields .moba-history-entry small { color: var(--muted); }
@@ -16606,6 +16654,13 @@ window.__ModuleLoader__.load({
           else if (navigation?.openList) navigation.openList()
           else ctx.get('layout')?.selectPanel('plugins')
         }
+        function modelDirectory(sessionId) {
+          try {
+            return ctx.get('modelDirectories')?.directoryFor(sessionId)
+          } catch {
+            // Some hosts do not expose a directory for this session.
+          }
+        }
         async function send(sessionId, text, move, language) {
           const session = ctx.sessions.binding(sessionId)?.session
           if (!session) throw new Error(t('当前会话尚未准备好，请重试。'))
@@ -16639,7 +16694,7 @@ window.__ModuleLoader__.load({
               h(MatchEquipment, { key: id, sessionId: id, blankSession, request, openLobby, send, openDraftSession, openTaskResult, consumeTaskResult,
                 consumeTaskDraft, putTaskDraft, focusTaskDraft, draftStore, workspaces: ctx.workspaces.list, planSourceStore, returnToPlan,
                 replayPeer: replayPeer?.sessionId === id ? replayPeer : undefined,
-                openContinuation: next => ctx.uiWorkspace.openSession(next) })) : null
+                modelDirectory, openContinuation: next => ctx.uiWorkspace.openSession(next) })) : null
           }))
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register(
           { name: 'conversation.session.header.utilities', id: panelId, order: -20 },

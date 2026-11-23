@@ -1422,6 +1422,8 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       .catch(error => { if (error.code === 'ENOENT') return []; throw error })
     const practiceBefore = await practiceDirectories()
     const plansBefore = (await host.request(endpoint)).value.plans
+    const modelSetup = await host.request(endpoint, { action: 'lighthouse-model-setup' })
+    assert.deepEqual(modelSetup.value, { needsSetup: false })
     const combinedPractice = await practice('preview')
     assert.equal(combinedPractice.material, '02-lighthouse.md')
     assert.match(combinedPractice.task, /两节备用电池/)
@@ -1433,6 +1435,9 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const practiceDraft = await practice('open', practiceLaunch)
     assert.deepEqual(await practice('open', practiceLaunch), practiceDraft)
     assert.equal(practiceDraft.task, combinedPractice.task)
+    const practiceState = await equipmentIn(host, practiceDraft.sessionId)
+    assert.equal(practiceState.planTask.lighthouseCombined, true)
+    assert.equal(practiceState.planTask.task, combinedPractice.task)
     const practiceHistory = await host.request('/api/loadout-fixture-history?sessionId=' + practiceDraft.sessionId)
     assert.equal(practiceHistory.workspaceId, practiceDraft.workspaceId)
     assert.ok(!practiceHistory.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))

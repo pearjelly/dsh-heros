@@ -3474,6 +3474,20 @@ export async function apply(ctx) {
       ['lighthouse-review-challenge-v1', selection.code.trim()], signal)
   }
 
+  async function lighthouseModelSetup() {
+    try {
+      const catalog = await ctx.get('sessionController')?.modelCatalog?.()
+      if (Array.isArray(catalog?.groups) && Array.isArray(catalog.failures) &&
+        catalog.groups.every(group => Array.isArray(group?.models))) {
+        if (catalog.groups.some(group => group.models.length)) return { needsSetup: false }
+        if (!catalog.failures.length) return { needsSetup: true }
+      }
+    } catch {
+      // A catalog query failure cannot establish that setup is needed.
+    }
+    return { needsSetup: null }
+  }
+
   async function checkCombinedLighthouseStart(english, signal, mode = 'evidence-review', scenario = 'gap') {
     if (!lighthouseCombinedModes.includes(mode)) throw new Error('请选择大厅里的实战打法。')
     const brief = lighthouseEvidenceTask(english, scenario)
@@ -9070,7 +9084,9 @@ export async function apply(ctx) {
         const webPractice = webPilotPractice ? { webPilotPractice } : webSourcePractice ? { webSourcePractice: true } : {}
         if (savedTask.started) Object.assign(value, webPractice)
         if (!savedTask.started) value.planTask = { planName, material, task, ...webPractice,
-          ...(source && { source }), ...(armory === true && { armory }), ...(savedTask.presetChanged && { presetChanged: true }) }
+          ...(source && { source }), ...(armory === true && { armory }),
+          ...(savedTask.launch.target?.lighthouseCombined === true && { lighthouseCombined: true }),
+          ...(savedTask.presetChanged && { presetChanged: true }) }
         else if (source) value.lessonTaskResult = true
         else if (armory === true && personalTaskTarget(savedTask.launch, savedTask.header)) {
           value.armoryTaskResult = true
@@ -9301,6 +9317,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-evidence-repeat') value = await repeatLighthouseEvidence(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-repeat') value = await repeatLighthouseReview(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-review-start-preview') value = (await checkReviewStart(english, request.signal)).preview
+        else if (selection?.action === 'lighthouse-model-setup') value = await lighthouseModelSetup()
         else if (selection?.action === 'lighthouse-review-start-open') value = await openReviewStart(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-combined-start-preview') value = (await checkCombinedLighthouseStart(english, request.signal, selection.mode)).preview
         else if (selection?.action === 'lighthouse-combined-start-open') value = await openCombinedLighthouse(selection, english, request.signal)
