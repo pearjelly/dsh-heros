@@ -141,6 +141,7 @@ test('saving a web pilot arm deduplicates concurrent requests and retains its so
     { sessionId: trialSession, arm: 'evidence' },
     { sessionId: trialSession, arm: 'evidence', received: true },
     { sessionId: personalSession, arm: 'evidence', personal: true },
+    { sessionId: personalSession, arm: 'standard', personal: true },
   ]
   for (const origin of origins) {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-web-pilot-plans-'))

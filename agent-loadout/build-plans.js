@@ -41,7 +41,7 @@ function handoffOrigin(value) {
 function webPilotOrigin(value) {
   if (value?.personal === true) {
     if (typeof value.sessionId === 'string' && /^session-a077[a-f0-9]{28}$/.test(value.sessionId) &&
-      value.arm === 'evidence' && value.received === undefined) {
+      ['standard', 'evidence'].includes(value.arm) && value.received === undefined) {
       return { sessionId: value.sessionId, arm: value.arm, personal: true }
     }
     return

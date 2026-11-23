@@ -1881,8 +1881,9 @@ window.__ModuleLoader__.load({
       const comparisonDialog = dialogRef ?? ownDialog
       const comparisonBody = useRef(null)
       const personalDialog = useRef(null)
-      const canUseLoadout = !savedPlan && !decisionsOnly
+      const canUseLoadout = !savedPlan && !decisionsOnly && !sourceOnly
       const canUseDecisionLoadout = decisionsOnly && !savedPlan && !sourceOnly
+      const compact = decisionsOnly || sourceOnly
       function closeAction() {
         setAction(null)
         requestAnimationFrame(() => action.trigger.focus())
@@ -1905,10 +1906,11 @@ window.__ModuleLoader__.load({
       }
       return h(Fragment, null,
         h(InstallDialog, { title: t(decisionsOnly ? webPilotDecisionCompareTitle : savedPlan ? '此方案保存自这局' : '对照两局'),
-          className: 'moba-starter-dialog moba-web-pilot-comparison' + (decisionsOnly ? ' moba-web-pilot-decision-comparison' : ''),
+          className: 'moba-starter-dialog moba-web-pilot-comparison' + (decisionsOnly ? ' moba-web-pilot-decision-comparison'
+            : sourceOnly ? ' moba-web-pilot-source-comparison' : ''),
           dialogRef: comparisonDialog, onCancel: back, initialFocus: '.moba-web-pilot-comparison-back',
           onKeyDown: event => closeDialogOnEscape(event, back) },
-          h(decisionsOnly ? 'div' : Fragment, decisionsOnly ? { className: 'moba-web-pilot-practice-fields', ref: comparisonBody } : null,
+          h(compact ? 'div' : Fragment, compact ? { className: 'moba-web-pilot-practice-fields', ref: comparisonBody } : null,
             savedPlan && h('p', { className: 'moba-plan-note' }, h('strong', null, savedPlan.name)),
             decisionsOnly && h('p', null, t(webPilotDecisionReplayDescription)),
             h('a', { href: comparison.url, target: '_blank', rel: 'noopener noreferrer' }, t('查看发布方清单')),
@@ -2308,7 +2310,8 @@ window.__ModuleLoader__.load({
       const current = state?.language === language && state.attempt === attempt ? state : null
       const view = current?.view
       const complete = view?.status === 'complete'
-      const canSavePlan = complete && view.canSavePlan === true
+      const loadout = webPilotArms[view?.arm]?.name
+      const canSavePlan = complete && loadout && view.canSavePlan === true
       const choice = view?.choice || t(view?.choiceRecorded ? '已记录回复' : '未记录选择')
       const statusText = { waiting: '等待发送任务', running: '进行中', 'waiting-choice': '请在会话中的提问卡上作出选择。',
         unavailable: '目前无法核对这次任务的结果。' }
@@ -2366,7 +2369,7 @@ window.__ModuleLoader__.load({
 
       function openPlanSave() {
         if (pending.current) return
-        setPlanSave({ arm: 'evidence', choice, deliverables: view.deliverables })
+        setPlanSave({ arm: view.arm, choice, deliverables: view.deliverables })
       }
 
       function closePlanSave() {
@@ -2390,6 +2393,7 @@ window.__ModuleLoader__.load({
           sourcePending && h('p', { role: 'status' }, t('正在核对实战来源…')),
           sourceError && h('p', { className: 'moba-alert', role: 'alert' }, sourceError),
           view?.sourceChanged && h('p', null, t('这次任务的网页来源与实测时不同。')),
+          loadout && h('p', null, h('strong', null, t('出装')), ' · ', t(loadout)),
           complete && h(Fragment, null,
             h('p', null, h('strong', null, t('实际选择')), ' · ', choice),
             view.deliverables?.length > 0 && h('ul', { className: 'moba-web-pilot-files', 'aria-label': t('交付文件') },
@@ -2405,7 +2409,7 @@ window.__ModuleLoader__.load({
                   'aria-label': t('打开读取地址') + ' · ' + label + ' · ' + url },
                   h('strong', null, label), h('small', null, url)) : h('strong', null, label))
             })))),
-        comparison && h(WebPilotComparison, { sessionId, comparison, decisionsOnly: true, sourceOnly: true, dialogRef: dialog,
+        comparison && h(WebPilotComparison, { sessionId, comparison, decisionsOnly: comparison.opposite !== true, sourceOnly: true, dialogRef: dialog,
           onCancel: closeSource, onVisit: targetId => {
             dialog.current?.close()
             setComparison(null)
@@ -14465,8 +14469,9 @@ window.__ModuleLoader__.load({
         grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) minmax(0, .8fr); }
       .moba-web-pilot-comparison .moba-lighthouse-arm button { min-inline-size: 0; text-align: start; overflow-wrap: anywhere; }
       .moba-web-pilot-comparison .moba-web-pilot-personal-entry { color: #ffe3ab; background: #392e20; border-color: #ad8c52; }
-      .moba-web-pilot-decision-comparison[open] { box-sizing: border-box; display: flex; flex-direction: column; overflow: clip; }
-      .moba-web-pilot-decision-comparison > :is(h2, .moba-starter-actions) { flex: none; }
+      :is(.moba-web-pilot-decision-comparison, .moba-web-pilot-source-comparison)[open] {
+        box-sizing: border-box; display: flex; flex-direction: column; overflow: clip; }
+      :is(.moba-web-pilot-decision-comparison, .moba-web-pilot-source-comparison) > :is(h2, .moba-starter-actions) { flex: none; }
       .moba-web-pilot-decision-comparison > .moba-starter-actions:has(> .moba-start) { display: grid; grid-template-columns: auto minmax(0, 1fr); }
       .moba-web-pilot-decision-comparison > .moba-starter-actions button { justify-content: center; white-space: normal; }
       .moba-web-pilot-decision-comparison .moba-web-pilot-practice-fields > p { margin: 0; }

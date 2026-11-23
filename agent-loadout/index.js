@@ -2023,6 +2023,16 @@ export async function apply(ctx) {
     return replay.result.binding
   }
 
+  async function verifiedWebPilotOppositeLoadout(sessionId, arm, signal) {
+    if (!['standard', 'evidence'].includes(arm)) throw new Error(webPilotPersonalUnavailable)
+    const result = await inspectWebSourcePractice({ sessionId }, signal)
+    const pair = await verifiedWebPilotPair(sessionId, result, signal)
+    const selected = pair?.find(run => run.binding.arm === arm)
+    if (!selected) throw new Error(webPilotPersonalUnavailable)
+    return { binding: selected.binding,
+      personalOrigin: { originSessionId: pair[0].sessionId, replaySessionId: pair[1].sessionId, opposite: true } }
+  }
+
   async function verifiedWebPilotLoadout({ sessionId, arm, received, decisionOriginSessionId }, signal) {
     if (decisionOriginSessionId !== undefined) {
       const binding = await verifiedWebPilotDecisionBinding({ sessionId, arm, received, decisionOriginSessionId }, signal)
@@ -2034,10 +2044,8 @@ export async function apply(ctx) {
       if (!result?.receivedReport) throw new Error(receivedWebPilotPersonalUnavailable)
       return verifiedWebPilotBinding(result.binding, signal)
     }
-    if (!['standard', 'evidence'].includes(arm)) throw new Error(webPilotPersonalUnavailable)
-    const result = await inspectWebSourcePractice({ sessionId }, signal)
-    const pair = await verifiedWebPilotPair(sessionId, result, signal)
-    return verifiedWebPilotBinding(pair?.find(run => run.binding.arm === arm)?.binding, signal)
+    const { binding } = await verifiedWebPilotOppositeLoadout(sessionId, arm, signal)
+    return verifiedWebPilotBinding(binding, signal)
   }
 
   async function verifiedWebPilotBinding(binding, signal) {
@@ -2087,8 +2095,8 @@ export async function apply(ctx) {
     if (personal) {
       const task = await readWebPilotPersonalPlanSource(sessionId, signal)
       if (task?.binding.arm === arm && task.binding.presetId === presetId) {
-        const { originSessionId, replaySessionId, binding } = task
-        return { binding, personalOrigin: { originSessionId, replaySessionId } }
+        const { binding, ...personalOrigin } = task
+        return { binding, personalOrigin }
       }
       return
     }
@@ -2241,7 +2249,7 @@ export async function apply(ctx) {
       })
   }
 
-  function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm, received, decisionOriginSessionId }, signal,
+  async function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm, received, decisionOriginSessionId }, signal,
     kind = 'web-source-personal') {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error('开局请求无效，请重试。')
     const pilot = kind === 'web-pilot-personal'
@@ -2256,8 +2264,17 @@ export async function apply(ctx) {
     const fromReceived = pilot && received === true
     if (fromReceived && arm !== undefined) throw new Error(receivedWebPilotPersonalUnavailable)
     const identity = fromReceived ? ['web-pilot-received-personal', sessionId] : [kind, sessionId, ...(pilot ? [arm] : [])]
+    if (pilot && !fromReceived) {
+      const observed = await verifiedWebPilotOppositeLoadout(sessionId, arm, signal)
+      return openPersonalWebDraft({ workspaceId, launchId }, signal, identity,
+        () => verifiedWebPilotBinding(observed.binding, signal), async () => {
+          const current = await verifiedWebPilotOppositeLoadout(sessionId, arm, signal)
+          if (!isDeepStrictEqual(current.personalOrigin, observed.personalOrigin)) throw new Error(webSourceChanged)
+          return current.binding
+        }, observed.personalOrigin)
+    }
     return openPersonalWebDraft({ workspaceId, launchId }, signal, identity,
-      () => pilot ? verifiedWebPilotLoadout({ sessionId, arm, received: fromReceived }, signal) : verifiedWebSourceLoadout(sessionId, signal))
+      () => pilot ? verifiedWebPilotLoadout({ sessionId, received: true }, signal) : verifiedWebSourceLoadout(sessionId, signal))
   }
 
   async function openPersonalWebDraft({ workspaceId, launchId }, signal, identity, loadout, checkCurrent, personalOrigin) {
@@ -2339,14 +2356,15 @@ export async function apply(ctx) {
     for (const event of events) {
       if (event.type === 'turn/start' || (event.type === 'user/message' && event.data.source.kind === 'user')) break
       if (event.type !== webPilotPersonalRecord || event.ignorable !== true || event.data?.owner !== planTaskOwner) continue
-      const { originSessionId, replaySessionId, binding } = event.data
+      const { originSessionId, replaySessionId, binding, opposite } = event.data
       if (typeof originSessionId !== 'string' || !heroAlternateSessionId.test(originSessionId) ||
         typeof replaySessionId !== 'string' || !heroAlternateSessionId.test(replaySessionId) || replaySessionId === originSessionId ||
-        binding?.arm !== 'evidence' || binding.presetId !== header.agentPreset ||
+        (opposite !== undefined && opposite !== true) ||
+        (binding?.arm !== 'evidence' && !(opposite && binding?.arm === 'standard')) || binding.presetId !== header.agentPreset ||
         typeof binding.id !== 'string' || typeof binding.sourceId !== 'string') return
       const workspace = ctx.get('workspaceRegistry')?.get(binding.workspaceId)
       if (!workspace || workspace.path !== header.cwd || !workspace.sessionIds.includes(header.id)) return
-      return { originSessionId, replaySessionId, binding }
+      return { originSessionId, replaySessionId, ...(opposite && { opposite: true }), binding }
     }
   }
 
@@ -2429,7 +2447,7 @@ export async function apply(ctx) {
       signal?.throwIfAborted()
       return null
     })
-    return { ...observed.view, ...(ready && { canSavePlan: true }) }
+    return { ...observed.view, arm: observed.personal.binding.arm, ...(ready && { canSavePlan: true }) }
   }
 
   async function webPilotPersonalComparison({ sessionId }, signal) {
@@ -2437,10 +2455,12 @@ export async function apply(ctx) {
     if (!personal) throw new Error(webPilotPersonalUnavailable)
     const reference = await webPilotReplayParent(personal.originSessionId, signal)
     const replay = await readWebPilotReplay(personal.replaySessionId, reference, signal)
-    const binding = replay?.result?.binding
-    if (!replay?.decisionComparison || !binding || binding.presetId !== personal.binding.presetId ||
+    const pair = personal.opposite && replay?.pair
+    const binding = pair ? pair.find(run => run.binding.arm === personal.binding.arm)?.binding
+      : !personal.opposite && replay?.decisionComparison && replay.result.binding
+    if (!binding || binding.arm !== personal.binding.arm || binding.presetId !== personal.binding.presetId ||
       binding.id !== personal.binding.id || binding.sourceId !== personal.binding.sourceId) throw new Error(webPilotPersonalUnavailable)
-    return replay.decisionComparison
+    return pair ? { ...webPilotComparison(pair), opposite: true } : replay.decisionComparison
   }
 
   async function chooseWebSourcePractice({ sessionId, choice }, signal) {
