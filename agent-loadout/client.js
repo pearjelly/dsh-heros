@@ -2,6 +2,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-agent-loadout',
   factory(require) {
     const { createElement: h, createContext, useContext, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } = require('react')
+    const { createPortal } = require('react-dom')
     const WorkspaceSetupContext = createContext(null)
     const panelId = 'agent-loadout'
     let activeLanguage = { getSnapshot: () => 'zh', subscribe: () => () => {} }
@@ -1811,7 +1812,7 @@ window.__ModuleLoader__.load({
           h('p', null, t('本局没有交付文件。')))
     }
 
-    function WebPilotPlanSave({ sessionId, run, receivedOutcome, personal, request, dialogRef, onCancel }) {
+    function WebPilotPlanSave({ sessionId, run, receivedOutcome, personal, comparison, request, dialogRef, onCancel }) {
       const language = useLanguage()
       const [name, setName] = useState('')
       const [note, setNote] = useState('')
@@ -1840,7 +1841,8 @@ window.__ModuleLoader__.load({
         }
         try {
           const action = 'web-pilot-plan-save'
-          const scope = personal ? { personal: true } : receivedOutcome ? { received: true } : { arm: run.arm }
+          const scope = personal ? { personal: true, ...(comparison && { comparison }) }
+            : receivedOutcome ? { received: true } : { arm: run.arm }
           const plan = await request(action, { action, sessionId, ...scope, name: planName, note: planNote,
             saveId: saveIds.current.get(key) }, abort.signal, language)
           if (!abort.signal.aborted) setSavedName(plan.name)
@@ -2293,6 +2295,7 @@ window.__ModuleLoader__.load({
 
     const webPilotPersonalTitle = '我的任务结果'
     const webPilotPersonalPairTitle = '对照我的两次实测'
+    const webPilotSavedComparisonTitle = '回看当时的对照'
     const webPilotPersonalPairUnavailable = '还没有核对通过的同题个人对局。'
     const webPilotPersonalReplayTitle = '换套出装再试本题'
     const webPilotPersonalReplayUnavailable = '目前无法用另一套出装复赛本题。'
@@ -2362,6 +2365,7 @@ window.__ModuleLoader__.load({
       const [save, setSave] = useState(null)
       const content = useRef(null)
       const saveDialog = useRef(null)
+      const savedSessionId = comparison.selectedSessionId
       const sides = comparison.runs.map(run => ({ run, loadout: t(webPilotArms[run.arm].name),
         choice: webPilotPersonalChoice(run), reads: webPilotPersonalReadCounts(run.reads ?? empty), files: run.deliverables?.length ?? 0 }))
       const [first, second] = sides
@@ -2385,18 +2389,20 @@ window.__ModuleLoader__.load({
         return h('td', { key: run.sessionId }, h('div', { className: 'moba-web-pilot-pair-actions' },
           h('button', { type: 'button', className: 'moba-roster-open', 'aria-label': t('查看原会话') + ' · ' + loadout,
             onClick: () => run.sessionId === sessionId ? onVisitCurrent() : onVisit(run.sessionId) }, t('原会话', '原会话（双局对照）')),
-          run.canSavePlan === true && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+          !savedSessionId && run.canSavePlan === true && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
             'aria-label': t('保存为方案') + ' · ' + loadout, onClick: event => openPlan(run, event.currentTarget) }, t('保存为方案'))))
       }
 
       return h(Fragment, null,
-        h(InstallDialog, { title: t(webPilotPersonalPairTitle), className: 'moba-starter-dialog moba-web-pilot-personal-pair',
+        h(InstallDialog, { title: t(savedSessionId ? webPilotSavedComparisonTitle : webPilotPersonalPairTitle),
+          className: 'moba-starter-dialog moba-web-pilot-personal-pair',
           dialogRef, onCancel, initialFocus: '.moba-web-pilot-personal-pair-back',
           onKeyDown: event => closeDialogOnEscape(event, onCancel) },
           h('div', { className: 'moba-web-pilot-practice-fields', ref: content },
             h('table', { className: 'moba-web-pilot-personal-matrix' },
               h('thead', null, h('tr', null, h('td'), sides.map(({ run, loadout }) =>
-                h('th', { key: run.sessionId, scope: 'col' }, loadout)))),
+                h('th', { key: run.sessionId, scope: 'col' }, loadout, run.sessionId === savedSessionId &&
+                  h('span', { className: 'moba-web-pilot-saved-side' }, t('此方案的出装')))))),
               h('tbody', null,
                 h('tr', { 'data-different': readDifference || undefined }, h('th', { scope: 'row' }, t('网页读取')),
                   sides.map(({ run, reads }) => h('td', { key: run.sessionId }, h(WebPilotPersonalReadSummary, { counts: reads })))),
@@ -2415,7 +2421,9 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-personal-pair-back', onClick: onCancel }, t('返回')))),
         save && h(WebPilotPlanSave, { sessionId: save.run.sessionId,
-          run: { ...save.run, choice: webPilotPersonalChoice(save.run) }, personal: true, request, dialogRef: saveDialog, onCancel: closePlan }))
+          run: { ...save.run, choice: webPilotPersonalChoice(save.run) }, personal: true,
+          comparison: { standardSessionId: first.run.sessionId, evidenceSessionId: second.run.sessionId },
+          request, dialogRef: saveDialog, onCancel: closePlan }))
     }
 
     function WebPilotPersonalReplay({ sessionId, fromArm, request, dialogRef, onCancel, onOpen }) {
@@ -8649,22 +8657,46 @@ window.__ModuleLoader__.load({
             t('查看原会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function PlanTestedSource({ plan, request, onVisit }) {
+    function PlanTestedSource({ plan, request, libraryDialog, onVisit }) {
       const language = useLanguage()
       const [state, setState] = useState(null)
+      const [pair, setPair] = useState(null)
       const trigger = useRef(null)
       const pending = useRef(null)
       const singleRunDialog = useRef(null)
       const restoreSingleRunFocus = useRef(false)
+      const pairDialog = useRef(null)
+      const pairTrigger = useRef(null)
+      const sourceScroll = useRef(0)
+      const suspendedLibrary = useRef(null)
       const webPilot = plan.hasWebPilotOrigin === true
       const handoff = plan.hasHandoffOrigin === true
+      const source = state?.source
+      const singleRun = webPilot && (source?.received === true || source?.personal === true)
+      const hasSavedComparison = source?.personal === true && source.hasComparison === true
 
-      useEffect(() => () => pending.current?.abort(), [])
+      useEffect(() => () => { pending.current?.abort(); resumeLibrary() }, [])
       useLayoutEffect(() => {
         if (state || !restoreSingleRunFocus.current) return
         restoreSingleRunFocus.current = false
-        trigger.current?.focus()
+        trigger.current?.focus({ preventScroll: true })
       }, [state])
+
+      function suspendLibrary() {
+        const element = libraryDialog.current
+        if (!element?.open) return
+        const content = element.querySelector('.moba-plan-library')
+        suspendedLibrary.current = { element, content, scrollTop: content?.scrollTop ?? 0 }
+        element.close()
+      }
+
+      function resumeLibrary() {
+        const saved = suspendedLibrary.current
+        suspendedLibrary.current = null
+        if (!saved?.element.isConnected || saved.element.open) return
+        saved.element.showModal()
+        if (saved.content) saved.content.scrollTop = saved.scrollTop
+      }
 
       async function open() {
         if (pending.current) return
@@ -8683,48 +8715,96 @@ window.__ModuleLoader__.load({
           if (!valid) {
             throw new Error(t('这份方案的实测来源已不可查看。'))
           }
+          if (webPilot && source.personal === true && source.hasComparison === true) suspendLibrary()
           setState({ source })
         } catch (reason) {
           if (!abort.signal.aborted) setState({ error: reason.message })
         } finally {
-          pending.current = null
+          if (pending.current === abort) pending.current = null
         }
+      }
+
+      async function viewSavedComparison() {
+        if (pending.current || !hasSavedComparison) return
+        const abort = pending.current = new AbortController()
+        setPair({ loading: true })
+        const action = 'plan-web-pilot-comparison'
+        try {
+          const value = await request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
+          if (abort.signal.aborted) return
+          if (value?.selectedSessionId !== source.sessionId || !isWebPilotPersonalPair(value, source.sessionId) ||
+            !value.runs.some(run => run.sessionId === source.sessionId && run.arm === source.arm)) {
+            throw new Error(t('这份方案的实测来源已不可查看。'))
+          }
+          sourceScroll.current = singleRunDialog.current?.scrollTop ?? 0
+          singleRunDialog.current?.close()
+          setPair({ value })
+        } catch (reason) {
+          if (!abort.signal.aborted) setPair({ error: reason.message })
+        } finally {
+          if (pending.current === abort) pending.current = null
+        }
+      }
+
+      function closeSavedComparison() {
+        pairDialog.current?.close()
+        singleRunDialog.current?.showModal()
+        pairTrigger.current?.focus({ preventScroll: true })
+        if (singleRunDialog.current) singleRunDialog.current.scrollTop = sourceScroll.current
+        setPair(null)
       }
 
       function back() {
         if (singleRun) {
+          pending.current?.abort()
+          pending.current = null
           singleRunDialog.current?.close()
           restoreSingleRunFocus.current = true
+          resumeLibrary()
         }
+        setPair(null)
         setState(null)
         if (!singleRun) requestAnimationFrame(() => trigger.current?.focus())
       }
 
-      const source = state?.source
-      const singleRun = webPilot && (source?.received === true || source?.personal === true)
-      const visit = sessionId => onVisit(sessionId, webPilot || sessionId === source.sessionId
-        ? { id: plan.id, revision: plan.revision, name: plan.name } : undefined)
-      return h(Fragment, null,
-        h('button', { type: 'button', className: handoff || webPilot ? 'moba-roster-open moba-plan-source-action' : 'moba-roster-open',
-          ref: trigger, disabled: Boolean(state?.loading), 'aria-haspopup': 'dialog', onClick: open }, t('查看实战来源')),
-        state?.loading && h('p', { className: 'moba-plan-note', role: 'status' }, t('正在核对实战来源…')),
-        state?.error && h('p', { className: 'moba-alert', role: 'alert' }, state.error),
-        source && (singleRun ? h(InstallDialog, { title: t('此方案保存自这局'), dialogRef: singleRunDialog,
+      function visit(sessionId) {
+        pending.current?.abort()
+        pairDialog.current?.close()
+        singleRunDialog.current?.close()
+        suspendedLibrary.current = null
+        onVisit(sessionId, webPilot || sessionId === source.sessionId
+          ? { id: plan.id, revision: plan.revision, name: plan.name } : undefined)
+      }
+
+      const dialogHost = hasSavedComparison && libraryDialog.current?.parentElement
+      const singleOrigin = singleRun && h(InstallDialog, { title: t('此方案保存自这局'), dialogRef: singleRunDialog,
           className: 'moba-starter-dialog moba-web-pilot-handoff moba-web-pilot-received-origin',
           onCancel: back, initialFocus: '.moba-web-pilot-received-origin-back',
           onKeyDown: event => closeDialogOnEscape(event, back) },
           h('p', { className: 'moba-plan-note' }, h('strong', null, plan.name)),
           h(InstallFacts, { facts: [[t('出装'), t(webPilotArms[source.arm].name)]] }),
+          pair?.loading && h('p', { role: 'status' }, t('正在读取对照…')),
+          pair?.error && h('p', { className: 'moba-alert', role: 'alert' }, pair.error),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-received-origin-back', onClick: back }, t('返回方案库')),
-            h('button', { type: 'button', className: 'moba-start', onClick: () => {
-              singleRunDialog.current?.close()
-              visit(source.sessionId)
-            } }, t(source.personal ? '查看原会话' : '打开原局会话'))))
+            h('button', { type: 'button', className: hasSavedComparison ? 'moba-roster-open' : 'moba-start',
+              onClick: () => visit(source.sessionId) }, t(source.personal ? '查看原会话' : '打开原局会话')),
+            hasSavedComparison && h('button', { type: 'button', className: 'moba-start moba-web-pilot-saved-review',
+              ref: pairTrigger, 'aria-haspopup': 'dialog',
+              'aria-disabled': Boolean(pair?.loading), onClick: viewSavedComparison }, t(webPilotSavedComparisonTitle))))
+
+      return h(Fragment, null,
+        h('button', { type: 'button', className: handoff || webPilot ? 'moba-roster-open moba-plan-source-action' : 'moba-roster-open',
+          ref: trigger, disabled: Boolean(state?.loading), 'aria-haspopup': 'dialog', onClick: open }, t('查看实战来源')),
+        state?.loading && h('p', { className: 'moba-plan-note', role: 'status' }, t('正在核对实战来源…')),
+        state?.error && h('p', { className: 'moba-alert', role: 'alert' }, state.error),
+        source && (singleRun ? (dialogHost ? createPortal(singleOrigin, dialogHost) : singleOrigin)
           : webPilot ? h(WebPilotComparison, { comparison: source.comparison, savedPlan: { name: plan.name, arm: source.arm }, onCancel: back, onVisit: visit })
           : handoff ? h(HandoffSourceDialog, { source, planName: plan.name, onBack: back, onVisit: visit })
             : h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId, testedSourceArm: source.arm, evidenceReplayHint: true,
-              request, onVisit: visit, onClose: back, onBack: back, backLabel: t('返回方案库') })))
+              request, onVisit: visit, onClose: back, onBack: back, backLabel: t('返回方案库') })),
+        pair?.value && dialogHost && createPortal(h(WebPilotPersonalPair, { comparison: pair.value, dialogRef: pairDialog,
+          onCancel: closeSavedComparison, onVisit: visit }), dialogHost))
     }
 
     function sameReviewedDraft(draft, reviewed) {
@@ -9098,7 +9178,7 @@ window.__ModuleLoader__.load({
         t(webPlanTaskLabel), h(Glyph, { kind: 'arrow', size: 16 }))
       const sourceInHeader = plan?.hasHandoffOrigin || plan?.hasWebPilotOrigin
       const testedSource = plan && (sourceInHeader || plan.hasEvidenceOrigin) && onOpenSource &&
-        h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
+        h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request, libraryDialog: dialog,
           onVisit: (sessionId, reference) => { close(); onOpenSource(sessionId, reference) } })
       const compareTested = plan?.hasReceivedWebPilotOrigin && onOpenSource && h('button', {
         className: 'moba-roster-open moba-plan-tested-start', type: 'button', ref: testedButton,
@@ -14837,6 +14917,7 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-personal-matrix :is(th, td) { padding: 5px; border-block-end: 1px solid var(--line); overflow-wrap: anywhere; }
       .moba-web-pilot-personal-matrix tr > :first-child { width: 23%; color: var(--muted); }
       .moba-web-pilot-personal-matrix thead th { color: var(--gold); }
+      .moba-web-pilot-saved-side { display: block; margin-block-start: 3px; color: #b8ded4; font-size: 11px; }
       .moba-web-pilot-personal-matrix tr[data-different] { background: #232f37; }
       .moba-web-pilot-personal-matrix tr[data-different] th { color: #cbe2dd; }
       .moba-web-pilot-personal-matrix tbody td { vertical-align: top; }
@@ -14882,6 +14963,7 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-received-save { flex: none; }
       .moba-web-pilot-received-origin .moba-plan-note { margin: 0; overflow-wrap: anywhere; }
       .moba-web-pilot-received-origin .moba-starter-actions button { max-inline-size: 100%; white-space: normal; }
+      .moba-web-pilot-saved-review:focus-visible { outline: 2px solid #211807; outline-offset: -4px; }
       .moba-web-pilot-handoff-outcome h3 { margin: 0 0 7px; color: var(--gold); }
       .moba-web-pilot-handoff-sides { display: grid; gap: 7px;
         grid-template-columns: repeat(auto-fit, minmax(min(196px, 100%), 1fr)); }

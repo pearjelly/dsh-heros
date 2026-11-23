@@ -6,6 +6,7 @@ import { comparisonIdValid, workspaceMaterialPath } from './match-comparisons.js
 const planKey = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/
 const requestHash = /^[a-f0-9]{64}$/
 export const planTaskSessionId = /^session-a076[a-f0-9]{28}$/u
+const personalWebPilotSessionId = /^session-a077[a-f0-9]{28}$/
 
 export function planTaskPrompt({ material: value, task }, english) {
   const material = workspaceMaterialPath(value)
@@ -38,11 +39,22 @@ function handoffOrigin(value) {
   }
 }
 
+export function webPilotPlanComparison(value, sessionId) {
+  if (!value || typeof value !== 'object' || Object.keys(value).length !== 2) return
+  const { standardSessionId, evidenceSessionId } = value
+  if ([standardSessionId, evidenceSessionId].every(id => typeof id === 'string' && personalWebPilotSessionId.test(id)) &&
+    standardSessionId !== evidenceSessionId && (sessionId === standardSessionId || sessionId === evidenceSessionId)) {
+    return { standardSessionId, evidenceSessionId }
+  }
+}
+
 function webPilotOrigin(value) {
   if (value?.personal === true) {
-    if (typeof value.sessionId === 'string' && /^session-a077[a-f0-9]{28}$/.test(value.sessionId) &&
+    if (typeof value.sessionId === 'string' && personalWebPilotSessionId.test(value.sessionId) &&
       ['standard', 'evidence'].includes(value.arm) && value.received === undefined) {
-      return { sessionId: value.sessionId, arm: value.arm, personal: true }
+      const comparison = webPilotPlanComparison(value.comparison, value.sessionId)
+      return { sessionId: value.sessionId, arm: value.arm, personal: true,
+        ...(comparison?.[value.arm + 'SessionId'] === value.sessionId && { comparison }) }
     }
     return
   }

@@ -9,7 +9,7 @@ import { englishStrings, englishText, localizeDisplay } from './localization.js'
 import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, roles } from './catalog.js'
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
-import { openBuildPlans, planTaskPrompt, planTaskSessionId as heroAlternateSessionId } from './build-plans.js'
+import { openBuildPlans, planTaskPrompt, planTaskSessionId as heroAlternateSessionId, webPilotPlanComparison } from './build-plans.js'
 import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, decodeLighthouseReviewChallenge, decodeLighthouseReviewReport, decodeWebPilotChallenge, decodeWebPilotReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, encodeLighthouseReviewChallenge, encodeLighthouseReviewReport, encodeWebPilotChallenge, encodeWebPilotReport, isLighthouseHeroChallenge, isLighthouseReviewChallenge, isWebPilotChallenge, lighthouseChallengeName } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
@@ -2064,31 +2064,40 @@ export async function apply(ctx) {
     return { workspaceIds: await personalWorkspaceIds(signal), arm: binding.arm }
   }
 
-  function saveWebPilotPlan({ sessionId, arm, received, personal, name, note, saveId }, signal) {
+  function saveWebPilotPlan({ sessionId, arm, received, personal, comparison, name, note, saveId }, signal) {
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     if (!validOpeningId(saveId)) throw new Error('保存请求无效，请重试。')
     const fromReceived = received === true
     if (fromReceived && arm !== undefined) throw new Error(receivedWebPilotPersonalUnavailable)
     const fromPersonal = personal === true
     if (personal !== undefined && (!fromPersonal || received !== undefined || arm !== undefined)) throw new Error(webPilotPersonalUnavailable)
+    const savedComparison = webPilotPlanComparison(comparison, sessionId)
+    if (comparison !== undefined && (!fromPersonal || !savedComparison)) throw new Error(webPilotPersonalPairUnavailable)
     const hash = values => createHash('sha256').update(JSON.stringify(values)).digest('hex')
     const key = hash([planTaskOwner, saveId])
     return buildPlans.write({ name, note }, 'standard', async () => {
-      const personalTask = fromPersonal && await readWebPilotPersonalPlanSource(sessionId, signal)
+      const reviewedPair = savedComparison && await verifiedSavedWebPilotPersonalPair(savedComparison, signal)
+      if (savedComparison && !reviewedPair) throw new Error(webPilotPersonalPairUnavailable)
+      const personalTask = fromPersonal && (reviewedPair
+        ? webPilotPersonalPlanSource(reviewedPair.find(run => run.sessionId === sessionId).observed)
+        : await readWebPilotPersonalPlanSource(sessionId, signal))
       const { draft, candidate, binding } = fromPersonal
         ? await verifiedWebPilotBinding(personalTask?.binding, signal)
         : await verifiedWebPilotLoadout({ sessionId, arm, received: fromReceived }, signal)
       const { presetId } = await prepare(draft, candidate)
       if (presetId !== binding.presetId) throw new Error(webSourceChanged)
-      if (fromPersonal && !isDeepStrictEqual(await readWebPilotPersonalPlanSource(sessionId, signal), personalTask)) {
+      if (reviewedPair ? !isDeepStrictEqual(await verifiedSavedWebPilotPersonalPair(savedComparison, signal), reviewedPair)
+        : fromPersonal && !isDeepStrictEqual(await readWebPilotPersonalPlanSource(sessionId, signal), personalTask)) {
         throw new Error(webSourceChanged)
       }
       signal?.throwIfAborted()
       const heroId = draft.presetId
       const heroName = ctx.agentPresets.definitions?.get(heroId)?.config.name ?? presetLabels.get(heroId)?.[0] ?? heroId
       return { presetId, heroId, heroName,
-        webPilotOrigin: { sessionId, arm: binding.arm, ...(fromReceived && { received: true }), ...(fromPersonal && { personal: true }) } }
-    }, fields => ({ key, digest: hash([sessionId, fromPersonal ? 'personal' : fromReceived ? 'received' : arm, fields.name, fields.note]) }))
+        webPilotOrigin: { sessionId, arm: binding.arm, ...(fromReceived && { received: true }), ...(fromPersonal && { personal: true }),
+          ...(savedComparison && { comparison: savedComparison }) } }
+    }, fields => ({ key, digest: hash([sessionId, fromPersonal ? 'personal' : fromReceived ? 'received' : arm, fields.name, fields.note,
+      ...(savedComparison ? [savedComparison.standardSessionId, savedComparison.evidenceSessionId] : [])]) }))
   }
 
   async function observedWebPilotPlan({ webPilotOrigin, presetId }, signal) {
@@ -2118,10 +2127,25 @@ export async function apply(ctx) {
     buildPlans.read(id, revision)
     signal?.throwIfAborted()
     if (!observed) return { status: 'unavailable' }
-    const { sessionId, arm, received, personal } = plan.webPilotOrigin
-    if (personal) return { status: 'ready', personal: true, sessionId, arm }
+    const { sessionId, arm, received, personal, comparison } = plan.webPilotOrigin
+    if (personal) return { status: 'ready', personal: true, sessionId, arm, ...(comparison && { hasComparison: true }) }
     return received ? { status: 'ready', received: true, sessionId, arm }
       : { status: 'ready', arm, comparison: webPilotComparison(observed.pair) }
+  }
+
+  async function readPlanWebPilotComparison({ id, revision }, signal) {
+    const plan = buildPlans.read(id, revision)
+    const origin = plan.webPilotOrigin
+    const unavailable = '这份方案的实测来源已不可查看。'
+    if (!origin?.personal || !origin.comparison) throw new Error(unavailable)
+    const pair = await verifiedSavedWebPilotPersonalPair(origin.comparison, signal)
+    const selected = pair?.find(run => run.sessionId === origin.sessionId)
+    const task = webPilotPersonalPlanSource(selected?.observed)
+    if (!task || task.binding.arm !== origin.arm || task.binding.presetId !== plan.presetId) throw new Error(unavailable)
+    const comparison = await webPilotPersonalPairResult(pair, signal, { allowSave: false })
+    buildPlans.read(id, revision)
+    signal?.throwIfAborted()
+    return { ...comparison, selectedSessionId: origin.sessionId }
   }
 
   function testedWebPilotPlanCard({ id, revision, name, note }, { sessionId, binding }) {
@@ -2552,9 +2576,23 @@ export async function apply(ctx) {
     if (!opponent) throw new Error(webPilotPersonalPairUnavailable)
     const current = { sessionId, observed }
     const pair = observed.personal.binding.arm === 'standard' ? [current, opponent] : [opponent, current]
+    return webPilotPersonalPairResult(pair, signal)
+  }
+
+  async function verifiedSavedWebPilotPersonalPair({ standardSessionId, evidenceSessionId }, signal) {
+    const standard = await observedWebPilotPersonalTask(standardSessionId, signal).catch(() => signal?.throwIfAborted())
+    if (standard?.personal.binding.arm !== 'standard') return
+    const match = await verifiedWebPilotPersonalMatch(standard, signal).catch(() => signal?.throwIfAborted())
+    if (!match?.workspace.sessionIds.includes(evidenceSessionId)) return
+    const evidence = await observedWebPilotPersonalTask(evidenceSessionId, signal).catch(() => signal?.throwIfAborted())
+    if (!comparableWebPilotPersonalRun(standard, match, evidence)) return
+    return [{ sessionId: standardSessionId, observed: standard }, { sessionId: evidenceSessionId, observed: evidence }]
+  }
+
+  async function webPilotPersonalPairResult(pair, signal, { allowSave = true } = {}) {
     const runs = await Promise.all(pair.map(async ({ sessionId, observed }) => {
       const { reads, choice, choiceRecorded, questionAsked, deliverables } = observed.view
-      const canSavePlan = await canSaveWebPilotPersonalPlan(observed, signal)
+      const canSavePlan = allowSave && await canSaveWebPilotPersonalPlan(observed, signal)
       return { sessionId, arm: observed.personal.binding.arm, reads, choice, choiceRecorded, questionAsked, deliverables,
         ...(canSavePlan && { canSavePlan: true }) }
     }))
@@ -8795,6 +8833,8 @@ export async function apply(ctx) {
           value = await readPlanHandoffOrigin(selection, request.signal)
         } else if (selection?.action === 'plan-web-pilot-origin') {
           value = await readPlanWebPilotOrigin(selection, request.signal)
+        } else if (selection?.action === 'plan-web-pilot-comparison') {
+          value = await readPlanWebPilotComparison(selection, request.signal)
         } else if (selection?.action === 'plan-web-pilot-tested-options') {
           value = await webPilotTestedPlanOptions(selection, request.signal)
         } else if (selection?.action === 'plan-web-pilot-tested-compare') {
