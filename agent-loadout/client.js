@@ -9317,6 +9317,49 @@ window.__ModuleLoader__.load({
             t(busy ? '正在核对读取结果…' : '填入输入框'))))
     }
 
+    function WebRecoveryJudgment({ entry, evidence, sessionId, request, onSaved }) {
+      const language = useLanguage()
+      const [choice, setChoice] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const choosing = useRef(null)
+      const recorded = useRef(null)
+      const saved = evidence.choice || choice
+      useEffect(() => () => choosing.current?.abort(), [])
+
+      async function choose(next) {
+        if (choosing.current || saved) return
+        const abort = choosing.current = new AbortController()
+        setBusy(true)
+        setError('')
+        try {
+          const action = 'web-recovery-choice'
+          const result = await request(action, { action, sessionId, seq: entry.seq, choice: next }, abort.signal, language)
+          if (abort.signal.aborted) return
+          setChoice(result.choice)
+          onSaved()
+          requestAnimationFrame(() => recorded.current?.focus())
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          choosing.current = null
+          if (!abort.signal.aborted) setBusy(false)
+        }
+      }
+
+      return h('section', { className: 'moba-web-recovery-form', 'aria-label': t('这次要核对的问题'), 'data-web-recovery-judgment': true },
+        h('strong', null, t('这次要核对的问题')),
+        h('p', { className: 'moba-web-recovery-point' }, evidence.question),
+        saved ? h('p', { ref: recorded, role: 'status', tabIndex: -1 },
+          t(saved === 'use-source' ? '你已采用这个来源作依据。' : '你将这个问题保留为待核实。'))
+          : h('div', { className: 'moba-report-actions' },
+            h('button', { type: 'button', className: 'moba-text', disabled: busy,
+              onClick: () => choose('use-source') }, t('采用作依据')),
+            h('button', { type: 'button', className: 'moba-text', disabled: busy,
+              onClick: () => choose('pending') }, t('继续待核实'))),
+        error && h('p', { className: 'moba-match-action-error', role: 'alert' }, error))
+    }
+
     function MatchReport({ sessionId, request, refresh, onPrepare, onUse, onDraft }) {
       const [before, setBefore] = useState(undefined)
       const [result, setResult] = useState(null)
@@ -9384,7 +9427,8 @@ window.__ModuleLoader__.load({
         const read = entry.webRead
         const offered = result?.webRecovery === entry.seq
         const repeat = offered ? result.webRecoveryRepeat : undefined
-        const previousUrl = result?.webRecoveryOutcome?.seq === entry.seq ? result.webRecoveryOutcome.previousUrl : undefined
+        const evidence = entry.webRecoveryDecision ?? (result?.webRecoveryOutcome?.seq === entry.seq ? result.webRecoveryOutcome : undefined)
+        const previousUrl = evidence?.previousUrl
         return h('li', { key: entry.seq, className: 'moba-report-row', 'data-type': entry.type, 'data-nested': entry.nested },
           entry.kind === 'quest' ? h(Glyph, { kind: 'report', size: 21 })
             : entry.kind === 'hero' ? h(HeroArt, { ...entry, className: 'moba-report-art' })
@@ -9414,7 +9458,9 @@ window.__ModuleLoader__.load({
               h('span', null, action ? entry.kind === 'quest' ? t('任务') : t('操作') : t(reportToolStates[entry.state])),
             !action && entry.duration !== undefined &&
               h('small', null, entry.duration < 100 ? t('<0.1 秒') : (entry.duration / 1000).toFixed(1) + t(' 秒'))),
-          recovery?.entry.seq === entry.seq && h(WebRecoveryDraft, { id: recoveryId, ...recovery, sessionId, request, onDraft, onBack: closeRecovery }))
+          recovery?.entry.seq === entry.seq && h(WebRecoveryDraft, { id: recoveryId, ...recovery, sessionId, request, onDraft, onBack: closeRecovery }),
+          evidence && h(WebRecoveryJudgment, { key: sessionId + ':' + entry.seq, entry, evidence, sessionId, request,
+            onSaved: () => setRevision(current => current + 1) }))
       }
 
       const report = result && [
@@ -12024,6 +12070,7 @@ window.__ModuleLoader__.load({
       .moba-web-recovery-form { grid-column: 1 / -1; display: grid; gap: 7px; padding: 9px; min-width: 0;
         border: 1px solid #675439; background: #191f2a; }
       .moba-web-recovery-form p { margin: 0; font-size: 12px; }
+      .moba-web-recovery-point { white-space: pre-wrap; }
       .moba-web-recovery-form label { display: grid; gap: 3px; min-width: 0; }
       .moba-web-recovery-form :is(textarea, select, input) { width: 100%; min-height: 44px; min-width: 0; padding: 5px;
         border: 1px solid #826c4b; color: inherit; background: #121721; font: inherit; }

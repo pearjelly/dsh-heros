@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { matchReport, toolSourceRecord } from '../match-report.js'
+import { matchReport, toolSourceRecord, webRecoveryFingerprint } from '../match-report.js'
 import { englishText } from '../localization.js'
 import { observedWebSource, webSourceUrl } from '../web-source-practice.js'
 
@@ -46,7 +46,7 @@ test('Web Research leaves incomplete, changed, and unrelated results unverified'
   assert.equal(observedWebSource(evidence().slice(0, -1), 1, binding), false)
 })
 
-async function webReport(change = () => {}, { before, inheritedEventCount = 0 } = {}) {
+async function webReport(change = () => {}, { before, inheritedEventCount = 0, findDecision } = {}) {
   const call = { type: 'tool/call', seq: 1, time: 100, data: { turn: 1, step: 1, callId: 'read',
     name: 'web_fetch', arguments: JSON.stringify({ url: 'https://example.com/request' }) } }
   const source = { type: toolSourceRecord, seq: 2, ignorable: true, data: { callSeq: 1, ...binding, sourceName: 'Web Research' } }
@@ -57,7 +57,7 @@ async function webReport(change = () => {}, { before, inheritedEventCount = 0 } 
   const events = [{ type: 'turn/start', seq: 0, time: 50, data: { turn: 1 } }, call, source, result,
     { type: 'turn/end', seq: 4, time: 300, data: { reason: { kind: 'completed' } } }]
   change(call, result, events)
-  return matchReport({ events, inheritedEventCount }, before, { async refresh() {} })
+  return matchReport({ events, inheritedEventCount }, before, { async refresh() {} }, findDecision)
 }
 
 async function webTurn(change) {
@@ -239,9 +239,10 @@ test('source change links the observed prior and alternative URLs on the qualify
     }
   }
 
+  const outcome = { seq: 12, previousUrl: original, question }
   for (const text of [link(value => value), link(englishText).replaceAll('\n', '\r\n'), search]) {
     const report = await webReport(threeTurns(text))
-    assert.deepEqual(report.webRecoveryOutcome, { seq: 12, previousUrl: original })
+    assert.deepEqual(report.webRecoveryOutcome, outcome)
     assert.equal(report.turns[0].entries[0].webRead.url, resolved)
     assert.equal(report.webRecovery, undefined)
     assert.ok(report.turns.every(turn => !Object.hasOwn(turn, 'webComplete')))
@@ -274,4 +275,29 @@ test('source change links the observed prior and alternative URLs on the qualify
   }
   assert.equal((await webReport(threeTurns(submission), { before: 10 })).webRecoveryOutcome, undefined)
   assert.equal((await webReport(threeTurns(submission), { inheritedEventCount: 5 })).webRecoveryOutcome, undefined)
+
+  async function verifyStoredChoice(choice) {
+    const fingerprint = webRecoveryFingerprint(outcome, resolved)
+    const findDecision = async seq => seq === outcome.seq ? { fingerprint, choice } : undefined
+    const later = events => events.push(
+      { type: 'turn/start', seq: 15, data: { turn: 4 } },
+      { type: 'turn/end', seq: 16, data: { turn: 4, reason: { kind: 'completed' } } },
+    )
+    for (const before of [undefined, 15]) {
+      const report = await webReport(threeTurns(submission, later), { before, findDecision })
+      assert.equal(report.webRecoveryOutcome, undefined)
+      assert.deepEqual(report.turns[0].entries[0].webRecoveryDecision, { question, previousUrl: original, choice })
+      assert.ok(report.turns.slice(1).every(turn => turn.entries.every(entry => !entry.webRecoveryDecision)))
+    }
+    for (const changed of [
+      threeTurns(submission.replace(question, 'A different point.'), later),
+      threeTurns(submission, events => { events[13].data.meta.url = 'https://example.org/elsewhere'; later(events) }),
+    ]) {
+      assert.equal((await webReport(changed, { findDecision })).turns[0].entries[0].webRecoveryDecision, undefined)
+    }
+    const inherited = await webReport(threeTurns(submission, later), { inheritedEventCount: 5, findDecision })
+    assert.equal(inherited.turns[0].entries[0].webRecoveryDecision, undefined)
+  }
+  await verifyStoredChoice('use-source')
+  await verifyStoredChoice('pending')
 })

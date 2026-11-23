@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.203.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.204.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -40,6 +40,8 @@ dsh web
 自己会话的最新一轮中，响应截断时可以点 **缩小问题**，读取失败时可以点 **换个来源**。写下想核对的一点，确认预览，再填进同一会话并手动发送。输入框里已有草稿或附件时，可以复制建议后按需粘贴。
 
 如果连续两轮读取同一最终网址都被截断，可以点 **换个来源**，查找更短的原文章节或填入其他链接。从缩小问题表单发送的核对点会带入后续问题，仍可编辑。
+
+换源并拿到未截断响应后，可以从同一条战报打开两个来源，复查当时发出的核对点。在最新战报点 **采用作依据** 或 **继续待核实**。继续对话后，这个判断仍会留在本机战报的原读取记录里。
 
 ## 用同一题试玩两位英雄
 

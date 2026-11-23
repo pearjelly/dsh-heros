@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.203.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.204.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -40,6 +40,8 @@ Open the match report to see what Web Research actually returned. The tool row s
 On the latest turn in your own conversation, choose **Narrow the question** after a truncated response or **Try another source** after a read failure. Write the point to check, review the suggested follow-up, and put it in the same composer to send yourself. If you have an existing draft or attachments, copy the suggestion to use when ready.
 
 When the same final URL returns truncated responses in two consecutive turns, **Try another source** lets you look for a shorter section or enter a different URL. If the last sent question came from the narrowing form, its editable point is brought into the follow-up.
+
+After a different source returns an untruncated response, open both addresses from the same report row and review the point you sent. Choose **Adopt as evidence** or **Keep unresolved** in the latest report. Your choice stays with that reading in your local report as the conversation continues.
 
 ## Try two heroes on the same task
 

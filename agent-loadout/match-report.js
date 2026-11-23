@@ -405,8 +405,8 @@ function requestedWebAddress(events, start, end, seq) {
   }
 }
 
-function submittedSourceChange(text, originalUrl, requestedUrl) {
-  if (!text || !requestedUrl || webPage(requestedUrl) === webPage(originalUrl)) return false
+function submittedSourceChangeQuestion(text, originalUrl, requestedUrl) {
+  if (!text || !requestedUrl || webPage(requestedUrl) === webPage(originalUrl)) return
   // The text comes from the user's submitted v0.202 draft, after any manual edits.
   // Match the selected link to the native request, before any server redirect.
   for (const translate of [value => value, englishText]) {
@@ -426,9 +426,12 @@ function submittedSourceChange(text, originalUrl, requestedUrl) {
     } else continue
     if (!text.startsWith(prefix) || !text.endsWith(suffix)) continue
     const question = text.slice(prefix.length, -suffix.length)
-    if (question.trim() && question.length <= 400) return true
+    if (question.trim() && question.length <= 400) return question
   }
-  return false
+}
+
+export function webRecoveryFingerprint({ seq, previousUrl, question }, url) {
+  return digest(JSON.stringify([seq, previousUrl, question, url]))
 }
 
 export function noteDeliveredFiles(files, { files: delivered, turn }, seq) {
@@ -676,7 +679,7 @@ export function observedHeroHandoff(events, turn, cwd, material, contents, bindi
   return bindings.every(Boolean) ? { ...result, bindings } : result
 }
 
-export async function matchReport(source, before, receipts) {
+export async function matchReport(source, before, receipts, findWebDecision) {
   const events = source.events
   if (before !== undefined && (!Number.isSafeInteger(before) ||
     !['turn/start', 'command/run', 'compaction/end', panelActivityRecord].includes(events[before]?.type))) {
@@ -695,9 +698,20 @@ export async function matchReport(source, before, receipts) {
   async function priorTurn(before) {
     const start = events.findLastIndex((event, index) => index < before && event.type === 'turn/start')
     if (start < 0) return
-    const value = await reportTurn(source, start, before, receipts)
-    checkedTurns.set(start, value)
-    return value
+    if (!checkedTurns.has(start)) checkedTurns.set(start, await reportTurn(source, start, before, receipts))
+    return checkedTurns.get(start)
+  }
+  async function observedSourceChange(turn, start, end) {
+    const { seq, webRead } = turn.webComplete
+    const text = submittedWebText(events, start, end, seq)
+    if (!text) return
+    const earlier = await priorTurn(start)
+    const oldRead = truncatedRead(earlier)
+    if (!oldRead || webPage(oldRead.url) === webPage(webRead.url)) return
+    const question = submittedSourceChangeQuestion(text, oldRead.url, requestedWebAddress(events, start, end, seq))
+    if (!question) return
+    const firstRead = truncatedRead(await priorTurn(earlier.seq))
+    if (firstRead && webPage(firstRead.url) === webPage(oldRead.url)) return { seq, previousUrl: oldRead.url, question }
   }
   const result = () => ({ turns, ...(commands.length && { commands }), ...(panelActivities.length && { panelActivities }),
     ...(compactions.length && { compactions }), ...(webRecovery !== undefined && { webRecovery }),
@@ -728,10 +742,12 @@ export async function matchReport(source, before, receipts) {
       compaction = { seq, time, state: data.error === undefined ? 'completed' : 'failed', inherited: index < source.inheritedEventCount }
     } else if (type === 'turn/start') {
       if (index < limit) turn = checkedTurns.has(index) ? checkedTurns.get(index) : await reportTurn(source, index, end, receipts)
+      let current = false
       if (latestTurn && (turn?.webRecovery !== undefined || turn?.webComplete)) {
         const lastSubmission = events.findLast(event => event.type === 'turn/end' ||
           event.type === 'user/message' && event.data.source.kind === 'user')
         if (lastSubmission?.type === 'turn/end' && lastSubmission.seq === turn.endSeq) {
+          current = true
           webRecovery = turn.webRecovery
           const read = truncatedRead(turn)
           if (read) {
@@ -740,19 +756,19 @@ export async function matchReport(source, before, receipts) {
               const question = submittedNarrowedQuestion(events, index, end, oldRead.url)
               webRecoveryRepeat = question ? { question } : {}
             }
-          } else if (turn.webComplete) {
-            const { seq, webRead } = turn.webComplete
-            const text = submittedWebText(events, index, end, seq)
-            const earlier = text ? await priorTurn(index) : undefined
-            const oldRead = truncatedRead(earlier)
-            if (oldRead && webPage(oldRead.url) !== webPage(webRead.url) &&
-              submittedSourceChange(text, oldRead.url, requestedWebAddress(events, index, end, seq))) {
-              const firstRead = truncatedRead(await priorTurn(earlier.seq))
-              if (firstRead && webPage(firstRead.url) === webPage(oldRead.url)) {
-                webRecoveryOutcome = { seq, previousUrl: oldRead.url }
-              }
-            }
           }
+        }
+      }
+      if (turn?.webComplete) {
+        const saved = await findWebDecision?.(turn.webComplete.seq)
+        if (current || saved) {
+          const outcome = await observedSourceChange(turn, index, end)
+          if (outcome && saved?.fingerprint === webRecoveryFingerprint(outcome, turn.webComplete.webRead.url) &&
+            (saved.choice === 'use-source' || saved.choice === 'pending')) {
+            const { previousUrl, question } = outcome
+            turn.webComplete.webRecoveryDecision = { previousUrl, question, choice: saved.choice }
+          }
+          if (current) webRecoveryOutcome = outcome
         }
       }
       latestTurn = false

@@ -27,7 +27,7 @@ import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
 import { observedWebSource, webSourceHostVersion, webSourceModule, webSourceOldVersion, webSourceTask, webSourceUrl, webSourceVersion } from './web-source-practice.js'
-import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, panelActivityRecord, toolSourceRecord } from './match-report.js'
+import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, panelActivityRecord, toolSourceRecord, webRecoveryFingerprint } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
 import { planReviewActivities } from './plan-reviews.js'
@@ -6757,24 +6757,40 @@ export async function apply(ctx) {
     return actionPrompt({ ...target, actions: current.actions, ...(waiting && { toolName: expected.name }) }, schemas, selection)
   }
 
-  async function readMatchReport({ sessionId, before }, signal) {
+  async function personalWebReport(source) {
+    const { cwd, origin } = source.header
+    return typeof cwd === 'string' && cwd && origin !== 'subagent' && !planTaskDetails(source).launch?.webSourcePractice &&
+      await personalTaskPathFilter().then(includesPath => includesPath(cwd)).catch(() => false)
+  }
+
+  const webDecisionDirectory = join(directory, 'web-recovery-decisions')
+  const webDecisionKey = (sessionId, seq) => createHash('sha256').update(JSON.stringify([sessionId, seq])).digest('hex')
+  async function readWebDecision(key) {
+    try {
+      return JSON.parse(await readFile(join(webDecisionDirectory, key + '.json'), 'utf8'))
+    } catch (error) {
+      if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
+    }
+  }
+
+  async function readMatchReport({ sessionId, before }, signal, webOnly = false) {
     const query = ctx.get('sessionQuery')
     if (!query || typeof sessionId !== 'string' || !sessionId || sessionId.length > 512) {
       throw new Error('无法读取对局记录。')
     }
     const source = await query.observeSession(sessionId, { projectionMode: 'none', signal })
     try {
-      const value = await matchReport(source, before, receipts)
-      if (value.webRecovery !== undefined || value.webRecoveryOutcome) {
-        const { cwd, origin } = source.header
-        const personal = typeof cwd === 'string' && cwd && origin !== 'subagent' && !planTaskDetails(source).launch?.webSourcePractice &&
-          await personalTaskPathFilter().then(includesPath => includesPath(cwd)).catch(() => false)
-        if (!personal) {
-          delete value.webRecovery
-          delete value.webRecoveryRepeat
-          delete value.webRecoveryOutcome
-        }
+      let scope
+      const personal = () => scope ??= personalWebReport(source)
+      const value = await matchReport(source, before, receipts, async seq => {
+        if (await personal()) return readWebDecision(webDecisionKey(sessionId, seq)).catch(() => undefined)
+      })
+      if ((value.webRecovery !== undefined || value.webRecoveryOutcome) && !await personal()) {
+        delete value.webRecovery
+        delete value.webRecoveryRepeat
+        delete value.webRecoveryOutcome
       }
+      if (webOnly) return value
       const endSeqs = value.turns.filter(turn => !turn.inherited && Number.isSafeInteger(turn.endSeq)).map(turn => turn.endSeq)
       await growth.settle()
       const followUps = await growth.reportFollowUps(sessionId, endSeqs).catch(() => {
@@ -6796,6 +6812,27 @@ export async function apply(ctx) {
     } finally {
       source[Symbol.dispose]()
     }
+  }
+
+  async function chooseWebRecovery({ sessionId, seq, choice }, signal) {
+    const changed = '这条换源记录已变化，请刷新战报。'
+    if (!Number.isSafeInteger(seq) || seq < 0 || !['use-source', 'pending'].includes(choice)) throw new Error(changed)
+    const { webRecoveryOutcome: outcome, turns } = await readMatchReport({ sessionId }, signal, true)
+    const entry = turns[0]?.entries.find(entry => entry.seq === seq)
+    if (outcome?.seq !== seq || !entry?.webRead?.url) throw new Error(changed)
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    signal?.throwIfAborted()
+    const key = webDecisionKey(sessionId, seq)
+    const fingerprint = webRecoveryFingerprint(outcome, entry.webRead.url)
+    try {
+      await saveEntry(webDecisionDirectory, key, { fingerprint, choice }, { exclusive: true })
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+      const stored = await readWebDecision(key)
+      if (stored?.fingerprint !== fingerprint || !['use-source', 'pending'].includes(stored.choice)) throw new Error(changed)
+      choice = stored.choice
+    }
+    return { seq, choice }
   }
 
   function matchArtContext(active, uploaded, entries = profileGrowthEntries(), bundles = []) {
@@ -7627,6 +7664,8 @@ export async function apply(ctx) {
           value = { text: submission.text }
         } else if (selection?.action === 'match-report') {
           value = await readMatchReport(selection, request.signal)
+        } else if (selection?.action === 'web-recovery-choice') {
+          value = await chooseWebRecovery(selection, request.signal)
         }
         else if (selection?.action === 'actions-read') {
           await catalogTitle(selection.kind, selection.id)
