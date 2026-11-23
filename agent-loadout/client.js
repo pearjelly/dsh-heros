@@ -11818,7 +11818,7 @@ window.__ModuleLoader__.load({
               h(Glyph, { kind: 'arrow', size: 18 })),
             h('button', { type: 'button', className: 'moba-roster-open moba-choose-loadout', disabled: pending, onClick: chooseLoadout },
               h(Glyph, { kind: 'team', size: 17 }), t('去配装'))),
-          data && h('div', { className: 'moba-lighthouse-entry', 'data-combined-history': showLighthouseHistory && showCombinedStart || undefined },
+          data && h('div', { className: 'moba-lighthouse-entry' },
             showCombinedStart && h('button', { type: 'button',
               className: 'moba-starter-entry moba-lighthouse-case-entry', disabled: pending, ref: combinedStartButton,
               'aria-haspopup': 'dialog', onClick: () => setReviewStartOpen('combined') },
@@ -11829,7 +11829,7 @@ window.__ModuleLoader__.load({
             showLighthouseHistory && h('button', { type: 'button',
               className: 'moba-roster-open moba-lighthouse-entry-button moba-lighthouse-combined-history-entry', disabled: pending,
               ref: lighthouseHistoryButton, 'aria-haspopup': 'dialog', onClick: () => setLighthouseHistoryOpen(true) },
-              t(lighthouseHistoryTitle)),
+              h(Glyph, { kind: 'report', size: 17 }), t(lighthouseHistoryTitle)),
             h('div', { className: 'moba-handoff-entry-actions' },
               h('button', { type: 'button', className: 'moba-roster-open moba-review-start-button', disabled: pending,
                 ref: reviewStartButton, 'aria-haspopup': 'dialog', 'data-review-challenge-start': true,
@@ -15511,9 +15511,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; margin-block-end: 15px; }
       .moba-lighthouse-entry .moba-starter-entry { margin: 0; }
       .moba-lighthouse-case-entry { grid-column: 1 / -1; min-block-size: 52px; }
-      .moba-lighthouse-entry[data-combined-history] > .moba-lighthouse-case-entry { grid-column: 1; }
-      .moba-lighthouse-entry > .moba-lighthouse-combined-history-entry { grid-column: 1 / -1; min-block-size: 44px; white-space: normal; }
-      .moba-lighthouse-entry[data-combined-history] > .moba-lighthouse-combined-history-entry { grid-column: 2; inline-size: clamp(5.75rem, 30cqi, 9rem); }
+      .moba-lighthouse-entry > .moba-lighthouse-entry-button.moba-lighthouse-combined-history-entry { grid-column: 1 / -1; min-inline-size: 0;
+        max-inline-size: none; min-block-size: 44px; justify-content: flex-start; white-space: normal; }
       .moba-lighthouse-case-entry > svg { color: var(--gold); }
       .moba-lighthouse-entry .moba-hero-trial-entry { grid-column: 1 / -1; grid-template-columns: auto minmax(0, 1fr) auto;
         min-height: 61px; border-color: #a38757; }
