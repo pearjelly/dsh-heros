@@ -1929,7 +1929,7 @@ window.__ModuleLoader__.load({
     const reviewHandoffDecisions = { confirm: '确认交付', revise: '退回修改', answered: '已作出复核选择' }
 
     function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal, onPersonalTask,
-      initialInput = '', initialCompareCode }) {
+      initialInput = '', initialCompareCode, onCompareOwn }) {
       const language = useLanguage()
       const [input, setInput] = useState(initialCompareCode ?? initialInput)
       const [resumeCode, setResumeCode] = useState(initialCompareCode)
@@ -2119,6 +2119,7 @@ window.__ModuleLoader__.load({
       const title = reviewKind ? '交换交接战报'
         : evidence ? (share ? '分享本局取舍' : '对照好友取舍') : (share ? '分享这局战报' : '对照好友战报')
       const comparison = result?.friend
+      const showOwnComparison = Boolean(comparison && onCompareOwn)
       const tryHero = comparison && onTryHero && comparison.arm !== result.local.arm && unopenedHeroes?.includes(comparison.arm)
         ? heroTrialHeroes.find(hero => hero.id === comparison.arm) : undefined
       const replayMinimal = onReplayMinimal && result?.need === 'original' && result.local.arm === 'minimal' &&
@@ -2153,7 +2154,7 @@ window.__ModuleLoader__.load({
         onKeyDown: event => closeDialogOnEscape(event, back) },
         h('form', { onSubmit: check },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
-            !tryHero && !localAction && h('p', { className: 'moba-starter-note' }, t(note)),
+            !showOwnComparison && !tryHero && !localAction && h('p', { className: 'moba-starter-note' }, t(note)),
             share && result?.code && h('label', null, t('战报码'),
               h('textarea', { ref: field, readOnly: true, className: 'moba-share-code', value: result.code, rows: 3,
                 spellCheck: false, onFocus: event => event.currentTarget.select() })),
@@ -2169,6 +2170,8 @@ window.__ModuleLoader__.load({
                 : evidence ? t('缺证时，你们怎么选？') :
                 h(Fragment, null, t('接班人需要什么？'), ' ', t(need.name))),
               (comparison || reviewKind) && result.code && h('div', { className: 'moba-detail-actions' },
+                showOwnComparison && h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound,
+                  'aria-haspopup': 'dialog', onClick: event => onCompareOwn(event.currentTarget) }, t('对照我打过的两局')),
                 h('button', { type: 'button', className: 'moba-roster-open', disabled: openingRound, onClick: copy },
                   t(evidence ? '复制我的取舍码' : '复制我的战报码')),
                 comparison && (evidence || reviewKind) && onOpenRepeat &&
@@ -3234,7 +3237,7 @@ window.__ModuleLoader__.load({
 
     function ComparisonBoard({ kind, request, comparisonId, sessionId, onClose, onVisit, putTask, canViewPrevious, lessonHint, evidenceReplayHint, publicEvidenceReplayHint,
       workspaces = empty, initialWorkspaceId, onUse, onEvidenceSaved, onEvidenceNoteSaved, onHistory, onBack, backLabel, onPrevious,
-      focusArm, focusPrevious, testedSourceArm }) {
+      focusArm, focusPrevious, testedSourceArm, closeLabel }) {
       const language = useLanguage()
       const config = comparisonKinds[kind]
       const personal = kind !== 'lighthouse'
@@ -3560,7 +3563,7 @@ window.__ModuleLoader__.load({
           prototype && h('button', { type: 'button', className: 'moba-roster-open', disabled: Boolean(launch),
             onClick: () => switchPreview(false) }, t('返回上次对照')),
           h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-close', disabled: Boolean(launch),
-            onClick: onClose }, t(evidence ? '关闭取舍记录' : '关闭同题对照'))))
+            onClick: onClose }, closeLabel ?? t(evidence ? '关闭取舍记录' : '关闭同题对照'))))
     }
 
     function ComparisonHistoryEntry({ item, onOpen, onSource, onReuse, onRematch, onLessonTask, onPrevious, storeFocus }) {
@@ -4271,7 +4274,7 @@ window.__ModuleLoader__.load({
       const scenario = evidence ? evidenceScenarios.find(item => item.id === member.scenario) : undefined
       const draftNotices = evidence ? evidenceDraftNotices : comparisonDraftNotices
       const title = reviewChallengeArm ? '灯塔同题交接' : comparisonTitle(kind, member?.lesson, evidenceReplay, publicEvidenceReplay)
-      const [open, setOpen] = useState(false)
+      const [open, setOpen] = useState('')
       const [lessonTaskSource, setLessonTaskSource] = useState(null)
       const [openEvidenceReplay, setOpenEvidenceReplay] = useState(false)
       const [openDeliveryReview, setOpenDeliveryReview] = useState(false)
@@ -4286,6 +4289,7 @@ window.__ModuleLoader__.load({
       const directRematchTrigger = useRef(null)
       const reviewInvitationTrigger = useRef(null)
       const reviewReportTrigger = useRef(null)
+      const ownComparisonTrigger = useRef(null)
       const availableLessonTask = evidence && member.lessonTaskSource
       const availableEvidenceReplay = evidence && member.canReplayLighthouseEvidence === true
       const availableDeliveryReview = lesson && kind === 'workspace' && member.canTryDeliveryReview === true
@@ -4294,6 +4298,7 @@ window.__ModuleLoader__.load({
       const replayPeerCode = reviewInvitation && kind === 'workspace' && replayPeer && replayPeer.comparisonId === member.id &&
         replayPeer.arm === member.arm ? replayPeer.code : undefined
       const canCompareOwnReview = member?.canCompareOwnReview === true
+      const ownComparisonFromPeer = open === 'peer' && openReviewReport && reviewInvitation
       const evidenceReportCode = evidence && member.evidenceReportCode
       const taskPending = (evidence || reviewChallengeArm) && member.firstTaskPending && !hasTurn
       useEffect(() => {
@@ -4305,8 +4310,14 @@ window.__ModuleLoader__.load({
 
       if (!member) return null
       function close() {
-        setOpen(false)
-        requestAnimationFrame(() => trigger.current?.focus())
+        const opener = ownComparisonFromPeer ? ownComparisonTrigger : trigger
+        setOpen('')
+        requestAnimationFrame(() => opener.current?.focus())
+      }
+
+      function closeForSource() {
+        setOpen('')
+        setOpenReviewReport(false)
       }
 
       function closeLessonTask() {
@@ -4375,7 +4386,7 @@ window.__ModuleLoader__.load({
               className: 'moba-settlement-button', 'data-review-direct-preview': true,
               onClick: () => setOpenDirectRematch(true) }, t('试试直接交付')),
             h('button', { ref: trigger, type: 'button', 'aria-haspopup': 'dialog', className: 'moba-settlement-button',
-              'data-open-own-review-pair': canCompareOwnReview || undefined, onClick: () => setOpen(true) },
+              'data-open-own-review-pair': canCompareOwnReview || undefined, onClick: () => setOpen('practice') },
             t(canCompareOwnReview ? '对照我打过的两局'
               : evidenceReplay ? title : evidence ? '查看取舍记录' : lesson ? '查看练习记录' : config.entry)),
             evidenceReportCode && h(LocalCopyButton, { key: evidenceReportCode, text: evidenceReportCode, label: '复制取舍码回给好友',
@@ -4403,6 +4414,7 @@ window.__ModuleLoader__.load({
           reviewSource: { kind, arm: member.arm, played: reviewInvitation }, onBack: closeReviewInvitation }),
         openReviewReport && reviewInvitation && h(LighthouseHandoffReport, { report: { mode: 'compare', reviewKind: kind, arm: member.arm },
           comparisonId: member.id, request, initialCompareCode: replayPeerCode, onBack: closeReviewReport,
+          onCompareOwn: canCompareOwnReview ? button => { ownComparisonTrigger.current = button; setOpen('peer') } : undefined,
           onOpenRepeat: (next, task, peer) => { setOpenReviewReport(false); onVisit(next, task, peer) } }),
         lessonTaskSource && h(PersonalLoadoutTask, { source: lessonTaskSource, workspaces, request, onBack: closeLessonTask,
           backLabel: '返回练习会话', onVisit: (next, task) => { setLessonTaskSource(null); onVisit(next, task) } }),
@@ -4416,17 +4428,16 @@ window.__ModuleLoader__.load({
         openDirectRematch && h(LighthouseDirectRematch, { kind, comparisonId: member.id, arm: member.arm, request,
           backLabel: '返回练习会话', onBack: closeDirectRematch, onOpen: (next, task) => { setOpenDirectRematch(false); onVisit(next, task) } }),
         open && h(RunComparison, { kind, request, comparisonId: member.id, sessionId, onClose: close, workspaces, lessonHint: member.lesson,
+          closeLabel: ownComparisonFromPeer ? t('返回战报对照') : undefined,
           evidenceReplayHint: evidenceReplay, publicEvidenceReplayHint: publicEvidenceReplay,
           putTask: task => putTask(sessionId, task),
-          onUse: (preview, save) => { setOpen(false); onUse(preview, save) },
+          onUse: (preview, save) => { closeForSource(); onUse(preview, save) },
           onVisit: (next, task) => {
+            closeForSource()
             if (next === sessionId) {
               if (task) setDraftStatus(putTask(sessionId, task))
-              close()
-            } else {
-              setOpen(false)
-              onVisit(next, task)
-            }
+              requestAnimationFrame(() => trigger.current?.focus())
+            } else onVisit(next, task)
           } }))
     }
 
