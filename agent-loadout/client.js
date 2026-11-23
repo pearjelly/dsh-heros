@@ -2334,6 +2334,7 @@ window.__ModuleLoader__.load({
     const webPilotPersonalReadLabels = {
       complete: '未截断', truncated: '已截断', failed: '读取失败', unknown: '状态未知',
     }
+    const webPilotPersonalReadKinds = Object.keys(webPilotPersonalReadLabels)
 
     function webPilotPersonalReadCounts(reads) {
       const counts = { complete: 0, truncated: 0, failed: 0, unknown: 0 }
@@ -2344,15 +2345,27 @@ window.__ModuleLoader__.load({
       return counts
     }
 
-    function WebPilotPersonalPair({ comparison, sessionId, request, dialogRef, onCancel, onVisit }) {
+    function WebPilotPersonalReadSummary({ counts }) {
+      const kinds = webPilotPersonalReadKinds.filter(kind => counts[kind])
+      return kinds.length ? h('ul', { className: 'moba-web-pilot-personal-read-summary' }, kinds.map(kind =>
+        h('li', { key: kind }, h('strong', null, counts[kind]), ' ', t(webPilotPersonalReadLabels[kind])))) : t('无读取记录')
+    }
+
+    function isWebPilotPersonalPair(value, sessionId, replaySessionId) {
+      const runs = value?.runs
+      return Array.isArray(runs) && runs.length === 2 && runs[0]?.arm === 'standard' && runs[1]?.arm === 'evidence' &&
+        runs.every(run => typeof run.sessionId === 'string' && run.sessionId) && runs[0].sessionId !== runs[1].sessionId &&
+        runs.some(run => run.sessionId === sessionId) && (!replaySessionId || runs.some(run => run.sessionId === replaySessionId))
+    }
+
+    function WebPilotPersonalPair({ comparison, sessionId, request, dialogRef, onCancel, onVisit, onVisitCurrent = onCancel }) {
       const [save, setSave] = useState(null)
       const content = useRef(null)
       const saveDialog = useRef(null)
       const sides = comparison.runs.map(run => ({ run, loadout: t(webPilotArms[run.arm].name),
         choice: webPilotPersonalChoice(run), reads: webPilotPersonalReadCounts(run.reads ?? empty), files: run.deliverables?.length ?? 0 }))
       const [first, second] = sides
-      const readKinds = Object.keys(webPilotPersonalReadLabels)
-      const readDifference = readKinds.some(kind => first.reads[kind] !== second.reads[kind])
+      const readDifference = webPilotPersonalReadKinds.some(kind => first.reads[kind] !== second.reads[kind])
 
       function openPlan(run, trigger) {
         const scrollTop = content.current.scrollTop
@@ -2371,7 +2384,7 @@ window.__ModuleLoader__.load({
       function runActions({ run, loadout }) {
         return h('td', { key: run.sessionId }, h('div', { className: 'moba-web-pilot-pair-actions' },
           h('button', { type: 'button', className: 'moba-roster-open', 'aria-label': t('查看原会话') + ' · ' + loadout,
-            onClick: () => run.sessionId === sessionId ? onCancel() : onVisit(run.sessionId) }, t('原会话', '原会话（双局对照）')),
+            onClick: () => run.sessionId === sessionId ? onVisitCurrent() : onVisit(run.sessionId) }, t('原会话', '原会话（双局对照）')),
           run.canSavePlan === true && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
             'aria-label': t('保存为方案') + ' · ' + loadout, onClick: event => openPlan(run, event.currentTarget) }, t('保存为方案'))))
       }
@@ -2386,10 +2399,7 @@ window.__ModuleLoader__.load({
                 h('th', { key: run.sessionId, scope: 'col' }, loadout)))),
               h('tbody', null,
                 h('tr', { 'data-different': readDifference || undefined }, h('th', { scope: 'row' }, t('网页读取')),
-                  sides.map(({ run, reads }) => h('td', { key: run.sessionId }, run.reads?.length
-                    ? h('ul', null, readKinds.filter(kind => reads[kind]).map(kind =>
-                      h('li', { key: kind }, h('strong', null, reads[kind]), ' ', t(webPilotPersonalReadLabels[kind]))))
-                    : t('无读取记录')))),
+                  sides.map(({ run, reads }) => h('td', { key: run.sessionId }, h(WebPilotPersonalReadSummary, { counts: reads })))),
                 h('tr', { 'data-different': first.choice !== second.choice || undefined }, h('th', { scope: 'row' }, t('实际选择')),
                   sides.map(({ run, choice }) => h('td', { key: run.sessionId }, h('span', { className: 'moba-web-pilot-pair-choice' }, choice)))),
                 h('tr', { 'data-different': first.files !== second.files || undefined }, h('th', { scope: 'row' }, t('文件')),
@@ -2489,12 +2499,10 @@ window.__ModuleLoader__.load({
       const [state, setState] = useState(null)
       const [reading, setReading] = useState('')
       const [readError, setReadError] = useState(null)
-      const [previewOpen, setPreviewOpen] = useState(false)
+      const [child, setChild] = useState(null)
       const pending = useRef(null)
-      const start = useRef(null)
       const content = useRef(null)
-      const scrollTop = useRef(0)
-      const previewDialog = useRef(null)
+      const childDialog = useRef(null)
       const current = state?.language === language && state.attempt === attempt ? state : null
       const replayList = current?.value
       const clock = new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'medium' })
@@ -2516,17 +2524,24 @@ window.__ModuleLoader__.load({
       }, [request, sessionId, language, attempt])
       useEffect(() => () => pending.current?.abort(), [])
 
-      async function resume(run) {
+      async function readReplay(run, trigger) {
         if (pending.current) return
+        const comparing = Boolean(trigger)
+        const scrollTop = content.current.scrollTop
         const abort = pending.current = new AbortController()
         setReading(run.sessionId)
         setReadError(null)
-        const action = 'web-pilot-personal-replay-resume'
+        const action = comparing ? 'web-pilot-personal-pair' : 'web-pilot-personal-replay-resume'
         try {
           const value = await request(action, { action, sessionId, replaySessionId: run.sessionId }, abort.signal, language)
           if (abort.signal.aborted) return
-          if (value?.sessionId !== run.sessionId) throw new Error(t(webPilotReplayChanged))
-          onOpen(value.sessionId)
+          if (comparing) {
+            if (!isWebPilotPersonalPair(value, sessionId, run.sessionId)) throw new Error(t(webPilotReplayChanged))
+            openChild({ comparison: value, trigger, scrollTop })
+          } else {
+            if (value?.sessionId !== run.sessionId) throw new Error(t(webPilotReplayChanged))
+            onOpen(value.sessionId)
+          }
         } catch (reason) {
           if (!abort.signal.aborted) setReadError({ sessionId: run.sessionId, message: reason.message })
         } finally {
@@ -2535,19 +2550,22 @@ window.__ModuleLoader__.load({
         }
       }
 
-      function openPreview() {
-        if (pending.current) return
-        scrollTop.current = content.current.scrollTop
+      function openChild(next) {
         dialogRef.current?.close()
-        setPreviewOpen(true)
+        setChild(next)
       }
 
-      function closePreview() {
-        previewDialog.current?.close()
+      function closeChild() {
+        childDialog.current?.close()
         dialogRef.current?.showModal()
-        start.current?.focus({ preventScroll: true })
-        content.current.scrollTop = scrollTop.current
-        setPreviewOpen(false)
+        child.trigger.focus({ preventScroll: true })
+        content.current.scrollTop = child.scrollTop
+        setChild(null)
+      }
+
+      function visitChild(id, task) {
+        childDialog.current?.close()
+        onOpen(id, task)
       }
 
       return h(Fragment, null,
@@ -2562,26 +2580,39 @@ window.__ModuleLoader__.load({
             replayList?.runs.length > 0 && h('ul', { className: 'moba-history-list' }, replayList.runs.map(run => {
               const opened = new Date(run.openedAt)
               const hasDate = Number.isFinite(opened.getTime())
+              const comparison = run.status === 'complete' && Array.isArray(run.comparison?.reads) &&
+                Number.isSafeInteger(run.comparison.deliveries) && run.comparison.deliveries >= 0 ? run.comparison : null
               return h('li', { className: 'moba-history-entry', key: run.sessionId, 'data-replay-status': run.status },
                 h('header', null, h('h3', null, t(webPilotArms[run.arm].name)),
                   hasDate && h('time', { dateTime: opened.toISOString() }, clock.format(opened))),
                 h('p', null, t(webPilotPersonalReplayStates[run.status])),
+                comparison && h('dl', { className: 'moba-web-pilot-replay-clue' },
+                  h('dt', null, t('网页读取')), h('dd', null,
+                    h(WebPilotPersonalReadSummary, { counts: webPilotPersonalReadCounts(comparison.reads) })),
+                  h('dt', null, t('实际选择')), h('dd', null,
+                    h('span', { className: 'moba-web-pilot-pair-choice' }, webPilotPersonalChoice(comparison))),
+                  h('dt', null, t('文件')), h('dd', null, comparison.deliveries)),
                 readError?.sessionId === run.sessionId && h('p', { className: 'moba-alert', role: 'alert' }, readError.message),
                 reading === run.sessionId && h('p', { role: 'status' }, t('正在核对实战来源…')),
                 h('div', { className: 'moba-history-card-actions' },
                   h('button', { type: 'button', className: 'moba-roster-open', 'aria-disabled': Boolean(reading),
-                    onClick: () => resume(run) }, t(run.status === 'waiting' ? '继续草稿' : '打开本局会话'))))
+                    onClick: () => readReplay(run) }, t(run.status === 'waiting' ? '继续草稿' : '打开本局会话')),
+                  comparison && h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-replay-compare',
+                    'aria-haspopup': 'dialog', 'aria-disabled': Boolean(reading), onClick: event => readReplay(run, event.currentTarget) }, t('对照这局复赛'))))
             }))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-personal-replays-back', onClick: onCancel }, t('返回')),
             current?.error && h('button', { type: 'button', className: 'moba-roster-open', onClick: () => retry(value => value + 1) }, t('重试')),
-            replayList?.canReplay === true && h('button', { type: 'button', className: 'moba-start', ref: start,
-              'aria-haspopup': 'dialog', 'aria-disabled': Boolean(reading), onClick: openPreview }, t('再开一场复赛')))),
-        previewOpen && h(WebPilotPersonalReplay, { sessionId, fromArm, request, dialogRef: previewDialog, onCancel: closePreview,
-          onOpen: (id, task) => {
-            previewDialog.current?.close()
-            onOpen(id, task)
-          } }))
+            replayList?.canReplay === true && h('button', { type: 'button', className: 'moba-start',
+              'aria-haspopup': 'dialog', 'aria-disabled': Boolean(reading), onClick: event => {
+                if (!pending.current) openChild({ trigger: event.currentTarget, scrollTop: content.current.scrollTop })
+              } }, t('再开一场复赛')))),
+        child && (child.comparison ? h(WebPilotPersonalPair, { comparison: child.comparison, sessionId, request,
+          dialogRef: childDialog, onCancel: closeChild, onVisit: visitChild, onVisitCurrent: () => {
+            childDialog.current?.close()
+            onCancel()
+          } })
+          : h(WebPilotPersonalReplay, { sessionId, fromArm, request, dialogRef: childDialog, onCancel: closeChild, onOpen: visitChild })))
     }
 
     function WebPilotPersonalResult({ sessionId, running, receiptId, request, onOpen, consumeDraft, focusDraft }) {
@@ -2655,14 +2686,9 @@ window.__ModuleLoader__.load({
         try {
           const value = await request(action, { action, sessionId }, abort.signal, language)
           if (abort.signal.aborted) return
-          const runs = value?.runs
           if (personal) {
-            if (runs?.length !== 2 || runs[0].arm !== 'standard' || runs[1].arm !== 'evidence' ||
-              !runs.every(run => typeof run.sessionId === 'string' && run.sessionId) ||
-              runs[0].sessionId === runs[1].sessionId || !runs.some(run => run.sessionId === sessionId)) {
-              throw new Error(t(webPilotPersonalPairUnavailable))
-            }
-          } else if (!value?.url || runs?.length !== 2) throw new Error(t('目前无法核对实测来源。'))
+            if (!isWebPilotPersonalPair(value, sessionId)) throw new Error(t(webPilotPersonalPairUnavailable))
+          } else if (!value?.url || value.runs?.length !== 2) throw new Error(t('目前无法核对实测来源。'))
           setComparison({ value, personal })
         } catch (reason) {
           if (!abort.signal.aborted) setSourceError(reason.message)
@@ -14814,7 +14840,7 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-personal-matrix tr[data-different] { background: #232f37; }
       .moba-web-pilot-personal-matrix tr[data-different] th { color: #cbe2dd; }
       .moba-web-pilot-personal-matrix tbody td { vertical-align: top; }
-      .moba-web-pilot-personal-matrix ul { display: flex; flex-wrap: wrap; gap: 2px 6px; margin: 0; padding: 0; list-style: none; }
+      .moba-web-pilot-personal-read-summary { display: flex; flex-wrap: wrap; gap: 2px 6px; margin: 0; padding: 0; list-style: none; }
       .moba-web-pilot-pair-choice { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
       .moba-web-pilot-pair-actions { display: grid; gap: 4px; }
       .moba-web-pilot-pair-actions button { justify-content: center; }
@@ -14841,6 +14867,10 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-save .moba-plan-fields :is(input, textarea) { box-sizing: border-box; min-block-size: 44px; }
       .moba-web-pilot-save [role="status"] { overflow-wrap: anywhere; }
       .moba-web-pilot-replay-list .moba-history-entry button { max-inline-size: 100%; overflow-wrap: anywhere; }
+      .moba-web-pilot-personal-replays .moba-web-pilot-replay-clue { margin: 0; padding: 5px 7px; gap: 3px 8px;
+        border-inline-start: 2px solid #607d78; background: #222e36; }
+      .moba-web-pilot-personal-replays .moba-web-pilot-replay-compare {
+        color: #ffe3ab; background: #392e20; border-color: #ad8c52; }
       .moba-web-pilot-handoff[open] { box-sizing: border-box; display: flex; flex-direction: column; overflow: clip; }
       .moba-web-pilot-handoff h2, .moba-web-pilot-handoff .moba-starter-actions { flex: none; }
       .moba-web-pilot-handoff form { display: flex; flex-direction: column; min-block-size: 0; }

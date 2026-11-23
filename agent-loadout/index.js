@@ -2501,15 +2501,19 @@ export async function apply(ctx) {
     return candidates.sort((a, b) => b.openedAt - a.openedAt || b.id.localeCompare(a.id))
   }
 
+  function comparableWebPilotPersonalRun(observed, match, other) {
+    return other?.view.status === 'complete' && other.taskFingerprint === observed.taskFingerprint &&
+      sameWebPilotPersonalLineage(observed.personal, other.personal) &&
+      sameWebPilotPersonalBinding(match.binding, other.personal.binding) &&
+      !other.view.sourceChanged && other.view.reads.some(read => read.status !== 'unknown')
+  }
+
   async function findWebPilotPersonalOpponent(observed, match, candidates, signal) {
-    const { personal, taskFingerprint } = observed
     for (const { id, waiting } of candidates) {
       signal?.throwIfAborted()
       if (waiting) continue
       const other = await observedWebPilotPersonalTask(id, signal).catch(() => signal?.throwIfAborted())
-      if (other?.taskFingerprint === taskFingerprint && sameWebPilotPersonalLineage(personal, other.personal) &&
-        sameWebPilotPersonalBinding(match.binding, other.personal.binding) &&
-        !other.view.sourceChanged && other.view.reads.some(read => read.status !== 'unknown')) {
+      if (comparableWebPilotPersonalRun(observed, match, other)) {
         return { sessionId: id, observed: other }
       }
     }
@@ -2531,11 +2535,20 @@ export async function apply(ctx) {
       ...(candidates.some(run => run.linked && run.waiting) && { hasPendingReplay: true }) }
   }
 
-  async function webPilotPersonalPair({ sessionId }, signal) {
+  async function webPilotPersonalPair({ sessionId, replaySessionId }, signal) {
     const observed = await observedWebPilotPersonalTask(sessionId, signal)
     const match = await verifiedWebPilotPersonalMatch(observed, signal).catch(() => signal?.throwIfAborted())
-    const candidates = match ? await webPilotPersonalCandidates(sessionId, observed.personal, match, signal) : []
-    const opponent = match && await findWebPilotPersonalOpponent(observed, match, candidates, signal)
+    if (!match) throw new Error(webPilotPersonalPairUnavailable)
+    let opponent
+    if (replaySessionId === undefined) {
+      const candidates = await webPilotPersonalCandidates(sessionId, observed.personal, match, signal)
+      opponent = await findWebPilotPersonalOpponent(observed, match, candidates, signal)
+    } else if (typeof replaySessionId === 'string' && match.workspace.sessionIds.includes(replaySessionId)) {
+      const replay = await observedWebPilotPersonalTask(replaySessionId, signal).catch(() => signal?.throwIfAborted())
+      if (replay?.personal.personalReplayOf === sessionId && comparableWebPilotPersonalRun(observed, match, replay)) {
+        opponent = { sessionId: replaySessionId, observed: replay }
+      }
+    }
     if (!opponent) throw new Error(webPilotPersonalPairUnavailable)
     const current = { sessionId, observed }
     const pair = observed.personal.binding.arm === 'standard' ? [current, opponent] : [opponent, current]
@@ -2559,7 +2572,11 @@ export async function apply(ctx) {
       const target = await observedWebPilotPersonalTask(id, signal).catch(() => signal?.throwIfAborted())
       if (target?.personal.personalReplayOf === sessionId && sameWebPilotPersonalLineage(observed.personal, target.personal) &&
         sameWebPilotPersonalBinding(match.binding, target.personal.binding)) {
-        runs.push({ sessionId: id, arm: target.personal.binding.arm, status: target.view.status, openedAt })
+        const { status, reads, choice, choiceRecorded, questionAsked, deliverables } = target.view
+        const comparison = comparableWebPilotPersonalRun(observed, match, target) && {
+          reads: reads.map(({ status }) => ({ status })), choice, choiceRecorded, questionAsked, deliveries: deliverables.length,
+        }
+        runs.push({ sessionId: id, arm: target.personal.binding.arm, status, openedAt, ...(comparison && { comparison }) })
       }
     }
     const canReplay = await verifiedWebPilotBinding(match.binding, signal).catch(() => signal?.throwIfAborted())
