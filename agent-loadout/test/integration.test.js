@@ -1592,6 +1592,32 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal((await replay('preview', { sessionId: variant.sessionId, loadout: 'switch' })).mode, 'evidence-review')
     assert.deepEqual(await native(next.sessionId), verifiedReplay)
 
+    await practice('preview', { mode: 'invalid' }, 422)
+    const startingReview = await practice('preview', { mode: 'review' })
+    assert.equal(startingReview.mode, 'review')
+    assert.equal(startingReview.task, combinedPractice.task)
+    assert.notEqual(startingReview.token, combinedPractice.token)
+    const startReview = { mode: 'review', token: startingReview.token, launchId: 'c'.repeat(32) }
+    await practice('open', { ...startReview, token: combinedPractice.token }, 422)
+    const reviewOpening = await practice('open', startReview)
+    assert.equal(reviewOpening.task, combinedPractice.task)
+    assert.notEqual(reviewOpening.workspaceId, practiceDraft.workspaceId)
+    const { runs: [firstReviewDraft] } = await pendingLighthouse()
+    assert.equal(firstReviewDraft.sessionId, reviewOpening.sessionId)
+    assert.equal(firstReviewDraft.kind, 'original')
+    assert.equal(firstReviewDraft.mode, 'review')
+    assert.ok(!(await native(reviewOpening.sessionId)).events.some(event => event.type === 'user/message'))
+    const reviewTurn = host.request(turnEndpoint, { sessionId: reviewOpening.sessionId, text: reviewOpening.task })
+    reviewTurn.catch(() => {})
+    await choose(reviewOpening.sessionId, 'fixture-delivery-review', 'Revise draft')
+    await reviewTurn
+    const firstReview = await result(reviewOpening.sessionId)
+    assert.equal(firstReview.lighthouseReplay, true)
+    assert.deepEqual(firstReview.workflowDecisions, [{ gearId: 'review', choices: ['Revise draft'] }])
+    assert.deepEqual(firstReview.deliverables, [])
+    assert.equal(firstReview.lighthousePair, undefined)
+    assert.equal((await replay('preview', { sessionId: reviewOpening.sessionId, loadout: 'switch' })).mode, 'evidence-review')
+
     const prepare = async draft => (await host.request(endpoint, draft)).value.presetId
     const open = async presetId => (await host.request('/api/loadout-fixture-session', { presetId, workspacePath: directory })).sessionId
     const history = async sessionId => (await host.request('/api/loadout-fixture-history?sessionId=' + sessionId)).events

@@ -1271,9 +1271,9 @@ export async function apply(ctx) {
   function requestedCombinedLighthouseTask(selection, english) {
     const input = requestedArmoryTask(selection, english)
     const { lighthouseReplayOf, lighthouseReviewOnly } = selection
-    if (!lighthouseReplayOf) return input
+    if (!lighthouseReplayOf && !lighthouseReviewOnly) return input
     const hash = createHash('sha256').update(JSON.stringify([
-      input.hash, lighthouseReplayOf, ...(lighthouseReviewOnly ? ['review'] : []),
+      input.hash, lighthouseReplayOf ?? null, ...(lighthouseReviewOnly ? ['review'] : []),
     ])).digest('hex')
     return { ...input, lighthouseReplayOf, lighthouseReviewOnly, hash }
   }
@@ -3456,9 +3456,10 @@ export async function apply(ctx) {
   }
 
   async function checkCombinedLighthouseStart(english, signal, mode = 'evidence-review') {
+    if (!['evidence-review', 'review'].includes(mode)) throw new Error('请选择大厅里的实战打法。')
     const brief = lighthouseEvidenceTask(english, 'gap')
     const view = planTaskPrompt({ material: lighthouseHeroMaterial, task: brief }, english)
-    const unready = { preview: { ...view, reason: reviewRoutesUnavailable } }
+    const unready = { preview: { ...view, mode, reason: reviewRoutesUnavailable } }
     try {
       const ecosystem = await discover()
       const draft = deliveryPlaybookDraft(ecosystem, mode)
@@ -3471,7 +3472,7 @@ export async function apply(ctx) {
       const token = createHash('sha256').update(JSON.stringify([
         planTaskOwner, 'lighthouse-combined-v1', view, candidate.id, identity,
       ])).digest('hex')
-      return { preview: { ...view, token }, draft, identity, brief, mode }
+      return { preview: { ...view, mode, token }, draft, identity, brief, mode }
     } catch {
       signal?.throwIfAborted()
       return unready
@@ -3486,7 +3487,7 @@ export async function apply(ctx) {
     }
     const { preview, draft, identity, brief, original, mode } = replay
       ? await checkCombinedLighthouseReplay(selection, signal)
-      : await checkCombinedLighthouseStart(english, signal)
+      : await checkCombinedLighthouseStart(english, signal, selection.mode)
     if (!draft || preview.token !== token) throw new Error(preview.reason ?? '材料、任务或出装已变化，请重新核对。')
     if (original) english = original.language === 'en'
     const registry = ctx.get('workspaceRegistry')
@@ -3496,7 +3497,7 @@ export async function apply(ctx) {
     const opening = createHash('sha256').update(JSON.stringify(['lighthouse-combined-v1', token, launchId])).digest('hex').slice(0, 32)
     const { workspace, material } = await lighthouseEvidenceLesson(directory, registry, opening, english, 'gap')
     const input = { draft, workspaceId: workspace.id, material, task: brief,
-      ...(original && { lighthouseReplayOf: original.sessionId, ...(mode === 'review' && { lighthouseReviewOnly: true }) }) }
+      ...(original && { lighthouseReplayOf: original.sessionId }), ...(mode === 'review' && { lighthouseReviewOnly: true }) }
     const checked = await checkArmoryTask(requestedCombinedLighthouseTask(input, english), signal, readWorkspaceMaterial)
     if (!checked.token || checked.identity !== identity) throw new Error('材料、任务或出装已变化，请重新核对。')
     return openReviewedTask({ ...input, token: checked.token, launchId: opening }, english, signal, 'lighthouse-combined')
@@ -9076,7 +9077,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-review-repeat') value = await repeatLighthouseReview(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-review-start-preview') value = (await checkReviewStart(english, request.signal)).preview
         else if (selection?.action === 'lighthouse-review-start-open') value = await openReviewStart(selection, english, request.signal)
-        else if (selection?.action === 'lighthouse-combined-start-preview') value = (await checkCombinedLighthouseStart(english, request.signal)).preview
+        else if (selection?.action === 'lighthouse-combined-start-preview') value = (await checkCombinedLighthouseStart(english, request.signal, selection.mode)).preview
         else if (selection?.action === 'lighthouse-combined-start-open') value = await openCombinedLighthouse(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-combined-replay-preview') value = (await checkCombinedLighthouseReplay(selection, request.signal)).preview
         else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, true)

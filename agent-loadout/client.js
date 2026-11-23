@@ -2925,6 +2925,16 @@ window.__ModuleLoader__.load({
       'evidence-review': '证据核验 + 交付前复核',
       review: '只测交付前复核',
     }
+
+    function LighthouseLoadoutChoices({ heading, options, picked, disabled, onChoose }) {
+      const group = useId()
+      return h('fieldset', { className: 'moba-starter-routes moba-lighthouse-mode-options', disabled },
+        h('legend', null, t(heading)),
+        Object.entries(options).map(([value, label]) =>
+          h('label', { className: 'moba-starter-route', key: value, 'data-picked': picked === value },
+            h('input', { type: 'radio', name: group, value, checked: picked === value, onChange: () => onChoose(value) }),
+            h('span', null, h('strong', null, t(label))))))
+    }
     const lighthousePendingTitle = '灯塔试玩记录'
     const lighthousePendingUnavailable = '找不到这页灯塔试玩记录。'
     const lighthousePendingChanged = '这局灯塔试玩已变化，请重新核对。'
@@ -3017,6 +3027,7 @@ window.__ModuleLoader__.load({
       const language = useLanguage()
       const [step, setStep] = useState(() => !startCombined ? 'routes' : pendingRuns.loading ? 'checking'
         : pendingRuns.runs.length || pendingRuns.nextBefore || pendingRuns.error ? 'pending' : 'combined')
+      const [mode, setMode] = useState('evidence-review')
       const [checked, setChecked] = useState(null)
       const [attempt, retry] = useState(0)
       const [opening, setOpening] = useState(false)
@@ -3031,7 +3042,9 @@ window.__ModuleLoader__.load({
       const returningToRuns = useRef(false)
       const combined = step === 'combined'
       const showRuns = step === 'checking' || step === 'pending'
-      const state = checked?.attempt === attempt && checked.language === language && checked.combined === combined ? checked : null
+      const requestedMode = combined && startCombined ? mode : undefined
+      const state = checked?.attempt === attempt && checked.language === language && checked.combined === combined &&
+        checked.requestedMode === requestedMode ? checked : null
       const preview = state?.value
       const sampleLanguage = ({ en: '英文', zh: '中文' })[preview?.sampleLanguage]
 
@@ -3042,16 +3055,20 @@ window.__ModuleLoader__.load({
         if (showRuns) return
         const abort = new AbortController()
         const action = combined ? 'lighthouse-combined-start-preview' : 'lighthouse-review-start-preview'
-        request(action, { action }, abort.signal, language)
+        request(action, { action, ...(requestedMode && { mode: requestedMode }) }, abort.signal, language)
           .then(value => {
             if (abort.signal.aborted) return
             if (combined && (typeof value?.task !== 'string' || !value.task || typeof value.material !== 'string' || !value.material ||
-              !value.token && !value.reason)) throw new Error(t('本机暂时无法装配这套出装。'))
-            setChecked({ value, language, attempt, combined })
+              value.mode !== (requestedMode ?? 'evidence-review') || !value.token && !value.reason)) {
+              throw new Error(t('本机暂时无法装配这套出装。'))
+            }
+            setChecked({ value, language, attempt, combined, requestedMode })
           })
-          .catch(reason => { if (!abort.signal.aborted) setChecked({ error: reason.message, language, attempt, combined }) })
+          .catch(reason => {
+            if (!abort.signal.aborted) setChecked({ error: reason.message, language, attempt, combined, requestedMode })
+          })
         return () => abort.abort()
-      }, [request, language, attempt, combined, showRuns])
+      }, [request, language, attempt, combined, showRuns, requestedMode])
       useEffect(() => () => pending.current?.abort(), [])
       useLayoutEffect(() => {
         if (combined) combinedIntro.current?.focus()
@@ -3077,9 +3094,16 @@ window.__ModuleLoader__.load({
 
       function startFromRuns() {
         returningToRuns.current = true
+        setMode('evidence-review')
         setOpenError('')
         setChecked(null)
         setStep('combined')
+      }
+
+      function chooseMode(value) {
+        if (pending.current) return
+        setOpenError('')
+        setMode(value)
       }
 
       function refreshRuns() {
@@ -3122,7 +3146,7 @@ window.__ModuleLoader__.load({
           byte => byte.toString(16).padStart(2, '0')).join(''))
         try {
           const action = combined ? 'lighthouse-combined-start-open' : 'lighthouse-review-start-open'
-          const result = await request(action, { action, ...(!combined && { arm }), token: preview.token,
+          const result = await request(action, { action, ...(!combined && { arm }), ...(requestedMode && { mode: requestedMode }), token: preview.token,
             launchId: launchIds.current.get(key) }, abort.signal, language)
           if (combined && (!result?.sessionId || result.task !== preview.task)) throw new Error(t('试玩出装已变化，请重新核对。'))
           if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
@@ -3163,8 +3187,10 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-lighthouse-combined-fields' },
             h('p', { className: 'moba-lighthouse-note', ref: combinedIntro, tabIndex: -1, 'data-review-start-intro': true },
               t('调度说有两节备用电池，补给卡能证明吗？')),
+            startCombined && h(LighthouseLoadoutChoices, { heading: '试玩出装', options: lighthouseReplayModeLabels, picked: mode,
+              disabled: opening, onChoose: chooseMode }),
             h('ul', { className: 'moba-lighthouse-results moba-lighthouse-combined-choices' },
-              h('li', null, h('div', null, h('strong', null, t('证据核验')),
+              mode !== 'review' && h('li', null, h('div', null, h('strong', null, t('证据核验')),
                 h('small', null, t('证据不足时，可以选择补证、降级推荐或暂缓。')))),
               h('li', null, h('div', null, h('strong', null, t('交付前复核')),
                 h('small', null, t('草稿就绪时，确认交付或退回修改。'))))),
@@ -3207,7 +3233,6 @@ window.__ModuleLoader__.load({
 
     function LighthouseCombinedReplay({ sessionId, request, onBack, onOpen }) {
       const language = useLanguage()
-      const group = useId()
       const [loadout, setLoadout] = useState('same')
       const [attempt, retry] = useState(0)
       const [checked, setChecked] = useState(null)
@@ -3283,15 +3308,12 @@ window.__ModuleLoader__.load({
           h('p', { className: 'moba-lighthouse-note' }, t(loadout === 'switch'
             ? '两局沿用同一份补给卡和题目。交付前复核继续装备。' : '两局沿用同一份补给卡、题目和出装。')),
           original && h(Fragment, null,
-            h('fieldset', { className: 'moba-starter-routes moba-lighthouse-replay-loadout', disabled: opening },
-              h('legend', null, t('复赛出装')),
-              Object.entries({ same: '保留这套出装', switch: switchLabel }).map(([value, label]) =>
-                h('label', { className: 'moba-starter-route', key: value, 'data-picked': loadout === value },
-                  h('input', { type: 'radio', name: group, value, checked: loadout === value, onChange: () => {
-                    if (pending.current) return
-                    setOpenError('')
-                    setLoadout(value)
-                  } }), h('span', null, h('strong', null, t(label)))))),
+            h(LighthouseLoadoutChoices, { heading: '复赛出装', options: { same: '保留这套出装', switch: switchLabel }, picked: loadout,
+              disabled: opening, onChoose: value => {
+                if (pending.current) return
+                setOpenError('')
+                setLoadout(value)
+              } }),
             h('h3', { className: 'moba-lighthouse-replay-heading' }, t('原局选择')),
             h(WorkflowDecisionReceipts, { rows: workflowDecisionRows(original.workflowDecisions) }),
             h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看试玩任务')),
@@ -15749,9 +15771,9 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-pending-fields button { min-block-size: 44px; min-inline-size: 0; white-space: normal; overflow-wrap: anywhere; }
       .moba-lighthouse-combined-replay { box-sizing: border-box; }
       .moba-lighthouse-combined-replay :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-      .moba-lighthouse-replay-loadout { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-block: 5px 8px; }
-      .moba-lighthouse-replay-loadout .moba-starter-route { min-block-size: 44px; align-items: center; padding: 6px; }
-      .moba-lighthouse-replay-loadout .moba-starter-route strong { font-size: 12px; }
+      .moba-lighthouse-mode-options { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-block: 5px 8px; }
+      .moba-lighthouse-mode-options .moba-starter-route { min-block-size: 44px; align-items: center; padding: 6px; }
+      .moba-lighthouse-mode-options .moba-starter-route strong { font-size: 12px; }
       .moba-lighthouse-combined-choices li { overflow-wrap: anywhere; }
       .moba-lighthouse-replay-heading { margin-block: 7px 4px; }
       .moba-lighthouse-combined-start summary { display: list-item; align-content: center; min-block-size: 44px; }
