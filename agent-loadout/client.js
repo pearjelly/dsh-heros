@@ -2334,8 +2334,9 @@ window.__ModuleLoader__.load({
       useLayoutEffect(() => {
         if (comparison || planSave || !returnFocus.current) return
         const target = returnFocus.current
+        const focusTarget = target.isConnected ? target : trigger.current
         returnFocus.current = null
-        (target.isConnected ? target : trigger.current)?.focus()
+        focusTarget?.focus()
       }, [comparison, planSave])
 
       async function viewSource() {
