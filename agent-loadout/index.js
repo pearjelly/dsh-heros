@@ -6293,7 +6293,8 @@ export async function apply(ctx) {
   }
 
   async function readComparisonArm(comparisons, comparison, arm, signal,
-    { verifyPersonalDelivery = false, linkedChoicesOnly = false, includeFileCoordinates = false } = {}) {
+    { verifyPersonalDelivery = false, linkedChoicesOnly = false, includeFileCoordinates = false,
+      includeWorkflowDecisions = false } = {}) {
     const { sessionId } = comparisons.identity(comparison.id, arm)
     const labels = comparison.loadout ? { heroName: comparison.loadout.heroName } : planComparisonLabels(comparison, arm)
     let saved
@@ -6313,7 +6314,7 @@ export async function apply(ctx) {
       const evidenceReplay = Boolean(evidenceReplayView(comparison.baseline))
       const strictEvidence = evidenceReplay || comparison.evidenceRetest === true
       const result = await comparisonEvidence(source, { ...saved, task: comparison.task, material: comparison.material,
-        verifyMaterialDelivery: lesson || verifyPersonalDelivery, includeFileCoordinates,
+        verifyMaterialDelivery: lesson || verifyPersonalDelivery, includeFileCoordinates, includeWorkflowDecisions,
         ...((verifyPersonalDelivery || reviewChallenge || evidencePractice || strictEvidence) && { exactMessages: true }),
         linkedChoicesOnly: linkedChoicesOnly || reviewChallenge || strictEvidence || (evidencePractice && comparison.scenario === 'gap') }, receipts)
       if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
@@ -6666,14 +6667,34 @@ export async function apply(ctx) {
     return { items, ...(last && inspected < matches.length && { before: `${last.createdAt}:${last.kind}:${last.id}` }) }
   }
 
-  function recordedComparisonGear(original, draft, ecosystem, art, choices) {
+  function observedComparisonWorkflows(entries = [], presetId, ecosystem) {
+    const original = records.get(presetId)
+    const equipped = new Set(ecosystem ? original?.equipmentIds?.map(id => currentEquipmentId(id, ecosystem)) ?? [] : [])
+    const units = ecosystem?.unitsByPreset.get(presetId) ?? []
+    const askModule = equipmentById.get('evidence').requires
+    const decisions = new Map()
+    const tools = entries.map(({ workflowCandidate, ...entry }) => {
+      if (!workflowCandidate || !equipped.has(workflowCandidate.gearId)) return entry
+      const { sourceId, gearId, choice } = workflowCandidate
+      const profileEntry = ecosystem.profileSources.get(sourceId)?.entry
+      if (!units.some(unit => unit.id === sourceId && unit.modules.includes(askModule)) &&
+        (!profileEntry || moduleReference(profileEntry).moduleName !== askModule)) return entry
+      if (!decisions.has(gearId)) decisions.set(gearId, new Set())
+      decisions.get(gearId).add(choice)
+      return { ...entry, workflowDecision: { gearId, choice } }
+    })
+    const workflowDecisions = Array.from(decisions, ([gearId, choices]) => ({ gearId, choices: [...choices] }))
+    return { entries: tools, workflowDecisions }
+  }
+
+  function recordedComparisonGear(original, draft, ecosystem, art, workflowDecisions) {
     return (original?.equipmentIds ?? []).map(key => {
       const id = currentEquipmentId(key, ecosystem)
       const card = equipmentById.get(id) ?? ecosystem.equipment.get(id)
       const sourceId = draft.equipmentSources[id]
       return { id, name: original?.equipmentLabels?.[key] ?? card?.name ?? id, kind: card?.kind ?? 'featured',
         art: art('gear', id, sourceId), sourceName: original?.equipmentSourceLabels?.[key],
-        evidence: (id === 'review' || id === 'evidence') && choices.length ? 'decision' : 'equipped' }
+        evidence: workflowDecisions.some(decision => decision.gearId === id) ? 'decision' : 'equipped' }
     })
   }
 
@@ -6692,7 +6713,8 @@ export async function apply(ctx) {
       if ((strict || verifyEvidence) && !target) return
       const evidence = await comparisonEvidence(source, { cwd, presetId, task: launch.task, material: launch.material,
         verifyMaterialProof: strict || verifyEvidence, verifyMaterialDelivery: true, exactMessages: true,
-        linkedChoicesOnly: verifyEvidence, includeWindows: !strict, includeFileCoordinates: launch.armory === true || ownHandoff }, receipts)
+        linkedChoicesOnly: verifyEvidence, includeWindows: !strict, includeFileCoordinates: launch.armory === true || ownHandoff,
+        includeWorkflowDecisions: true }, receipts)
       const textBinding = launch.source && isMinimalTrialSource(launch.source) && target.textBinding
       if (textBinding?.tool === 'bash' && evidence.status === 'complete' && !evidence.continuationReason &&
         !evidence.deliverables.length && observedTextHandoff(source.events, evidence.turn, textBinding) &&
@@ -6927,8 +6949,12 @@ export async function apply(ctx) {
     }
     const handoffAlternate = canReview && review !== true && await personalHandoffAlternate(sessionId, resultView, signal)
     const handoffPair = handoffAlternate && await personalHandoffPair(sessionId, resultView, handoffAlternate, signal)
+    const workflowEnvironment = evidence.entries?.some(entry => entry.workflowCandidate)
+      ? await discover().catch(() => { signal?.throwIfAborted() }) : undefined
+    const { entries, workflowDecisions } = observedComparisonWorkflows(evidence.entries, presetId, workflowEnvironment)
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
+      ...(evidence.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }),
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
@@ -6948,7 +6974,7 @@ export async function apply(ctx) {
         checked = handoff.checked
         heroName = checked.view.heroName
       } else if (armory) {
-        const ecosystem = await discover()
+        const ecosystem = workflowEnvironment ?? await discover()
         const native = matchHero(presetId, records.get(presetId))
         checked = { ...await verifiedPlanComparisonArm({ presetId, heroId: native.id }, ecosystem), ecosystem }
         if (!matchesLessonIdentity(target.identity, checked.identity, checked.draft, checked.candidate, ecosystem)) {
@@ -6969,7 +6995,7 @@ export async function apply(ctx) {
       const { draft, candidate, ecosystem } = checked
       const art = packageArt(uploaded, ecosystem)
       const hero = { id: draft.presetId, name: heroName, art: art('hero', draft.presetId) }
-      const gear = recordedComparisonGear(records.get(presetId), draft, ecosystem, art, choices)
+      const gear = recordedComparisonGear(records.get(presetId), draft, ecosystem, art, workflowDecisions)
       const removed = historicalRemovals(candidate, presetEquipment(ecosystem, draft.presetId), ecosystem)
       const comparison = await compare(draft, ecosystem, candidate)
       signal?.throwIfAborted()
@@ -6991,7 +7017,7 @@ export async function apply(ctx) {
       return comparisonLoadout(record.baseline, signal)
     }
     if (!record || !store.armsFor(record).includes(arm)) throw new Error('找不到这局实战对照。')
-    const observed = await readComparisonArm(store, record, arm, signal)
+    const observed = await readComparisonArm(store, record, arm, signal, { includeWorkflowDecisions: true })
     if (!observed.canReuse) throw new Error('这局还没有可复用出装的实战记录。')
     const saved = await store.readArm(comparisonId, arm)
     const original = records.get(saved?.presetId)
@@ -7000,15 +7026,17 @@ export async function apply(ctx) {
     const [ecosystem, uploaded] = await Promise.all([discover(), appearance.index()])
     const art = packageArt(uploaded, ecosystem)
     const hero = { id: heroId, name: pinned?.heroName ?? matchHero(heroId, original).name, art: art('hero', heroId) }
-    const { sessionId, turn, entries, deliverables } = observed
+    const { sessionId, turn, deliverables } = observed
     const choices = comparisonChoices(observed)
+    const { entries, workflowDecisions } = observedComparisonWorkflows(observed.entries, saved?.presetId, ecosystem)
     const workspaceId = ctx.get('workspaceRegistry')?.get(saved?.workspaceId)?.id
-    const result = { sessionId, workspaceId, ...planComparisonLabels(record, arm), hero, turn, entries, deliverables, choices, gear: [] }
+    const result = { sessionId, workspaceId, ...planComparisonLabels(record, arm), hero, turn, entries, deliverables, choices, gear: [],
+      ...(workflowDecisions.length && { workflowDecisions }) }
     if (!saved?.presetId || (!original && saved.presetId !== heroId)) {
       return { ...result, reason: '实战中的原出装目前无法读取。' }
     }
     const draft = recordedLoadoutDraft(original, heroId, ecosystem)
-    result.gear = recordedComparisonGear(original, draft, ecosystem, art, choices)
+    result.gear = recordedComparisonGear(original, draft, ecosystem, art, workflowDecisions)
     try {
       signal?.throwIfAborted()
       const verified = pinned && await verifiedPlanComparisonArm(pinned, ecosystem)

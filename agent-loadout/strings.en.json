@@ -2238,6 +2238,7 @@
   "已保留输入栏原有草稿。可复制同题任务后手动粘贴。": "Your existing draft was kept. You can copy and paste the shared task.",
   "可复制同题任务，粘贴到会话输入栏。": "Copy and paste the shared task into the composer.",
   "实测工具调用": "Observed tool calls",
+  "装备实测选择": "Recorded gear choices",
   "实际使用的模型": "Observed model",
   "你实际选择了 ": "You selected ",
   "交付文件": "Delivered files",

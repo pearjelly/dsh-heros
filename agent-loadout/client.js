@@ -3503,15 +3503,40 @@ window.__ModuleLoader__.load({
       close()
     }
 
-    function ObservedComparisonCalls({ entries }) {
+    const workflowDecisionGear = { evidence: '证据核验', review: '交付前复核' }
+
+    function workflowDecisionRows(decisions) {
+      if (!decisions?.length) return empty
+      return Object.entries(workflowDecisionGear).flatMap(([gearId, name]) => {
+        const choices = [...new Set(decisions.filter(decision => decision.gearId === gearId).flatMap(decision => decision.choices))]
+        return choices.length ? [{ gearId, name, choices }] : empty
+      })
+    }
+
+    function WorkflowDecisionReceipts({ rows }) {
+      if (!rows.length) return null
+      return h('ul', { className: 'moba-lighthouse-results moba-workflow-decisions', 'aria-label': t('装备实测选择') },
+        rows.map(({ gearId, name, choices }) => h('li', { key: gearId },
+          h('div', null, h('strong', null, t(name)), h('small', null, t('实际选择'), ' · ', choices.join(' / '))))))
+    }
+
+    function unsummarizedChoices(entry, workflowRows) {
+      const observed = entry.name === 'ask_user_question' ? entry.workflowDecision : undefined
+      return observed && workflowRows.some(row => row.gearId === observed.gearId && row.choices.includes(observed.choice))
+        ? entry.choices?.filter(choice => choice !== observed.choice) : entry.choices
+    }
+
+    function ObservedComparisonCalls({ entries, workflowRows = empty }) {
       const tools = entries?.filter(entry => entry.type === 'tool') ?? empty
       if (!tools.length) return null
       return h('ul', { className: 'moba-lighthouse-results', 'aria-label': t('实测工具调用') },
-        tools.map((entry, index) => h('li', { key: index },
-          h('div', null, h('strong', null, entry.name),
+        tools.map((entry, index) => {
+          const choices = unsummarizedChoices(entry, workflowRows)
+          return h('li', { key: index }, h('div', null, h('strong', null, entry.name),
             entry.sourceNames?.length > 0 && h('small', null, t('调用来源 ') + entry.sourceNames.join(' / ')),
-            entry.choices?.length > 0 && h('small', null, t('你实际选择了 ') + entry.choices.join(' / '))),
-          h('span', { 'data-state': entry.state }, t(reportToolStates[entry.state] ?? entry.state)))))
+            choices?.length > 0 && h('small', null, t('你实际选择了 ') + choices.join(' / '))),
+            h('span', { 'data-state': entry.state }, t(reportToolStates[entry.state] ?? entry.state)))
+        }))
     }
 
     function comparisonArmName(config, arm) {
@@ -6210,6 +6235,7 @@ window.__ModuleLoader__.load({
       const value = current?.value
       const recordedChoices = new Set(value?.entries?.flatMap(entry => entry.choices ?? empty))
       const otherChoices = value?.choices?.filter(choice => !recordedChoices.has(choice)) ?? empty
+      const workflowRows = workflowDecisionRows(value?.workflowDecisions)
       const gearTitle = t(value?.draft ? '已验证的原出装' : '原出装记录')
 
       useEffect(() => {
@@ -6240,12 +6266,13 @@ window.__ModuleLoader__.load({
           value.hero && h('div', { className: 'moba-proven-hero' },
             h(HeroArt, { ...value.hero, className: 'moba-match-plan-portrait' }),
             h('div', null, h('strong', null, value.hero.name), h('p', null, comparisonArmName(config, value)))),
+          h(WorkflowDecisionReceipts, { rows: workflowRows }),
           value.gear?.length > 0 && h('section', { className: 'moba-history-gear', 'aria-label': gearTitle },
             h('h3', null, gearTitle),
             h('ul', null, value.gear.map(item => h('li', { key: item.id }, h(ItemArt, { item }),
               h('div', null, h('strong', null, item.name),
                 item.sourceName && h('small', null, t('原来源 ') + item.sourceName)))))),
-          h(ObservedComparisonCalls, { entries: value.entries }),
+          h(ObservedComparisonCalls, { entries: value.entries, workflowRows }),
           otherChoices.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('你实际选择了 ') + otherChoices.join(' / ')),
           value.deliverables?.length > 0 && h('div', { className: 'moba-lighthouse-artifacts' },
             h('h4', null, t('已交付的文件')), h('ul', null, value.deliverables.map((item, index) => h('li', { key: index }, item.name)))),
@@ -12277,11 +12304,12 @@ window.__ModuleLoader__.load({
         tools?.length > 0 && h('p', { className: 'moba-lighthouse-note' }, t('实测工具调用'), ' · ', h('code', null, tools.join(' · '))))
     }
 
-    function ReviewedTaskEvidence({ evidence, showLabel }) {
+    function ReviewedTaskEvidence({ evidence, showLabel, remainingChoices }) {
       const { side, choices, deliveredCount, originalAttached, tools, handoffKeep } = evidence
       const label = handoffKeep ? handoffStyleLabels[side] : heroPersonalPairSides[side].label
       return h(Fragment, null, showLabel && h('p', { className: 'moba-plan-note' }, t(label)),
-        handoffKeep && h(ObservedChoiceSummary, { choices }),
+        handoffKeep && (remainingChoices === undefined || remainingChoices.length > 0) &&
+          h(ObservedChoiceSummary, { choices: remainingChoices ?? choices }),
         h(HeroPersonalRunEvidence, { originalAttached, tools, deliveredCount }))
     }
 
@@ -12340,6 +12368,7 @@ window.__ModuleLoader__.load({
       const singleSave = result?.canReview && !result.heroPair && !result.handoffPair
       const sourceTrial = !alternateLabel && result?.sourceTrial?.arm === 'standard' ? result.sourceTrial : undefined
       const reviewedSide = result?.handoffStyle ?? pairSide
+      const workflowRows = review || !result?.handoffPair ? workflowDecisionRows(result?.workflowDecisions) : empty
       const reviewedEvidence = reviewedSide && result?.draft && (result.handoffKeep || result.materialDelivered === true) && {
         side: reviewedSide, originalAttached: result.materialDelivered === true, draft: result.draft,
         tools: [...new Set(result.entries?.filter(entry => entry.type === 'tool' && entry.state === 'completed').map(entry => entry.name))],
@@ -12410,7 +12439,10 @@ window.__ModuleLoader__.load({
           pairSide ? h('p', { className: 'moba-match-action-note' }, [t(pairLabel), result.hero?.name].filter(Boolean).join(' · '))
             : sourceLabel && h('p', { className: 'moba-match-action-note' }, t('练习出装') + ' · ' + sourceLabel),
           review ? result.draft && h(Fragment, null,
-            reviewedEvidence && h(ReviewedTaskEvidence, { evidence: reviewedEvidence }),
+            h(WorkflowDecisionReceipts, { rows: workflowRows }),
+            reviewedEvidence && h(ReviewedTaskEvidence, { evidence: reviewedEvidence, remainingChoices: workflowRows.length
+              ? [...new Set(result.entries?.flatMap(entry => entry.name === 'ask_user_question' && entry.state === 'completed'
+                ? unsummarizedChoices(entry, workflowRows) ?? empty : empty))] : undefined }),
             h(PlanEquipment, { items: result.gear ?? empty, removed: result.removed ?? empty }),
             h(SharedPlanCapabilities, { comparison: result.comparison }))
             : h(Fragment, null,
@@ -12418,6 +12450,7 @@ window.__ModuleLoader__.load({
                 t(result.status === 'unavailable' ? '暂不可核对' : comparisonArmStates[result.status] ?? result.status),
                 result.turn && t('第 ') + result.turn + t(' 回合'),
               ].filter(Boolean).join(' · ')),
+              h(WorkflowDecisionReceipts, { rows: workflowRows }),
               (alternateLabel || handoffAlternate || singleSave) && h('div', { className: 'moba-lesson-result-options' },
                 alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                   onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
@@ -12431,7 +12464,7 @@ window.__ModuleLoader__.load({
                 onClick: () => onPersonalFlow({ mode: 'source-trial', source: sourceTrial }) },
                 t('在灯塔试玩标准模式'), h(Glyph, { kind: 'arrow', size: 16 })),
               result.textHandoff && h('p', { className: 'moba-match-action-note' }, t('已记录终端工具完成和助手文字回复。')),
-              h(ObservedComparisonCalls, { entries: result.entries }),
+              h(ObservedComparisonCalls, { entries: result.entries, workflowRows }),
               !result.handoffPair && h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
                 complete: result.status === 'complete', materialDelivered: result.materialDelivered }),
               h(LessonTaskAwards, { awards: result.awards }))),
@@ -14885,6 +14918,9 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-results li { display: flex; justify-content: space-between; gap: 6px; min-width: 0; padding: 5px;
         border: 1px solid #3d4051; font-size: 12px; }
       .moba-lighthouse-results small { display: block; color: var(--muted); font-size: 11px; }
+      .moba-workflow-decisions li { border-color: #705a3c; background: #201d26; overflow-wrap: anywhere; }
+      .moba-workflow-decisions li > div { min-inline-size: 0; }
+      .moba-workflow-decisions small { color: #ead3ae; }
       .moba-lighthouse-results li > span { flex: none; max-width: 9em; font-size: 11px; color: #f3c592; }
       .moba-lighthouse-results li > span[data-state="completed"] { color: #adceb6; }
       .moba-lighthouse-artifacts { padding: 6px; background: #14252b; }

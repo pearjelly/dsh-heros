@@ -5,6 +5,7 @@ import { sourceConflictCode } from './tool-bindings.js'
 import { validShortcut } from './match-shortcuts.js'
 import { materialProofRecord } from './match-comparisons.js'
 import { englishText } from './localization.js'
+import { lighthouseEvidenceChoices, lighthouseEvidenceDecision, lighthouseReviewDecision } from './lighthouse.js'
 
 const requestPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 const pageSize = 8
@@ -233,19 +234,46 @@ function questionAnswers(message, maxLength = Infinity) {
   }
 }
 
-function matchesQuestionAnswers(call, answers) {
-  const input = call.data.arguments
-  if (!answers?.length || typeof input !== 'string' || input.length > 32_000) return false
+function questionInput(call) {
+  const input = call?.data?.arguments
+  if (typeof input !== 'string' || input.length > 32_000) return
   try {
     const { questions } = JSON.parse(input)
-    if (!Array.isArray(questions) || questions.length !== answers.length ||
-      !questions.every(question => typeof question?.id === 'string' && question.id)) return false
-    const ids = new Set(questions.map(question => question.id))
-    return ids.size === questions.length && answers.every(item => ids.delete(item?.id) &&
-      Array.isArray(item.selected) && item.selected.every(label => typeof label === 'string') &&
-      (item.custom === undefined || typeof item.custom === 'string'))
+    if (Array.isArray(questions)) return questions
   } catch {
-    return false
+    // An old call without usable arguments cannot establish which question was offered.
+  }
+}
+
+function matchingQuestionAnswers(questions, answers) {
+  if (!Array.isArray(answers) || !answers.length || questions?.length !== answers.length ||
+    !questions.every(question => typeof question?.id === 'string' && question.id)) return false
+  const ids = new Set(questions.map(question => question.id))
+  return ids.size === questions.length && answers.every(item => ids.delete(item?.id) &&
+    Array.isArray(item.selected) && item.selected.every(label => typeof label === 'string') &&
+    (item.custom === undefined || typeof item.custom === 'string'))
+}
+
+function matchesQuestionAnswers(call, answers) {
+  return matchingQuestionAnswers(questionInput(call), answers)
+}
+
+function attributedWorkflowDecision(call, answers) {
+  const questions = questionInput(call)
+  if (questions?.length !== 1 || !matchingQuestionAnswers(questions, answers)) return
+  const [{ question, options }] = questions
+  const [{ selected, custom }] = answers
+  if (typeof question !== 'string' || !question.trim() || !Array.isArray(options) || selected.length !== 1 || custom?.trim()) return
+  const labels = options.map(option => option?.label)
+  if (!labels.every(label => typeof label === 'string' && label.length > 0 && label.length <= 200)) return
+  const [choice] = selected
+  if (!labels.includes(choice)) return
+  if (labels.length === lighthouseEvidenceChoices.length) {
+    const kinds = new Set(labels.map(label => lighthouseEvidenceDecision([label])))
+    if (lighthouseEvidenceChoices.every(kind => kinds.has(kind))) return { gearId: 'evidence', choice }
+  } else if (labels.length === 2) {
+    const kinds = new Set(labels.map(lighthouseReviewDecision))
+    if (kinds.has('confirm') && kinds.has('revise')) return { gearId: 'review', choice }
   }
 }
 
@@ -298,7 +326,7 @@ function applyToolSource(call, { id, sourceId, sourceName, blocked, registeredSo
   if (!call.sourceNames.includes(label)) call.sourceNames.push(label)
 }
 
-async function reportTurn(source, start, end, receipts) {
+async function reportTurn(source, start, end, receipts, includeWorkflowDecisions = false) {
   const events = source.events
   const beginning = events[start]
   const calls = new Map()
@@ -344,6 +372,15 @@ async function reportTurn(source, start, end, receipts) {
       const call = callsBySeq.get(sourceEventSeqs?.[0]) ?? matching
       if (!call) continue
       settleTool(call, data.message, data.error, time)
+      if (includeWorkflowDecisions && call.name === 'ask_user_question') {
+        delete call.workflowDecision
+        if (call === matching && call.state === 'completed' && data.turn === beginning.data.turn &&
+          (sourceEventSeqs === undefined || sourceEventSeqs?.[0] === call.seq) &&
+          (surfaceOp === undefined || surfaceOp === 'append')) {
+          const decision = attributedWorkflowDecision(events[call.seq], questionAnswers(data.message, 16_384))
+          if (decision) call.workflowDecision = decision
+        }
+      }
       if (call === matching && webCalls.has(key) && data.turn === beginning.data.turn &&
         (sourceEventSeqs === undefined || sourceEventSeqs?.[0] === call.seq) &&
         (surfaceOp === undefined || surfaceOp === 'append')) {
@@ -531,7 +568,7 @@ function answeredComparisonTurns(events, after, asks, live, presetId, verifyMate
 export async function comparisonEvidence(source, { cwd, presetId, task, material, verifyMaterialDelivery,
   verifyMaterialProof = true, exactMessages = !verifyMaterialProof, linkedChoicesOnly = false,
   includeQuestions = Boolean(material), includeToolCoordinates, includeWindows, includeFileCoordinates, allowOwnInput = false,
-  includeTaskFingerprint = false, includeTaskText = false }, receipts) {
+  includeTaskFingerprint = false, includeTaskText = false, includeWorkflowDecisions = false }, receipts) {
   const unavailable = reason => ({ status: 'unavailable', reason })
   if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
     return unavailable('session-unavailable')
@@ -611,16 +648,21 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
       const { provider, model } = event.data.header?.config ?? {}
       if (typeof model === 'string' && model) models.add(typeof provider === 'string' && provider ? provider + '/' + model : model)
     }
-    const evidence = await reportTurn(source, from, finish < 0 ? events.length : finish + 1, receipts)
-    for (const { type, name, state, sourceNames, choices, nested, seq } of evidence?.entries ?? []) {
+    const evidence = await reportTurn(source, from, finish < 0 ? events.length : finish + 1, receipts, includeWorkflowDecisions)
+    for (const { type, name, state, sourceNames, sourceId, choices, nested, seq, workflowDecision } of evidence?.entries ?? []) {
       if (type !== 'tool') continue
       const callId = events[seq]?.data.callId
       const answer = name === 'ask_user_question' && settled.get(callId)
       const selected = answer && answer.flatMap(item => item.selected ?? []).filter(label => typeof label === 'string' && label.length <= 200)
       const linkedReply = exactMessages && selected?.length && state === 'unfinished'
       const recordedChoices = !linkedChoicesOnly || replies?.has(callId) ? choices : undefined
-      entries.push({ type, name, state: linkedReply ? 'completed' : state, sourceNames, choices: selected?.length ? selected : recordedChoices, nested,
-        ...(includeToolCoordinates && { seq }) })
+      const observedState = linkedReply ? 'completed' : state
+      const observedChoices = selected?.length ? selected : recordedChoices
+      const candidate = includeWorkflowDecisions && !nested && sourceId && observedState === 'completed' &&
+        (answer && replies?.has(callId) ? attributedWorkflowDecision(events[seq], answer) : workflowDecision)
+      entries.push({ type, name, state: observedState, sourceNames, choices: observedChoices, nested,
+        ...(includeToolCoordinates && { seq }),
+        ...(candidate && observedChoices?.includes(candidate.choice) && { workflowCandidate: { ...candidate, sourceId } }) })
     }
   }
   const materialDelivered = verifyMaterialDelivery && [...files.keys()].some(file => resolve(cwd, file) === resolve(cwd, material))

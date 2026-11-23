@@ -52,6 +52,52 @@ function evidence() {
   ]
 }
 
+test('workflow decisions require the original offered choices and a linked native answer', async () => {
+  const cwd = '/owned-workspace'
+  const presetId = 'standard'
+  const sourceId = 'plugin:stock-ask'
+  const review = ['Confirm handoff', 'Revise draft']
+  const evidence = ['继续补证', '降级推荐', '暂缓提交']
+  async function read(labels, choice, { answerId = 'decision', custom, callSeq = 2, attachSource = true } = {}) {
+    const selected = [choice]
+    const events = [
+      { type: 'turn/start', seq: 0, data: { turn: 1 } },
+      { type: 'user/message', seq: 1, surfaceOp: 'append', data: {
+        source: { kind: 'user' }, content: [{ type: 'text', text: 'Review the draft.' }],
+      } },
+      { type: 'tool/call', seq: 2, data: { turn: 1, step: 1, callId: 'ask', name: 'ask_user_question',
+        arguments: JSON.stringify({ questions: [{ id: 'decision', question: 'How should we proceed?',
+          options: labels.map(label => ({ label })) }] }) } },
+      { type: toolSourceRecord, seq: 3, ignorable: true, data: { callSeq: 2, ...(attachSource && { sourceId }) } },
+      { type: 'tool/result', seq: 4, surfaceOp: 'append', sourceEventSeqs: [callSeq], data: { turn: 1, step: 1, message: {
+        toolCallId: 'ask', isError: false, content: [{ type: 'text', text: JSON.stringify({
+          answers: [{ id: answerId, selected, ...(custom && { custom }) }],
+        }) }],
+      } } },
+      { type: 'turn/end', seq: 5, data: { turn: 1, reason: { kind: 'completed' } } },
+    ]
+    const source = { header: { cwd, agentPreset: presetId }, inheritedEventCount: 0, source: 'archive', events }
+    const result = await comparisonEvidence(source, { cwd, presetId, allowOwnInput: true, exactMessages: true,
+      includeQuestions: true, linkedChoicesOnly: true, includeWorkflowDecisions: true })
+    return result.entries.find(entry => entry.name === 'ask_user_question')
+  }
+
+  assert.deepEqual((await read(review, review[1])).workflowCandidate, { gearId: 'review', choice: review[1], sourceId })
+  assert.deepEqual((await read(evidence, evidence[1])).workflowCandidate, { gearId: 'evidence', choice: evidence[1], sourceId })
+  const unrelated = await read(['Close the page', review[1]], review[1])
+  assert.deepEqual(unrelated.choices, [review[1]])
+  assert.equal(unrelated.workflowCandidate, undefined)
+  for (const [labels, choice, edit] of [
+    [review, 'Request changes'],
+    [review, review[1], { answerId: 'other-question' }],
+    [review, review[1], { custom: 'Rewrite the last paragraph' }],
+    [review, review[1], { callSeq: 1 }],
+    [review, review[1], { attachSource: false }],
+  ]) {
+    assert.equal((await read(labels, choice, edit)).workflowCandidate, undefined)
+  }
+})
+
 test('Web Research accepts the complete pinned native manifest', () => {
   const events = evidence()
   assert.equal(observedWebSource(events, 1, binding), true)
