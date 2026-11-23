@@ -6928,6 +6928,10 @@ window.__ModuleLoader__.load({
         sameReviewedDraft(draft, pairSaveEvidence.draft) ? pairSaveEvidence : undefined
       const changedHandoff = mode === 'create' && pairSaveEvidence?.handoffKeep && !reviewedPair
       const cannotSaveDraft = (mode === 'create' || mode === 'replace') && (!canSave || changedHandoff)
+      const startTask = plan && h('button', { className: 'moba-start moba-plan-task-start', type: 'button', ref: taskButton,
+        disabled: Boolean(plan.broken), onClick: () => setTaskPlan(options ? { plan, alternatives: matchingTaskPlans(plans, options) }
+          : { plan, catalog: retestId ? plans : undefined }) },
+        t('用这套出装开新任务'), h(Glyph, { kind: 'arrow', size: 16 }))
       const testedSource = plan && (plan.hasHandoffOrigin || plan.hasEvidenceOrigin) && onOpenSource &&
         h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
           onVisit: (sessionId, reference) => { close(); onOpenSource(sessionId, reference) } })
@@ -7003,7 +7007,7 @@ window.__ModuleLoader__.load({
                     item.broken && h('small', { className: 'moba-gallery-unavailable' }, t('不可用')))))
                   : h('p', { className: 'moba-empty', role: 'status' }, plans.length ? t('未找到匹配的方案。') : t('还没有出装方案。'))),
               plan && h('div', { className: 'moba-plan-preview' },
-                plan.hasHandoffOrigin && testedSource && h('div', { className: 'moba-plan-source-actions' }, testedSource),
+                plan.hasHandoffOrigin && h('div', { className: 'moba-plan-source-actions' }, startTask, testedSource),
                 h('div', { className: 'moba-plan-hero' },
                   h(HeroArt, { id: plan.heroId, art: plan.heroArt, className: 'moba-splash' }),
                   h('div', { className: 'moba-stage-shade' }),
@@ -7015,10 +7019,7 @@ window.__ModuleLoader__.load({
                   (plan.items.length || plan.removed.length || !plan.broken) &&
                     h(PlanEquipment, { items: plan.items, removed: plan.removed }),
                   h('div', { className: 'moba-plan-launches' },
-                    h('button', { className: 'moba-start moba-plan-task-start', type: 'button', ref: taskButton, disabled: Boolean(plan.broken),
-                      onClick: () => setTaskPlan(options ? { plan, alternatives: matchingTaskPlans(plans, options) }
-                        : { plan, catalog: retestId ? plans : undefined }),
-                    }, t('用这套出装开新任务'), h(Glyph, { kind: 'arrow', size: 16 })),
+                    !plan.hasHandoffOrigin && startTask,
                     h('button', { className: 'moba-roster-open', type: 'button', ref: pairButton, disabled: Boolean(plan.broken) || !hasAlternative,
                       onClick: () => setPairPlan({ plan }) }, t('与另一份方案同题对照')),
                     canRetest && h('button', { className: 'moba-roster-open', type: 'button', ref: retestButton,
@@ -11889,8 +11890,10 @@ window.__ModuleLoader__.load({
       .moba-plan-hero .moba-hero-title { inset: auto 14px 11px; }
       .moba-plan-details, .moba-plan-fields { display: grid; gap: 10px; padding: 14px; min-width: 0; }
       .moba-plan-note { margin: 0; color: #e0dbce; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-      .moba-plan-source-actions { display: grid; gap: 6px; padding: 8px 14px; border-block-end: 1px solid var(--line); }
-      .moba-plans .moba-plan-source-action { justify-self: start; min-height: 44px; }
+      .moba-plan-source-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+        padding: 8px 14px; border-block-end: 1px solid var(--line); }
+      .moba-plan-source-actions > button { min-block-size: 44px; max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
+      .moba-plan-source-actions > p { flex-basis: 100%; }
       .moba-plan-gear { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 7px; }
       .moba-plan-gear li { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 7px 4px 4px; background: #0e141f; border: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
       .moba-plan-gear .moba-item-art { flex: none; width: 28px; }
