@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.197.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.198.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -29,7 +29,9 @@ In the Armory, use **Choose a loadout** to jump to **Hero roster**. Select a her
 
 ## Which version of the rule applies?
 
-In the gear list, open **Web Research**, then **Which version of the rule applies?** An old setup sheet lists RC builds, but your test machine runs a preview build. The practice equips Minimal with native web reading and opens a separate draft for you to send. Use the current manifest only after the tool retrieves the full pinned publisher source. You can also **Keep unverified**. The practice records your choice in that conversation.
+Open **Web Research practice** near the top of the lobby, or choose **Which version of the rule applies?** on the **Web Research** gear card. The old setup sheet lists RC builds. Can your preview build use this loadout? The practice equips Minimal with native web reading and opens a separate draft for you to send. Once the tool retrieves the full pinned publisher source, you can **Use the current manifest**. Choose **Keep unverified** if you want to hold off.
+
+When the source is missing or the result is marked unverified, **Try the same question again** opens a new draft with the original question. Any recorded choice remains in the original conversation.
 
 ## Try two heroes on the same task
 

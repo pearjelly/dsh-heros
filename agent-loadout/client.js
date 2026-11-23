@@ -1303,7 +1303,7 @@ window.__ModuleLoader__.load({
               t(busy ? '正在准备对局…' : error ? '重试' : evidence ? '开始证据取舍' : '开始换装练习'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
-    function WebSourcePractice({ request, onCancel, onOpen }) {
+    function WebSourcePractice({ request, sampleLanguage, onCancel, onOpen }) {
       const language = useLanguage()
       const [attempt, retry] = useState(0)
       const [state, setState] = useState(null)
@@ -1317,11 +1317,11 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         const abort = new AbortController()
         const action = 'web-source-preview'
-        request(action, { action }, abort.signal, language)
+        request(action, { action, sampleLanguage }, abort.signal, language)
           .then(value => { if (!abort.signal.aborted) setState({ preview: value, language, attempt }) })
           .catch(reason => { if (!abort.signal.aborted) setState({ error: reason.message, language, attempt }) })
         return () => abort.abort()
-      }, [request, attempt, language])
+      }, [request, attempt, language, sampleLanguage])
       useEffect(() => () => opening.current?.abort(), [])
 
       async function open() {
@@ -1335,7 +1335,8 @@ window.__ModuleLoader__.load({
         }
         try {
           const action = 'web-source-open'
-          const result = await request(action, { action, token: preview.token, launchId: launch.current.id }, abort.signal, language)
+          const result = await request(action, { action, sampleLanguage, token: preview.token, launchId: launch.current.id },
+            abort.signal, language)
           if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
         } catch (reason) {
           if (!abort.signal.aborted) setOpenError(reason.message)
@@ -1350,7 +1351,9 @@ window.__ModuleLoader__.load({
         h('p', null, t('用极简模式加装网页检索，对照旧安装表与发布方原文。')),
         preview && h(InstallFacts, { facts: [[t('旧安装表'), 'v' + preview.oldVersion + ' · ' + t('只列 RC 版')], [t('准备试用'), 'v' + preview.version],
           [t('测试机'), 'DSH ' + preview.hostVersion]] }),
-        h('p', { className: 'moba-starter-note' }, t('打开独立草稿，手动发送。看完原文后，由你决定采用新版或标为待核实。')),
+        h('p', { className: 'moba-starter-note' }, t(sampleLanguage
+          ? '新局使用同一题，原局选择保留。打开草稿后手动发送。'
+          : '打开独立草稿，手动发送。看完原文后，由你决定采用新版或标为待核实。')),
         !current && h('p', { role: 'status' }, t('正在核对网页检索出装…')),
         (openError || current?.error) && h('p', { className: 'moba-alert', role: 'alert' }, openError || current.error),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
@@ -1361,14 +1364,16 @@ window.__ModuleLoader__.load({
             t(busy ? '正在准备对局…' : '打开试玩草稿'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function WebSourcePracticeResult({ sessionId, request }) {
+    function WebSourcePracticeResult({ sessionId, request, onOpen }) {
       const language = useLanguage()
       const [view, setView] = useState(null)
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const [attempt, retry] = useState(0)
+      const [repeatOpen, setRepeatOpen] = useState(false)
       const choosing = useRef(null)
       const recorded = useRef(null)
+      const repeatButton = useRef(null)
       useEffect(() => {
         const abort = new AbortController()
         let timer
@@ -1410,6 +1415,7 @@ window.__ModuleLoader__.load({
 
       const complete = view?.status === 'complete'
       const unavailable = view?.status === 'unavailable'
+      const canRepeat = complete && view.sampleLanguage && (!view.verified || view.choice === 'pending')
       return h('section', { className: 'moba-lighthouse-anchor moba-web-source-result', 'aria-label': t('哪一版规则有效？') },
         h('div', null, h('strong', null, t('哪一版规则有效？'))),
         !complete && !unavailable && !error && h('p', { role: 'status' }, t('正在核对本次原文读取…')),
@@ -1420,13 +1426,23 @@ window.__ModuleLoader__.load({
             : t('本局没有拿到可核对的发布方完整清单。')),
           view.verified && h('p', null, h('a', { href: view.url, target: '_blank', rel: 'noopener noreferrer' },
             t('查看发布方清单') + ' · v' + view.version), ' · DSH ' + view.hostVersion),
-          view.choice ? h('p', { ref: recorded, role: 'status', tabIndex: -1 },
-            t(view.choice === 'use-current' ? '已选择采用新版清单。' : '已保留为待核实。'))
-            : h('div', { className: 'moba-lighthouse-anchor-actions' },
+          view.choice && h('p', { ref: recorded, role: 'status', tabIndex: -1 },
+            t(view.choice === 'use-current' ? '已选择采用新版清单。' : '已保留为待核实。')),
+          (!view.choice || canRepeat) && h('div', { className: 'moba-lighthouse-anchor-actions' },
+            !view.choice && h(Fragment, null,
               view.verified && h('button', { type: 'button', className: 'moba-settlement-button', disabled: busy,
                 onClick: () => choose('use-current') }, t('采用新版清单')),
               h('button', { type: 'button', className: 'moba-settlement-button', disabled: busy,
-                onClick: () => choose('pending') }, t('标为待核实')))),
+                onClick: () => choose('pending') }, t('标为待核实'))),
+            canRepeat && h('button', { type: 'button', ref: repeatButton, className: 'moba-settlement-button',
+              disabled: busy, 'aria-haspopup': 'dialog', onClick: () => setRepeatOpen(true) }, t('用同一题再试')))),
+        canRepeat && repeatOpen && h(WebSourcePractice, { request, sampleLanguage: view.sampleLanguage, onCancel: () => {
+          setRepeatOpen(false)
+          requestAnimationFrame(() => repeatButton.current?.focus())
+        }, onOpen: (nextSessionId, task) => {
+          setRepeatOpen(false)
+          onOpen(nextSessionId, task)
+        } }),
         error && h('p', { role: 'alert', className: 'moba-alert' }, error, ' ',
           h('button', { type: 'button', className: 'moba-text', disabled: busy,
             onClick: () => { setError(''); retry(value => value + 1) } }, t('重新核对'))))
@@ -7977,6 +7993,7 @@ window.__ModuleLoader__.load({
       }, [request, loadAttempt, language])
 
       const presets = data?.presets ?? empty
+      const canPracticeWeb = presets.some(hero => hero.id === 'minimal' && !hero.broken)
       const roles = data?.roles ?? emptyMap
       const savedBuilds = labelSavedBuilds(data?.saved ?? empty)
       const plans = data?.plans ?? empty
@@ -8524,6 +8541,15 @@ window.__ModuleLoader__.load({
               document.fullscreenEnabled && h('button', { type: 'button', className: 'moba-icon-action',
                 onClick: toggleFullscreen, 'aria-label': fullscreen ? t('退出全屏') : t('全屏备战'),
                 'aria-pressed': fullscreen, title: fullscreen ? t('退出全屏') : t('全屏备战') }, h(Glyph, { kind: 'fullscreen' })))),
+          data && h('div', { className: 'moba-lobby-entry-actions' },
+            canPracticeWeb && h('button', { type: 'button', className: 'moba-starter-entry moba-web-practice-entry',
+              disabled: pending, 'aria-haspopup': 'dialog', onClick: event => setWebPracticeTrigger(event.currentTarget) },
+              h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'search', size: 20 })),
+              h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t('网页检索试玩')),
+                h('span', null, t('旧表只列 RC，预览版能用吗？'))),
+              h(Glyph, { kind: 'arrow', size: 18 })),
+            h('button', { type: 'button', className: 'moba-roster-open moba-choose-loadout', disabled: pending, onClick: chooseLoadout },
+              h(Glyph, { kind: 'team', size: 17 }), t('去配装'))),
           data && h('div', { className: 'moba-lighthouse-entry' },
             h('div', { className: 'moba-handoff-entry-actions' },
               h('button', { type: 'button', className: 'moba-roster-open moba-review-start-button', disabled: pending,
@@ -8552,8 +8578,6 @@ window.__ModuleLoader__.load({
                 h('span', null, t('找到补给卡就撤，还是带着交付物回来？'))),
               h('span', { className: 'moba-starter-entry-action' }, t('选择路线'), h(Glyph, { kind: 'arrow', size: 18 }))),
             h('div', { className: 'moba-lighthouse-entry-actions' },
-              h('button', { type: 'button', className: 'moba-roster-open', disabled: pending, onClick: chooseLoadout },
-                h(Glyph, { kind: 'team', size: 17 }), t('去配装')),
               data.lastHeroTrial && h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: resumeHeroTrialButton, 'aria-haspopup': 'dialog', 'aria-description': lastTrialNeed && t(lastTrialNeed.name),
                 onClick: () => setHeroTrialOpen({ trigger: resumeHeroTrialButton, comparisonId: data.lastHeroTrial.id }) },
@@ -8782,7 +8806,7 @@ window.__ModuleLoader__.load({
               onPracticeEvidence: presets.some(hero => hero.id === 'standard' && !hero.broken)
                 ? trigger => setLessonOpen({ lesson: lighthouseEvidenceLesson, trigger }) : undefined,
               onEvidenceHistory: trigger => showRunHistory(evidenceReplayScope, trigger),
-              onPracticeWeb: presets.some(hero => hero.id === 'minimal' && !hero.broken) ? setWebPracticeTrigger : undefined,
+              onPracticeWeb: canPracticeWeb ? setWebPracticeTrigger : undefined,
               heroNames: new Map(presets.map(hero => [hero.id, hero.name])),
               selected, onInspect: setInspected, onToggle: toggle, onManage: manage, onEnable: enableProfileItem,
               onOpenSource: openSource, onAppearance: editAppearance, onActions: editActions, onCollection: updateCollection,
@@ -11015,7 +11039,7 @@ window.__ModuleLoader__.load({
           h(Glyph, { kind: 'back', size: 14 }), t('返回这份方案'))),
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
-        snapshot?.webSourcePractice && h(WebSourcePracticeResult, { key: sessionId, sessionId, request }),
+        snapshot?.webSourcePractice && h(WebSourcePracticeResult, { key: sessionId, sessionId, request, onOpen: openDraftSession }),
         snapshot?.heroTrial && h(HeroTrialAnchor, { key: sessionId, member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
           onReturnTask: openTaskResult, consumeDraft: consumeTaskDraft, putTask: putTaskDraft, draftStore,
           hasTurn: Boolean(snapshot.running || receipt), workspaces }),
@@ -11791,6 +11815,12 @@ window.__ModuleLoader__.load({
         gap: clamp(7px, 2cqi, 15px); width: 100%; margin-block-end: 15px; padding: 8px 11px;
         border: 1px solid #8a754d; background: linear-gradient(115deg, #1b2d34, #17202b 62%, #272315);
         text-align: start; }
+      .moba-lobby-entry-actions { display: flex; gap: 7px; margin-block-end: 7px; }
+      .moba-web-practice-entry { flex: 1; min-inline-size: 0; min-block-size: 52px; margin: 0; }
+      .moba-web-practice-entry > svg { color: var(--gold); }
+      .moba-lobby-entry-actions .moba-choose-loadout { max-inline-size: min(34%, 11rem); min-inline-size: 0;
+        min-block-size: 44px; white-space: normal; text-align: start; }
+      .moba-choose-loadout svg { flex: none; }
       .moba-lighthouse-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; margin-block-end: 15px; }
       .moba-lighthouse-entry .moba-starter-entry { margin: 0; }
       .moba-lighthouse-entry .moba-hero-trial-entry { grid-column: 1 / -1; grid-template-columns: auto minmax(0, 1fr) auto;
@@ -11813,6 +11843,8 @@ window.__ModuleLoader__.load({
         .moba-lighthouse-entry-actions { display: flex; flex-wrap: wrap; }
       }
       @container (max-width: 390px) {
+        .moba-web-practice-entry { grid-template-columns: auto minmax(0, 1fr); }
+        .moba-web-practice-entry > svg { display: none; }
         .moba-lighthouse-entry .moba-starter-entry:not(.moba-hero-trial-entry) { grid-template-columns: auto minmax(0, 1fr); }
         .moba-lighthouse-entry .moba-starter-entry-action { display: none; }
       }

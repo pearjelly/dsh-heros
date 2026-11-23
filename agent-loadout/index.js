@@ -1418,8 +1418,11 @@ export async function apply(ctx) {
     return { ecosystem, sources: buildShareSources(ctx, ecosystem, boot), runtime: boot.getDshRuntimeVersion() }
   }
 
-  function requestedWebSourcePractice(_selection, english) {
-    const task = webSourceTask(english)
+  function requestedWebSourcePractice({ sampleLanguage }, english) {
+    if (sampleLanguage !== undefined && sampleLanguage !== 'en' && sampleLanguage !== 'zh') {
+      throw new Error(webSourceChanged)
+    }
+    const task = webSourceTask(sampleLanguage === undefined ? english : sampleLanguage === 'en')
     const hash = createHash('sha256').update(task).digest('hex')
     return { task, hash }
   }
@@ -1446,8 +1449,8 @@ export async function apply(ctx) {
     return { token, draft, candidate, webToolId, view: { planName: '网页检索', task } }
   }
 
-  async function previewWebSourcePractice(english, signal) {
-    const checked = await checkWebSourcePractice(requestedWebSourcePractice(null, english), signal)
+  async function previewWebSourcePractice(selection, english, signal) {
+    const checked = await checkWebSourcePractice(requestedWebSourcePractice(selection, english), signal)
     return { token: checked.token, oldVersion: webSourceOldVersion, version: webSourceVersion,
       hostVersion: webSourceHostVersion }
   }
@@ -1480,11 +1483,13 @@ export async function apply(ctx) {
       const { status, turn } = outcome
       if (status !== 'complete') return { status }
       const verified = observedWebSource(source.events, turn, binding)
+      const sampleLanguage = launch.task === webSourceTask(true) ? 'en' : launch.task === webSourceTask(false) ? 'zh' : undefined
       const decisionDirectory = join(directory, 'web-source-decisions')
       const decision = await readFile(join(decisionDirectory, sessionId + '.json'), 'utf8').then(JSON.parse).catch(error => {
         if (error.code !== 'ENOENT') throw error
       })
-      return { status, verified, ...(verified && { url: webSourceUrl, version: webSourceVersion, hostVersion: webSourceHostVersion }),
+      return { status, verified, sampleLanguage,
+        ...(verified && { url: webSourceUrl, version: webSourceVersion, hostVersion: webSourceHostVersion }),
         ...(decision?.sessionId === sessionId && (decision.choice === 'pending' || verified && decision.choice === 'use-current') &&
           { choice: decision.choice }) }
     } finally {
@@ -7400,7 +7405,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-combo-preview') value = await previewQuestCombo(selection)
         else if (selection?.action === 'growth-open') value = await startWithQuest(selection, request.signal)
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
-        else if (selection?.action === 'web-source-preview') value = await previewWebSourcePractice(english, request.signal)
+        else if (selection?.action === 'web-source-preview') value = await previewWebSourcePractice(selection, english, request.signal)
         else if (selection?.action === 'web-source-open') value = await openReviewedTask(selection, english, request.signal, 'web-source')
         else if (selection?.action === 'web-source-result') value = await readWebSourcePractice(selection, request.signal)
         else if (selection?.action === 'web-source-choice') value = await chooseWebSourcePractice(selection, request.signal)
