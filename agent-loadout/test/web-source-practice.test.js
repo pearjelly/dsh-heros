@@ -5,12 +5,36 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { openBuildPlans } from '../build-plans.js'
 import { decodeWebPilotChallenge, decodeWebPilotReport, encodeWebPilotChallenge, encodeWebPilotReport } from '../build-sharing.js'
-import { matchReport, observedPersonalWebReads, observedWebPilotFollowupRead, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from '../match-report.js'
+import { comparisonEvidence, matchReport, observedPersonalWebReads, observedWebPilotFollowupRead, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from '../match-report.js'
 import { englishText } from '../localization.js'
 import { observedWebSource, observedWebSourceResult, webSourceUrl } from '../web-source-practice.js'
 
 const manifest = await readFile(new URL('./fixtures/web-source-v196.json', import.meta.url), 'utf8')
 const binding = { id: 'tool:web', sourceId: 'plugin:stock-web' }
+
+test('personal web comparison keys only the exact completed native first plain-text task', async () => {
+  const cwd = '/owned-workspace'
+  const presetId = 'standard'
+  const text = `Check ${webSourceUrl}\n核对许可证。`
+  const part = { type: 'text', text }
+  function read(content, { surfaceOp = 'append', kind = 'user', includeTaskFingerprint = true } = {}) {
+    return comparisonEvidence({ header: { cwd, agentPreset: presetId }, inheritedEventCount: 0, source: 'archive', events: [
+      { type: 'turn/start', seq: 0, data: { turn: 1 } },
+      { type: 'user/message', seq: 1, surfaceOp, data: { source: { kind }, content } },
+      { type: 'turn/end', seq: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    ] }, { cwd, presetId, allowOwnInput: true, exactMessages: true, includeTaskFingerprint })
+  }
+  const observed = await read([part])
+  assert.equal(observed.status, 'complete')
+  assert.match(observed.taskFingerprint, /^[a-f0-9]{64}$/)
+  assert.equal((await read([{ ...part }])).taskFingerprint, observed.taskFingerprint)
+  assert.notEqual((await read([{ ...part, text: text + ' ' }])).taskFingerprint, observed.taskFingerprint)
+  assert.equal((await read([part, { type: 'text', text: 'second part' }])).taskFingerprint, undefined)
+  assert.equal((await read([part], { surfaceOp: 'replace' })).taskFingerprint, undefined)
+  assert.equal((await read([part], { kind: 'agent-message' })).taskFingerprint, undefined)
+  assert.equal((await read([part], { includeTaskFingerprint: false })).taskFingerprint, undefined)
+  assert.ok(!JSON.stringify(observed).includes(text))
+})
 
 function evidence() {
   return [
