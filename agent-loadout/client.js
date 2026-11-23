@@ -15965,6 +15965,11 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-tested-notes :is(dt, dd) { white-space: pre-wrap; overflow-wrap: anywhere; }
       .moba-web-pilot-find-flow { display: flex; flex-direction: column; min-block-size: 0; }
       .moba-web-pilot-find-flow .moba-share-fields { gap: 7px; }
+      @media (max-width: 400px) and (max-height: 560px) {
+        .moba-lighthouse-combined-report .moba-web-pilot-find-flow .moba-share-fields { gap: 4px; }
+        .moba-lighthouse-combined-report .moba-web-pilot-find-flow .moba-web-pilot-handoff-side { padding-block: 4px; }
+        .moba-lighthouse-combined-report .moba-web-pilot-find-flow .moba-web-pilot-handoff-side dl { row-gap: 2px; }
+      }
       .moba-web-pilot-find-heading { margin: 0; color: var(--gold); font-size: 17px; }
       .moba-web-pilot-find-local { display: grid; gap: 6px; min-inline-size: 0; }
       .moba-web-pilot-find-local :is(h4, p, ul) { margin: 0; }
