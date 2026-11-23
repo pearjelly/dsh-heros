@@ -1309,12 +1309,16 @@ window.__ModuleLoader__.load({
 
     const webPilotTitle = '兼容声明够不够推荐试用？'
     const webPilotPrompt = '没有本机试跑记录，你会推荐试用吗？'
+    const webPilotDecisionReplayTitle = '换个决定再试'
+    const webPilotDecisionCompareTitle = '对照两次决定'
+    const webPilotDecisionReplayDescription = '同一题、同一套证据核验出装。'
     const webPilotArms = {
       standard: { name: '原装标准模式', detail: '原装工具', firstUseDetail: '读取发布方清单，给出试用判断。', icon: 'crest' },
       evidence: { name: '标准模式 + 证据核验', detail: '只加装证据核验', firstUseDetail: '缺少本机试跑记录时，可以继续补证、降级推荐或暂缓提交。', icon: 'plus' },
     }
 
-    function WebPilotPractice({ request, initialArm = '', sampleLanguage, parentSessionId, sourcePlan, dialogRef, onCancel, onOpen }) {
+    function WebPilotPractice({ request, initialArm = '', sampleLanguage, parentSessionId, sourcePlan, decisionReplayOf,
+      dialogRef, onCancel, onOpen }) {
       const language = useLanguage()
       const group = useId()
       const [arm, setArm] = useState(initialArm)
@@ -1325,25 +1329,30 @@ window.__ModuleLoader__.load({
       const [openError, setOpenError] = useState('')
       const launch = useRef(null)
       const opening = useRef(null)
-      const firstUse = !initialArm
-      const compact = firstUse || sourcePlan
+      const locked = Boolean(sourcePlan || decisionReplayOf)
+      const firstUse = !initialArm && !locked
+      const compact = firstUse || locked
       const choice = firstUse ? openingChoice : ''
       const current = state?.arm === arm && state.language === language && state.attempt === attempt && state.choice === choice ? state : null
       const preview = current?.preview
       const parentForArm = arm === initialArm ? parentSessionId : undefined
       const taskLanguage = preview && ({ en: '英文', zh: '中文' })[preview.sampleLanguage]
+      const scope = useMemo(() => decisionReplayOf ? { decisionReplayOf }
+        : { parentSessionId: parentForArm, ...(sourcePlan ? { sourcePlan } : { sampleLanguage }) },
+      [decisionReplayOf, parentForArm, sourcePlan, sampleLanguage])
 
       useEffect(() => {
         if (!arm) return
         const abort = new AbortController()
         const action = 'web-pilot-preview'
-        request(action, { action, arm, parentSessionId: parentForArm, ...(sourcePlan ? { sourcePlan } : { sampleLanguage }),
-          ...(choice && { openingChoice: choice }) },
+        request(action, { action, arm, ...scope, ...(choice && { openingChoice: choice }) },
           abort.signal, language)
           .then(value => {
             if (abort.signal.aborted) return
-            if (!value?.token || (sourcePlan && (value.arm !== arm || typeof value.task !== 'string' || !value.task ||
-              !['en', 'zh'].includes(value.sampleLanguage))) || (firstUse && (value.openingChoice ?? '') !== choice)) {
+            if (!value?.token || (locked && (value.arm !== arm || typeof value.task !== 'string' || !value.task ||
+              !['en', 'zh'].includes(value.sampleLanguage))) ||
+              (decisionReplayOf && !Object.hasOwn(evidenceOpeningChoices, value.previousDecision)) ||
+              (firstUse && (value.openingChoice ?? '') !== choice)) {
               throw new Error(t('试玩出装已变化，请重新核对。'))
             }
             if (launch.current && launch.current.token !== value.token) launch.current = null
@@ -1351,7 +1360,7 @@ window.__ModuleLoader__.load({
           })
           .catch(reason => { if (!abort.signal.aborted) setState({ error: reason.message, arm, language, attempt, choice }) })
         return () => abort.abort()
-      }, [request, arm, attempt, language, sampleLanguage, parentForArm, sourcePlan, firstUse, choice])
+      }, [request, arm, attempt, language, scope, locked, decisionReplayOf, firstUse, choice])
       useEffect(() => () => opening.current?.abort(), [])
 
       async function open(event) {
@@ -1366,9 +1375,12 @@ window.__ModuleLoader__.load({
         }
         try {
           const action = 'web-pilot-open'
-          const result = await request(action, { action, arm, parentSessionId: parentForArm, ...(sourcePlan ? { sourcePlan } : { sampleLanguage }),
+          const result = await request(action, { action, arm, ...scope,
             ...(choice && { openingChoice: choice }),
             token: preview.token, launchId: launch.current.id }, abort.signal, language)
+          if (decisionReplayOf && (!result?.sessionId || result.task !== preview.task)) {
+            throw new Error(t('试玩出装已变化，请重新核对。'))
+          }
           if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
         } catch (reason) {
           if (!abort.signal.aborted) setOpenError(reason.message)
@@ -1378,16 +1390,20 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h(InstallDialog, { title: t(firstUse ? webPilotPrompt : webPilotTitle),
+      return h(InstallDialog, { title: t(decisionReplayOf ? webPilotDecisionReplayTitle : firstUse ? webPilotPrompt : webPilotTitle),
         className: 'moba-starter-dialog moba-web-source-dialog moba-web-pilot-dialog' +
-          (sourcePlan ? ' moba-web-pilot-plan-replay' : firstUse ? ' moba-web-pilot-first-use' : ''),
-        initialFocus: sourcePlan ? '.moba-web-pilot-practice-back' : initialArm ? 'input:checked' : 'input[type="radio"]',
+          (locked ? ' moba-web-pilot-plan-replay' : firstUse ? ' moba-web-pilot-first-use' : ''),
+        initialFocus: locked ? '.moba-web-pilot-practice-back' : initialArm ? 'input:checked' : 'input[type="radio"]',
         dialogRef, busy, onCancel,
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening.current) onCancel() }) },
-        !firstUse && h('p', null, t('两套出装读同一份发布方清单。题目只提供兼容声明，缺少本机试跑记录。')),
+        !firstUse && h('p', null, t(decisionReplayOf ? webPilotDecisionReplayDescription
+          : '两套出装读同一份发布方清单。题目只提供兼容声明，缺少本机试跑记录。')),
         h('form', { onSubmit: open },
           h(compact ? 'div' : Fragment, compact ? { className: 'moba-web-pilot-practice-fields' } : null,
-            sourcePlan ? h(InstallFacts, { facts: [[t('出装'), t(webPilotArms[arm].name)], [t('任务语言'), taskLanguage && t(taskLanguage)]] })
+            locked ? h(InstallFacts, { facts: [
+              [t('出装'), t(webPilotArms[arm].name)], [t('任务语言'), taskLanguage && t(taskLanguage)],
+              ...(decisionReplayOf && preview ? [[t('上次决定'), t(evidenceOpeningChoices[preview.previousDecision])]] : empty),
+            ] })
               : h('fieldset', { className: 'moba-starter-routes', disabled: busy },
                 h('legend', null, t('选择本局出装')),
                 Object.entries(webPilotArms).map(([id, option]) => h('label', { className: 'moba-starter-route', key: id, 'data-picked': arm === id },
@@ -1404,9 +1420,9 @@ window.__ModuleLoader__.load({
                 setState(null)
                 setOpenError('')
               } }),
-            sourcePlan && preview && h('details', { className: 'moba-web-challenge-task' }, h('summary', null, t('查看原题')),
+            locked && preview && h('details', { className: 'moba-web-challenge-task' }, h('summary', null, t('查看原题')),
               h('textarea', { 'aria-label': t('两边共用的任务'), rows: 5, value: preview.task, readOnly: true, spellCheck: false })),
-            preview && h(InstallFacts, { facts: [[t('准备试用'), 'v' + preview.version], [t('测试机'), 'DSH ' + preview.hostVersion]] }),
+            preview?.version && preview.hostVersion && h(InstallFacts, { facts: [[t('准备试用'), 'v' + preview.version], [t('测试机'), 'DSH ' + preview.hostVersion]] }),
             h('p', { className: 'moba-starter-note' }, t(compact ? '打开会话后，请手动发送任务。'
               : '练习自带示例材料，无需保存方案。每一局都由你在会话中手动发送。')),
             arm && !current && h('p', { role: 'status' }, t('正在核对试用推荐出装…')),
@@ -1850,8 +1866,9 @@ window.__ModuleLoader__.load({
               t(busy ? '正在保存…' : '保存方案')))))
     }
 
-    function WebPilotComparison({ sessionId, comparison, request, workspaces, savedPlan, onCancel, onVisit, dialogRef }) {
+    function WebPilotComparison({ sessionId, comparison, request, workspaces, savedPlan, decisionsOnly, onCancel, onVisit, dialogRef }) {
       const [action, setAction] = useState(null)
+      const canUseLoadout = !savedPlan && !decisionsOnly
       function closeAction() {
         setAction(null)
         requestAnimationFrame(() => action.trigger.focus())
@@ -1861,30 +1878,33 @@ window.__ModuleLoader__.load({
         onCancel()
       }
       return h(Fragment, null,
-        h(InstallDialog, { title: t(savedPlan ? '此方案保存自这局' : '对照两局'), className: 'moba-starter-dialog moba-web-pilot-comparison',
+        h(InstallDialog, { title: t(decisionsOnly ? webPilotDecisionCompareTitle : savedPlan ? '此方案保存自这局' : '对照两局'),
+          className: 'moba-starter-dialog moba-web-pilot-comparison' + (decisionsOnly ? ' moba-web-pilot-decision-comparison' : ''),
           dialogRef, onCancel: back, initialFocus: '.moba-web-pilot-comparison-back',
           onKeyDown: event => closeDialogOnEscape(event, back) },
-          savedPlan && h('p', { className: 'moba-plan-note' }, h('strong', null, savedPlan.name)),
-          h('a', { href: comparison.url, target: '_blank', rel: 'noopener noreferrer' }, t('查看发布方清单')),
-          h('div', { className: 'moba-lighthouse-arms' }, comparison.runs.map((run, index) => {
-            const loadout = t(webPilotArms[run.arm].name)
-            return h('article', { className: 'moba-lighthouse-arm', key: run.sessionId },
-              h('div', null, h('h3', null, t(index === 0 ? '原局' : '复赛')),
-                h('span', { className: 'moba-lighthouse-arm-hero' }, loadout),
-                savedPlan?.arm === run.arm && h('strong', { className: 'moba-web-pilot-saved-arm' }, t('已保存'))),
-              h(WebPilotOutcome, { view: run, complete: true }),
-              h('footer', { 'data-practice-actions': !savedPlan || undefined },
-                h('button', { type: 'button', className: 'moba-roster-open', onClick: () => onVisit(run.sessionId) },
-                  t(index === 0 ? '打开原局会话' : '打开复赛会话')),
-                !savedPlan && h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-personal-entry', 'aria-haspopup': 'dialog',
-                  'aria-label': t(lessonTaskLabel) + ' · ' + loadout, onClick: event => {
-                    setAction({ type: 'personal', run, trigger: event.currentTarget })
-                  } }, t(lessonTaskLabel)),
-                !savedPlan && h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-save-entry', 'aria-haspopup': 'dialog',
-                  'aria-label': t('保存为方案') + ' · ' + loadout, onClick: event => {
-                    setAction({ type: 'save', run, trigger: event.currentTarget })
-                  } }, t('保存为方案'))))
-          })),
+          h(decisionsOnly ? 'div' : Fragment, decisionsOnly ? { className: 'moba-web-pilot-practice-fields' } : null,
+            savedPlan && h('p', { className: 'moba-plan-note' }, h('strong', null, savedPlan.name)),
+            decisionsOnly && h('p', null, t(webPilotDecisionReplayDescription)),
+            h('a', { href: comparison.url, target: '_blank', rel: 'noopener noreferrer' }, t('查看发布方清单')),
+            h('div', { className: 'moba-lighthouse-arms' }, comparison.runs.map((run, index) => {
+              const loadout = t(webPilotArms[run.arm].name)
+              return h('article', { className: 'moba-lighthouse-arm', key: run.sessionId },
+                h('div', null, h('h3', null, t(index === 0 ? '原局' : '复赛')),
+                  !decisionsOnly && h('span', { className: 'moba-lighthouse-arm-hero' }, loadout),
+                  savedPlan?.arm === run.arm && h('strong', { className: 'moba-web-pilot-saved-arm' }, t('已保存'))),
+                h(WebPilotOutcome, { view: run, complete: true }),
+                h('footer', { 'data-practice-actions': canUseLoadout || undefined },
+                  h('button', { type: 'button', className: 'moba-roster-open', onClick: () => onVisit(run.sessionId) },
+                    t(index === 0 ? '打开原局会话' : '打开复赛会话')),
+                  canUseLoadout && h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-personal-entry', 'aria-haspopup': 'dialog',
+                    'aria-label': t(lessonTaskLabel) + ' · ' + loadout, onClick: event => {
+                      setAction({ type: 'personal', run, trigger: event.currentTarget })
+                    } }, t(lessonTaskLabel)),
+                  canUseLoadout && h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-save-entry', 'aria-haspopup': 'dialog',
+                    'aria-label': t('保存为方案') + ' · ' + loadout, onClick: event => {
+                      setAction({ type: 'save', run, trigger: event.currentTarget })
+                    } }, t('保存为方案'))))
+            }))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-comparison-back', onClick: back },
               t(savedPlan ? '返回方案库' : '返回')))),
@@ -1950,7 +1970,11 @@ window.__ModuleLoader__.load({
         if (visiting.current) return
         visiting.current = true
         if (targetId === sessionId) closeList()
-        else onOpen(targetId)
+        else {
+          comparisonDialog.current?.close()
+          listDialog.current?.close()
+          onOpen(targetId)
+        }
       }
 
       async function openReplay(run, trigger) {
@@ -1969,9 +1993,10 @@ window.__ModuleLoader__.load({
             visit(run.sessionId)
             return
           }
-          const [original, replay] = result.comparison?.runs ?? empty
+          const value = run.decisionReplay ? result.decisionComparison : result.comparison
+          const [original, replay] = value?.runs ?? empty
           if (original?.sessionId !== sessionId || replay?.sessionId !== run.sessionId) throw new Error(t(webPilotReplayChanged))
-          setComparison({ sessionId: run.sessionId, value: result.comparison, trigger })
+          setComparison({ sessionId: run.sessionId, value, decisionsOnly: run.decisionReplay, trigger })
         } catch (reason) {
           if (!abort.signal.aborted) setReadError({ sessionId: run.sessionId, message: reason.message })
         } finally {
@@ -1997,7 +2022,7 @@ window.__ModuleLoader__.load({
             return h('li', { className: 'moba-history-entry', key: run.sessionId },
               h('header', null, h('h3', null, t(webPilotArms[run.arm].name)),
                 hasDate && h('time', { dateTime: opened.toISOString() }, clock.format(opened))),
-              h('p', null, t(complete ? '已完成' : '等待发送任务')),
+              h('p', null, t(complete ? '已完成' : '等待发送任务'), run.decisionReplay && (' · ' + t('同一套出装'))),
               complete && h(WebPilotOutcome, { view: run, complete }),
               readError?.sessionId === run.sessionId && h('p', { className: 'moba-alert', role: 'alert' }, readError.message),
               reading === run.sessionId && h('p', { role: 'status' }, t('正在核对实战来源…')),
@@ -2019,22 +2044,24 @@ window.__ModuleLoader__.load({
               onClick: () => setQuery({ before: nextBefore }) }, t('加载更多记录')),
             h('button', { type: 'button', ref: back, className: 'moba-roster-open moba-web-pilot-replays-back',
               onClick: closeList }, t('返回')))),
-        comparison && h(WebPilotComparison, { sessionId: comparison.sessionId, comparison: comparison.value, request, workspaces,
-          dialogRef: comparisonDialog, onCancel: closeComparison, onVisit: visit }))
+        comparison && h(WebPilotComparison, { sessionId: comparison.sessionId, comparison: comparison.value,
+          decisionsOnly: comparison.decisionsOnly, request, workspaces, dialogRef: comparisonDialog, onCancel: closeComparison, onVisit: visit }))
     }
 
     function WebPilotPracticeResult({ sessionId, arm, request, workspaces, onOpen, reportId, reporting, onReport }) {
       const language = useLanguage()
       const [state, setState] = useState(null)
       const [attempt, retry] = useState(0)
-      const [replayOpen, setReplayOpen] = useState(false)
-      const [comparisonOpen, setComparisonOpen] = useState(false)
+      const [replayOpen, setReplayOpen] = useState('')
+      const [comparisonOpen, setComparisonOpen] = useState('')
       const [replayListOpen, setReplayListOpen] = useState(false)
       const [exchangeView, setExchangeView] = useState('')
       const replayTrigger = useRef(null)
       const replayDialog = useRef(null)
       const returnFromReplay = useRef(false)
       const comparisonTrigger = useRef(null)
+      const comparisonDialog = useRef(null)
+      const returnFromComparison = useRef(false)
       const replayListTrigger = useRef(null)
       const returnFromReplayList = useRef(false)
       const exchangeTrigger = useRef(null)
@@ -2071,6 +2098,11 @@ window.__ModuleLoader__.load({
         replayTrigger.current?.focus()
       }, [replayOpen])
       useLayoutEffect(() => {
+        if (comparisonOpen || !returnFromComparison.current) return
+        returnFromComparison.current = false
+        comparisonTrigger.current?.focus()
+      }, [comparisonOpen])
+      useLayoutEffect(() => {
         if (exchangeView) return
         exchangeTrigger.current?.focus()
         exchangeTrigger.current = null
@@ -2089,18 +2121,35 @@ window.__ModuleLoader__.load({
       const receivedPersonal = exchangeView === 'received-personal'
       const receivedComparison = exchangeView === 'received' || receivedPersonal
       const comparison = complete && view.verified ? view.comparison : null
+      const decisionComparison = canShare && view.decisionComparison
+      const canReplayDecision = canShare && currentArm === 'evidence' && view.canReplayDecision === true
+      const replayingDecision = replayOpen === 'decision'
+      const comparingDecisions = comparisonOpen === 'decision'
+      const activeComparison = comparingDecisions ? decisionComparison : comparison
       const consequence = view?.practiceDecision?.consequence
       const showsSmokeTestGap = ['gather', 'pause'].includes(consequence?.kind)
       const deferEmptyFiles = consequence?.kind === 'gather' && view.deliverables?.length === 0
       const promoteReplay = canReplay && canShare && currentArm === 'standard' && !hasReceivedReport && !comparison
-      const startReplay = canReplay && h('button', { type: 'button', ref: replayTrigger,
+      const startReplay = canReplay && h('button', { type: 'button',
         className: 'moba-settlement-button' + (promoteReplay ? ' moba-web-pilot-replay-primary' : ''),
-        'aria-haspopup': 'dialog', onClick: () => setReplayOpen(true) }, t('换另一套出装再试'))
-      const compareRuns = comparison && h('button', { type: 'button', ref: comparisonTrigger, className: 'moba-settlement-button moba-web-pilot-compare',
-        'aria-haspopup': 'dialog', onClick: () => setComparisonOpen(true) }, t('对照两局'))
+        'aria-haspopup': 'dialog', onClick: event => openReplay('loadout', event) }, t('换另一套出装再试'))
+      const compareRuns = comparison && h('button', { type: 'button', className: 'moba-settlement-button moba-web-pilot-compare',
+        'aria-haspopup': 'dialog', onClick: event => openComparison('loadout', event) }, t('对照两局'))
+
+      function openReplay(mode, event) {
+        replayTrigger.current = event.currentTarget
+        setReplayOpen(mode)
+      }
+
+      function openComparison(mode, event) {
+        comparisonTrigger.current = event.currentTarget
+        setComparisonOpen(mode)
+      }
+
       function closeComparison() {
-        setComparisonOpen(false)
-        requestAnimationFrame(() => comparisonTrigger.current?.focus())
+        comparisonDialog.current?.close()
+        returnFromComparison.current = true
+        setComparisonOpen('')
       }
 
       function openExchange(view, event) {
@@ -2129,12 +2178,17 @@ window.__ModuleLoader__.load({
         h('div', null, h('strong', null, t(webPilotTitle)), armName && h('span', null, t(armName))),
         view?.practiceDecision && h(WebPilotOutcome, { view, complete, deferEmptyFiles }),
         (comparison || canReviewReplays || canShare) && h('div', { className: 'moba-web-pilot-primary-actions' },
+          decisionComparison && h('button', { type: 'button', className: 'moba-settlement-button moba-web-pilot-compare',
+            'aria-haspopup': 'dialog', onClick: event => openComparison('decision', event) }, t(webPilotDecisionCompareTitle)),
+          canReplayDecision && h('button', { type: 'button', className: 'moba-settlement-button moba-web-pilot-replay-primary',
+            'aria-haspopup': 'dialog', onClick: event => openReplay('decision', event) }, t(webPilotDecisionReplayTitle)),
           promoteReplay && startReplay,
           hasReceivedReport && h('button', { type: 'button', className: 'moba-settlement-button moba-web-pilot-received',
             'aria-haspopup': 'dialog', onClick: event => openExchange('received', event) }, t(webPilotReceivedReportTitle)),
           !hasReceivedReport && compareRuns,
           canReviewReplays && h('button', { type: 'button', ref: replayListTrigger,
-            className: 'moba-settlement-button moba-web-pilot-review', 'data-primary': !promoteReplay && !comparison && !hasReceivedReport || undefined,
+            className: 'moba-settlement-button moba-web-pilot-review',
+            'data-primary': !canReplayDecision && !decisionComparison && !promoteReplay && !comparison && !hasReceivedReport || undefined,
             'aria-haspopup': 'dialog', onClick: () => setReplayListOpen(true) }, t(webPilotReplaysLabel)),
           canShare && h('button', { type: 'button', className: 'moba-settlement-button',
             'aria-haspopup': 'dialog', onClick: event => openExchange('invite', event) }, t(webPilotInviteTitle)),
@@ -2177,23 +2231,28 @@ window.__ModuleLoader__.load({
           setReplayListOpen(false)
           onOpen(targetId)
         } }),
-        comparison && comparisonOpen && h(WebPilotComparison, { sessionId, comparison, request, workspaces, onCancel: closeComparison, onVisit: targetId => {
-          if (targetId === sessionId) closeComparison()
-          else {
-            setComparisonOpen(false)
-            onOpen(targetId)
-          }
-        } }),
-        canReplay && replayOpen && h(WebPilotPractice, { request, initialArm: alternateArm, sampleLanguage: view.sampleLanguage,
-          parentSessionId: view.verified ? sessionId : undefined, dialogRef: replayDialog, onCancel: () => {
+        comparisonOpen && activeComparison && h(WebPilotComparison, { sessionId, comparison: activeComparison, request, workspaces,
+          decisionsOnly: comparingDecisions, dialogRef: comparisonDialog, onCancel: closeComparison, onVisit: targetId => {
+            if (targetId === sessionId) closeComparison()
+            else {
+              comparisonDialog.current?.close()
+              setComparisonOpen('')
+              onOpen(targetId)
+            }
+          } }),
+        replayOpen && (replayingDecision ? canReplayDecision : canReplay) && h(WebPilotPractice, { request,
+          initialArm: replayingDecision ? 'evidence' : alternateArm, dialogRef: replayDialog,
+          ...(replayingDecision ? { decisionReplayOf: sessionId } : {
+            sampleLanguage: view.sampleLanguage, parentSessionId: view.verified ? sessionId : undefined,
+          }), onCancel: () => {
             replayDialog.current?.close()
             returnFromReplay.current = true
-            setReplayOpen(false)
-        }, onOpen: (nextSessionId, task) => {
+            setReplayOpen('')
+          }, onOpen: (nextSessionId, task) => {
             replayDialog.current?.close()
-          setReplayOpen(false)
-          onOpen(nextSessionId, task)
-        } }))
+            setReplayOpen('')
+            onOpen(nextSessionId, task)
+          } }))
     }
 
     function LighthouseReviewStart({ request, onCancel, onOpen }) {
@@ -14228,6 +14287,9 @@ window.__ModuleLoader__.load({
         grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) minmax(0, .8fr); }
       .moba-web-pilot-comparison .moba-lighthouse-arm button { min-inline-size: 0; text-align: start; overflow-wrap: anywhere; }
       .moba-web-pilot-comparison .moba-web-pilot-personal-entry { color: #ffe3ab; background: #392e20; border-color: #ad8c52; }
+      .moba-web-pilot-decision-comparison[open] { box-sizing: border-box; display: flex; flex-direction: column; overflow: clip; }
+      .moba-web-pilot-decision-comparison > :is(h2, .moba-starter-actions) { flex: none; }
+      .moba-web-pilot-decision-comparison .moba-web-pilot-practice-fields > p { margin: 0; }
       .moba-web-pilot-saved-arm { margin-inline-start: 7px; color: #ffe3ab; font-size: 11px; }
       .moba-web-pilot-save-summary { display: grid; gap: 5px; min-inline-size: 0; padding: 8px;
         background: #192c33; border: 1px solid #607d78; color: #e1eeea; overflow-wrap: anywhere; }

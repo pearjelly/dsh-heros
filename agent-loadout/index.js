@@ -1364,7 +1364,7 @@ export async function apply(ctx) {
     const webPractice = kind === 'web-source' || webPilot
     const { input: readInput, check, unavailable } = reviewedTaskKinds[kind]
     const input = await readInput(selection, english, signal)
-    const { sourcePlan } = input
+    const { sourcePlan, decisionReplayOf } = input
     const controller = ctx.get('sessionController')
     const registry = ctx.get('workspaceRegistry')
     if (!controller?.create || !ctx.get('sessionQuery') || !registry) {
@@ -1378,10 +1378,10 @@ export async function apply(ctx) {
       const existing = await planTaskSession(sessionId, signal)
       if (sourcePlan) buildPlans.read(sourcePlan.id, sourcePlan.revision)
       if (existing?.launch?.token === token && existing.launch.request === input.hash) {
-        if (sourcePlan && !existing.started) {
+        if ((sourcePlan || decisionReplayOf) && !existing.started) {
           const checked = await check(input, signal)
           if (checked.token !== token) throw new Error('材料、任务或出装已变化，请重新核对。')
-          buildPlans.read(sourcePlan.id, sourcePlan.revision)
+          if (sourcePlan) buildPlans.read(sourcePlan.id, sourcePlan.revision)
         }
         return (kind === 'alternate' || webPilot) && existing.started
           ? { sessionId, workspaceId: input.workspaceId } : reply
@@ -1396,6 +1396,7 @@ export async function apply(ctx) {
           throw new Error('材料、任务或出装已变化，请重新核对。')
         }
       }
+      if (decisionReplayOf && (await readInput(selection, english, signal)).hash !== input.hash) throw new Error(webPilotReplayChanged)
       if (webPractice) await mkdir(directory, { recursive: true, mode: 0o700 })
       const cwd = webPractice ? join(await realpath(directory), webSourceDirectory, sessionId) : checked.cwd
       if (webPractice) {
@@ -1437,6 +1438,7 @@ export async function apply(ctx) {
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, task,
         ...(material !== undefined && { material }), ...(target && { target }), ...(source && { source }), ...(armory && { armory }), ...(webSourcePractice && { webSourcePractice }),
         ...(kind === 'web-pilot' && input.replayOf && { webPilotReplayOf: input.replayOf }),
+        ...(decisionReplayOf && { webPilotDecisionReplayOf: decisionReplayOf }),
         ...(kind === 'web-pilot' && input.openingChoice && { webPilotOpeningChoice: input.openingChoice }),
         ...(kind === 'web-pilot-challenge' && input.reportCode && { webPilotReceivedReport: input.reportCode }),
         ...(checked.handoffAlternateOf && { handoffAlternateOf: checked.handoffAlternateOf }),
@@ -1470,8 +1472,19 @@ export async function apply(ctx) {
     return createHash('sha256').update(JSON.stringify(request)).digest('hex')
   }
 
-  async function requestedWebPilot({ arm, sampleLanguage, parentSessionId, sourcePlan, openingChoice }, english, signal) {
+  async function requestedWebPilot({ arm, sampleLanguage, parentSessionId, sourcePlan, openingChoice, decisionReplayOf }, english, signal) {
     if (!['standard', 'evidence'].includes(arm) || ![undefined, 'en', 'zh'].includes(sampleLanguage)) throw new Error(webSourceChanged)
+    if (decisionReplayOf !== undefined) {
+      if (arm !== 'evidence' || parentSessionId !== undefined || sourcePlan !== undefined || openingChoice !== undefined) {
+        throw new Error(webPilotReplayChanged)
+      }
+      const { original } = await webPilotReplayParent(decisionReplayOf, signal)
+      if (!canReplayWebPilotDecision(original) ||
+        (sampleLanguage !== undefined && sampleLanguage !== original.view.sampleLanguage)) throw new Error(webPilotReplayChanged)
+      return { arm, task: original.task, hash: webPilotDecisionReplayHash(original), decisionReplayOf,
+        replayBinding: original.binding, sampleLanguage: original.view.sampleLanguage,
+        previousDecision: original.view.practiceDecision.actual }
+    }
     if (openingChoice !== undefined && (parentSessionId !== undefined || sourcePlan !== undefined ||
       !lighthouseEvidenceChoices.includes(openingChoice))) throw new Error(webSourceChanged)
     if (sourcePlan !== undefined) {
@@ -1616,9 +1629,10 @@ export async function apply(ctx) {
     return { draft, candidate, webToolId, webToolSource: arm ? sourceId : undefined }
   }
 
-  async function checkWebSourcePractice({ task, hash, arm, replayBinding }, signal, environment) {
+  async function checkWebSourcePractice({ task, hash, arm, replayBinding, decisionReplayOf }, signal, environment) {
     const { draft, candidate, webToolId, webToolSource } = await plannedWebSourceLoadout(signal, arm, environment)
-    if (replayBinding && (replayBinding.id !== webToolId || replayBinding.sourceId !== webToolSource)) {
+    if (replayBinding && (replayBinding.id !== webToolId || replayBinding.sourceId !== webToolSource ||
+      (decisionReplayOf && replayBinding.presetId !== candidate.id))) {
       throw new Error(webPilotReplayChanged)
     }
     const token = createHash('sha256').update(JSON.stringify([planTaskOwner, hash, candidate.id, webToolId, ...(arm ? [webToolSource] : [])])).digest('hex')
@@ -1637,7 +1651,8 @@ export async function apply(ctx) {
     const { token } = await checkWebSourcePractice(input, signal)
     return { token, arm: input.arm, version: webSourceVersion, hostVersion: webSourceHostVersion,
       ...(input.openingChoice && { openingChoice: input.openingChoice }),
-      ...(input.sourcePlan && { task: input.task, sampleLanguage: input.sampleLanguage }) }
+      ...((input.sourcePlan || input.decisionReplayOf) && { task: input.task, sampleLanguage: input.sampleLanguage }),
+      ...(input.decisionReplayOf && { previousDecision: input.previousDecision }) }
   }
 
   function liveWebSourceBinding(agent, presetId, workspaceId, expectedToolId, arm, expectedSource) {
@@ -1695,7 +1710,8 @@ export async function apply(ctx) {
       if (pilot) {
         const receipt = observedWebSourceResult(source.events, outcome.turn, binding)
         const result = { view: webPilotResult(outcome, binding, launch.task, receipt), binding,
-          task: launch.task, replayOf: launch.webPilotReplayOf }
+          task: launch.task, replayOf: launch.webPilotReplayOf, decisionReplayOf: launch.webPilotDecisionReplayOf,
+          ...(launch.webPilotDecisionReplayOf && { decisionReplayRequest: launch.request }) }
         if (completedCanonicalWebPilot(result)) {
           result.receivedReport = observedWebPilotReport(launch, binding.arm)
           if (handoff || practiceDecision) {
@@ -1785,10 +1801,31 @@ export async function apply(ctx) {
     return { code: encodeWebPilotReport(result.handoff), local: result.handoff, friend: result.receivedReport }
   }
 
-  function matchesWebPilotReplay(original, task, binding) {
-    return ['standard', 'evidence'].includes(binding?.arm) && original.task === task &&
-      original.binding.arm !== binding.arm && original.binding.workspaceId !== binding.workspaceId &&
+  function matchesWebPilotNativeTask(original, task, binding) {
+    return original.task === task && original.binding.workspaceId !== binding.workspaceId &&
       original.binding.id === binding.id && original.binding.sourceId === binding.sourceId
+  }
+
+  function matchesWebPilotReplay(original, task, binding) {
+    return ['standard', 'evidence'].includes(binding?.arm) && original.binding.arm !== binding.arm &&
+      matchesWebPilotNativeTask(original, task, binding)
+  }
+
+  function canReplayWebPilotDecision(run) {
+    return completedCanonicalWebPilot(run) && run.binding.arm === 'evidence' &&
+      lighthouseEvidenceChoices.includes(run.view.practiceDecision?.actual)
+  }
+
+  function webPilotDecisionReplayHash(original) {
+    const { sessionId, task, binding, view } = original
+    return createHash('sha256').update(JSON.stringify(['web-pilot-decision-replay', sessionId, task,
+      binding.arm, binding.presetId, binding.id, binding.sourceId, view.practiceDecision.actual])).digest('hex')
+  }
+
+  function matchesWebPilotDecisionReplay(original, task, binding, request) {
+    return binding?.arm === 'evidence' && canReplayWebPilotDecision(original) &&
+      original.binding.presetId === binding.presetId && matchesWebPilotNativeTask(original, task, binding) &&
+      request === webPilotDecisionReplayHash(original)
   }
 
   async function verifiedWebPilotPair(sessionId, result, signal, parent) {
@@ -1811,13 +1848,24 @@ export async function apply(ctx) {
     return { url: pair[1].view.url, runs }
   }
 
+  function webPilotDecisionComparison(sessionId, result, reference) {
+    const { original, registry, root } = reference
+    if (!completedCanonicalWebPilot(result) || result.replayOf || result.decisionReplayOf !== original.sessionId ||
+      original.sessionId === sessionId || result.view.url !== original.view.url ||
+      !matchesWebPilotDecisionReplay(original, result.task, result.binding, result.decisionReplayRequest) ||
+      !webPilotWorkspace(registry.get(result.binding.workspaceId), root, sessionId)) return
+    const runs = [original, { ...result, sessionId }].map(({ sessionId, view: { arm, choice, deliverables, practiceDecision } }) =>
+      ({ sessionId, arm, ...(choice && { choice }), deliverables, practiceDecision }))
+    return { url: result.view.url, runs }
+  }
+
   function webPilotWorkspace(workspace, root, sessionId) {
     return heroAlternateSessionId.test(sessionId) && workspace?.path === join(root, sessionId) &&
       workspace.sessionIds.includes(sessionId)
   }
 
   async function webPilotReplayParent(sessionId, signal) {
-    const original = await inspectWebSourcePractice({ sessionId }, signal)
+    const original = await inspectWebSourcePractice({ sessionId }, signal, { practiceDecision: true })
     if (!completedWebPilot(original)) throw new Error(webPilotReplayUnavailable)
     const registry = ctx.get('workspaceRegistry')
     const root = join(await realpath(directory), webSourceDirectory)
@@ -1827,25 +1875,38 @@ export async function apply(ctx) {
     return { original: { ...original, sessionId }, registry, root }
   }
 
-  async function readWebPilotReplay(sessionId, { original, registry, root }, signal, { practiceDecision = false } = {}) {
+  async function readWebPilotReplay(sessionId, reference, signal, { details = false } = {}) {
+    const { original, registry, root } = reference
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId) || sessionId === original.sessionId) return
     const saved = await planTaskSession(sessionId, signal)
     const { launch, header } = saved ?? {}
     const binding = launch?.webSourcePractice
     const workspace = binding && registry.get(binding.workspaceId)
-    if (launch?.webPilotReplayOf !== original.sessionId || !matchesWebPilotReplay(original, launch.task, binding) ||
-      !webPilotWorkspace(workspace, root, sessionId) || header.cwd !== workspace.path ||
+    if (!webPilotWorkspace(workspace, root, sessionId) || header.cwd !== workspace.path ||
       header.agentPreset !== binding.presetId || header.parentSession) return
-    const run = { sessionId, arm: binding.arm, openedAt: header.createdAt }
+    const decisionReplay = launch.webPilotDecisionReplayOf === original.sessionId
+    const matches = decisionReplay
+      ? !launch.webPilotReplayOf && matchesWebPilotDecisionReplay(original, launch.task, binding, launch.request)
+      : launch.webPilotReplayOf === original.sessionId && !launch.webPilotDecisionReplayOf &&
+        matchesWebPilotReplay(original, launch.task, binding)
+    if (!matches) return
+    const run = { sessionId, arm: binding.arm, openedAt: header.createdAt, ...(decisionReplay && { decisionReplay: true }) }
     if (!saved.started) {
       if (saved.presetChanged || await realpath(workspace.path).catch(() => null) !== workspace.path) return
+      if (decisionReplay && details) {
+        const { candidate, webToolId, webToolSource } = await plannedWebSourceLoadout(signal, binding.arm)
+        if (candidate.id !== binding.presetId || webToolId !== binding.id || webToolSource !== binding.sourceId) {
+          throw new Error(webPilotReplayChanged)
+        }
+      }
       return { run: { ...run, status: 'waiting' } }
     }
-    const result = await inspectWebSourcePractice({ sessionId }, signal, { practiceDecision })
-    const pair = await verifiedWebPilotPair(sessionId, result, signal, original)
-    if (pair) {
+    const result = await inspectWebSourcePractice({ sessionId }, signal, { practiceDecision: details || decisionReplay })
+    const decisionComparison = decisionReplay ? webPilotDecisionComparison(sessionId, result, reference) : undefined
+    const pair = decisionReplay ? undefined : await verifiedWebPilotPair(sessionId, result, signal, original)
+    if (pair || decisionComparison) {
       const { choice, deliverables } = result.view
-      return { run: { ...run, status: 'complete', ...(choice && { choice }), deliverables }, pair }
+      return { run: { ...run, status: 'complete', ...(choice && { choice }), deliverables }, result, pair, decisionComparison }
     }
   }
 
@@ -1911,8 +1972,10 @@ export async function apply(ctx) {
   async function readWebPilot({ sessionId, originalSessionId }, signal) {
     if (originalSessionId !== undefined) {
       const reference = await webPilotReplayParent(originalSessionId, signal)
-      const replay = await readWebPilotReplay(sessionId, reference, signal, { practiceDecision: true })
+      const replay = await readWebPilotReplay(sessionId, reference, signal, { details: true })
       if (!replay) throw new Error(webPilotReplayUnavailable)
+      if (replay.decisionComparison) return { ...replay.result.view, sessionId, decisionReplay: true,
+        decisionComparison: replay.decisionComparison }
       return replay.pair
         ? { ...replay.pair[1].view, sessionId, comparison: webPilotComparison(replay.pair) }
         : replay.run
@@ -1920,9 +1983,17 @@ export async function apply(ctx) {
     const result = await inspectWebSourcePractice({ sessionId }, signal, { practiceDecision: true })
     if (!result?.binding?.arm) return null
     const pair = await verifiedWebPilotPair(sessionId, result, signal)
+    const decisionParent = completedCanonicalWebPilot(result) && result.decisionReplayOf &&
+      await webPilotReplayParent(result.decisionReplayOf, signal).catch(() => {
+        signal?.throwIfAborted()
+        return null
+      })
+    const decisionComparison = decisionParent && webPilotDecisionComparison(sessionId, result, decisionParent)
     return { ...result.view, ...(completedWebPilot(result) && { canReviewReplays: true }),
+      ...(canReplayWebPilotDecision(result) && { canReplayDecision: true }),
       ...(result.receivedReport && { hasReceivedReport: true }),
-      ...(pair && { comparison: webPilotComparison(pair) }) }
+      ...(pair && { comparison: webPilotComparison(pair) }),
+      ...(decisionComparison && { decisionComparison }) }
   }
 
   async function verifiedWebSourceLoadout(sessionId, signal) {
