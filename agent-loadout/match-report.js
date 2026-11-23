@@ -511,7 +511,7 @@ function answeredComparisonTurns(events, after, asks, live, presetId, verifyMate
 
 export async function comparisonEvidence(source, { cwd, presetId, task, material, verifyMaterialDelivery,
   verifyMaterialProof = true, exactMessages = !verifyMaterialProof, linkedChoicesOnly = false,
-  includeWindows, includeFileCoordinates }, receipts) {
+  includeQuestions = Boolean(material), includeToolCoordinates, includeWindows, includeFileCoordinates }, receipts) {
   const unavailable = reason => ({ status: 'unavailable', reason })
   if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
     return unavailable('session-unavailable')
@@ -550,9 +550,9 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
       return { ...unavailable(materialState === 'changed' ? 'changed-material' : 'unverified-material'), materialState }
     }
   }
-  if (!material && end < 0) return { status: 'running', turn }
+  if (!includeQuestions && end < 0) return { status: 'running', turn }
 
-  const asks = new Map(material ? body.filter(event => event.type === 'tool/call' && event.data.name === 'ask_user_question')
+  const asks = new Map(includeQuestions ? body.filter(event => event.type === 'tool/call' && event.data.name === 'ask_user_question')
     .map(event => [event.data.callId, event]) : [])
   const projection = source.projections?.values.userQuestions
   const pendingQuestions = activeComparisonQuestions(asks, body, live && end < 0, projection)
@@ -598,7 +598,8 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
       const selected = answer && answer.flatMap(item => item.selected ?? []).filter(label => typeof label === 'string' && label.length <= 200)
       const linkedReply = exactMessages && selected?.length && state === 'unfinished'
       const recordedChoices = !linkedChoicesOnly || replies?.has(callId) ? choices : undefined
-      entries.push({ type, name, state: linkedReply ? 'completed' : state, sourceNames, choices: selected?.length ? selected : recordedChoices, nested })
+      entries.push({ type, name, state: linkedReply ? 'completed' : state, sourceNames, choices: selected?.length ? selected : recordedChoices, nested,
+        ...(includeToolCoordinates && { seq }) })
     }
   }
   const materialDelivered = verifyMaterialDelivery && [...files.keys()].some(file => resolve(cwd, file) === resolve(cwd, material))

@@ -26,7 +26,7 @@ import { nativeOperationKey, nativeTrialKey, openMatchGrowth, questToolSource } 
 import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
-import { observedWebSource, webSourceHostVersion, webSourceModule, webSourceOldVersion, webSourceTask, webSourceUrl, webSourceVersion } from './web-source-practice.js'
+import { observedWebSource, observedWebSourceResult, webPilotTask, webSourceHostVersion, webSourceModule, webSourceOldVersion, webSourceTask, webSourceUrl, webSourceVersion } from './web-source-practice.js'
 import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, panelActivityRecord, toolSourceRecord, webRecoveryFingerprint } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
@@ -1337,6 +1337,7 @@ export async function apply(ctx) {
     armory: { input: requestedArmoryTask, check: checkArmoryTask, unavailable: '当前 DSH 无法用当前出装开启任务。' },
     alternate: { input: requestedHeroAlternateTask, check: checkHeroAlternateTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
     'web-source': { input: requestedWebSourcePractice, check: checkWebSourcePractice, unavailable: webSourceUnavailable },
+    'web-pilot': { input: requestedWebPilot, check: checkWebSourcePractice, unavailable: webSourceUnavailable },
   }
 
   async function openReviewedTask(selection, english, signal, kind = 'plan') {
@@ -1345,7 +1346,7 @@ export async function apply(ctx) {
     if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
       throw new Error('请先核对新任务的材料和出装。')
     }
-    const webPractice = kind === 'web-source'
+    const webPractice = kind === 'web-source' || kind === 'web-pilot'
     const { input: readInput, check, unavailable } = reviewedTaskKinds[kind]
     const input = await readInput(selection, english, signal)
     const controller = ctx.get('sessionController')
@@ -1360,7 +1361,8 @@ export async function apply(ctx) {
     const open = async () => {
       const existing = await planTaskSession(sessionId, signal)
       if (existing?.launch?.token === token && existing.launch.request === input.hash) {
-        return kind === 'alternate' && existing.started ? { sessionId, workspaceId: input.workspaceId } : reply
+        return (kind === 'alternate' || kind === 'web-pilot') && existing.started
+          ? { sessionId, workspaceId: input.workspaceId } : reply
       }
       const checked = await check(input, signal)
       if (checked.token !== token) throw new Error('材料、任务或出装已变化，请重新核对。')
@@ -1372,6 +1374,7 @@ export async function apply(ctx) {
           throw new Error('材料、任务或出装已变化，请重新核对。')
         }
       }
+      if (webPractice) await mkdir(directory, { recursive: true, mode: 0o700 })
       const cwd = webPractice ? join(await realpath(directory), webSourceDirectory, sessionId) : checked.cwd
       if (webPractice) {
         await mkdir(cwd, { recursive: true, mode: 0o700 })
@@ -1401,7 +1404,8 @@ export async function apply(ctx) {
       const { planName, material, task, source } = checked.view
       if (source?.heroDeliveryTrial && !heroTrialLive(lighthouseHeroDelivery, presetId, agent)) throw new Error(heroDeliveryChanged)
       if (checked.stockBindings && !stockTrialLive(source.arm, presetId, agent, checked.stockBindings)) throw new Error(stockTransferChanged)
-      const webSourcePractice = webPractice && liveWebSourceBinding(agent, presetId, workspace.id, checked.webToolId)
+      const webSourcePractice = webPractice && liveWebSourceBinding(agent, presetId, workspace.id, checked.webToolId,
+        input.arm, checked.webToolSource)
       const armory = kind === 'armory'
       const target = (source || armory) && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
         ...(source && isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
@@ -1433,30 +1437,59 @@ export async function apply(ctx) {
     return { task, hash }
   }
 
-  async function plannedWebSourceLoadout(signal) {
+  function requestedWebPilot({ arm, sampleLanguage }, english) {
+    if (!['standard', 'evidence'].includes(arm) || ![undefined, 'en', 'zh'].includes(sampleLanguage)) throw new Error(webSourceChanged)
+    const task = webPilotTask(sampleLanguage === undefined ? english : sampleLanguage === 'en')
+    const hash = createHash('sha256').update(JSON.stringify([arm, task])).digest('hex')
+    return { arm, task, hash }
+  }
+
+  function pilotWebTool(scope) {
+    const origins = ctx.get('agentLoadoutToolOrigins')
+    const tools = [
+      ['web_fetch', webSourceModule],
+      ['ask_user_question', equipmentById.get('evidence').requires],
+      ['present', equipmentById.get('present').module],
+    ]
+    if (tools.every(([name, module]) => {
+      const tool = ctx.tools.get(name, scope)
+      return tool && origins?.get(tool, scope)?.moduleName === module
+    })) return ctx.tools.get('web_fetch', scope)
+  }
+
+  async function plannedWebSourceLoadout(signal, arm) {
     if (!toolRuntime || !ctx.get('sessionController')?.resolveAgent || !ctx.get('workspaceRegistry')?.create) {
       throw new Error(webSourceUnavailable)
     }
     const { ecosystem, sources } = await shareEnvironment()
-    const preset = ecosystem.presets.find(item => item.id === 'minimal')
-    if (!preset || preset.broken || sources.hero('minimal')?.owner.package !== '@deepseek-ai/dsh-web-app') {
+    const presetId = arm ? 'standard' : 'minimal'
+    const preset = ecosystem.presets.find(item => item.id === presetId)
+    if (!preset || preset.broken || sources.hero(presetId)?.owner.package !== '@deepseek-ai/dsh-web-app') {
       throw new Error(webSourceUnavailable)
     }
-    const baseline = [...summarizeCapabilities(ecosystem, 'minimal', {}).values()]
-      .filter(item => item.kind === 'tool').map(item => item.name)
-    if (!baseline.includes('bash') || baseline.includes('web_fetch')) throw new Error(webSourceUnavailable)
-    const draft = { presetId: 'minimal', equipmentIds: ['web'], equipmentSources: {}, removedEquipmentIds: [] }
+    const equipmentIds = arm === 'evidence' ? ['evidence'] : arm ? [] : ['web']
+    const draft = { presetId, equipmentIds, equipmentSources: {}, removedEquipmentIds: [] }
+    const baseline = [...summarizeCapabilities(ecosystem, presetId, {}).values()]
+      .filter(item => item.kind === 'tool')
+    const standing = item => !item.timing || (arm && item.timing === 'condition')
+    const hasTool = name => baseline.some(item => item.name === name && (arm ? standing(item) : true))
+    if (arm ? !['web_fetch', 'ask_user_question', 'present'].every(hasTool) : !hasTool('bash') || hasTool('web_fetch')) {
+      throw new Error(webSourceUnavailable)
+    }
     const { candidate, choices } = await plannedGrowth(draft, { ecosystem })
-    const fetches = choices.filter(item => item.kind === 'tool' && item.name === 'web_fetch' && !item.timing)
+    const fetches = choices.filter(item => item.kind === 'tool' && item.name === 'web_fetch' && standing(item))
     if (fetches.length !== 1) throw new Error(webSourceUnavailable)
+    const [{ id: webToolId, sourceId }] = fetches
+    if (arm && (!sourceId || !baseline.some(item => item.id === webToolId && item.sourceId === sourceId))) throw new Error(webSourceUnavailable)
     signal?.throwIfAborted()
-    return { draft, candidate, webToolId: fetches[0].id }
+    return { draft, candidate, webToolId, webToolSource: arm ? sourceId : undefined }
   }
 
-  async function checkWebSourcePractice({ task, hash }, signal) {
-    const { draft, candidate, webToolId } = await plannedWebSourceLoadout(signal)
-    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, hash, candidate.id, webToolId])).digest('hex')
-    return { token, draft, candidate, webToolId, view: { planName: '网页检索', task } }
+  async function checkWebSourcePractice({ task, hash, arm }, signal) {
+    const { draft, candidate, webToolId, webToolSource } = await plannedWebSourceLoadout(signal, arm)
+    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, hash, candidate.id, webToolId, ...(arm ? [webToolSource] : [])])).digest('hex')
+    const planName = arm === 'evidence' ? '标准模式 + 证据核验' : arm ? '标准模式' : '网页检索'
+    return { token, draft, candidate, webToolId, webToolSource, view: { planName, task } }
   }
 
   async function previewWebSourcePractice(selection, english, signal) {
@@ -1465,7 +1498,13 @@ export async function apply(ctx) {
       hostVersion: webSourceHostVersion }
   }
 
-  function liveWebSourceBinding(agent, presetId, workspaceId, expectedToolId) {
+  async function previewWebPilot(selection, english, signal) {
+    const input = requestedWebPilot(selection, english)
+    const { token } = await checkWebSourcePractice(input, signal)
+    return { token, arm: input.arm, version: webSourceVersion, hostVersion: webSourceHostVersion }
+  }
+
+  function liveWebSourceBinding(agent, presetId, workspaceId, expectedToolId, arm, expectedSource) {
     const scope = agent && toolRuntime?.scopeOf(agent.ctx)
     const definition = scope && ctx.tools.get('web_fetch', scope)
     const origins = ctx.get('agentLoadoutToolOrigins')
@@ -1473,7 +1512,20 @@ export async function apply(ctx) {
     if (origin?.moduleName !== webSourceModule) throw new Error(webSourceChanged)
     const { id, sourceId } = dispatchedToolDetails(ctx, scope, definition, agent.ctx, records.get(presetId)?.definition.plugins)
     if (id !== expectedToolId || !sourceId) throw new Error(webSourceChanged)
-    return { id, sourceId, workspaceId, presetId }
+    if (arm && (sourceId !== expectedSource || pilotWebTool(scope) !== definition ||
+      ctx.agentPresets.composedPreset(agent.ctx) !== presetId)) throw new Error(webSourceChanged)
+    return { id, sourceId, workspaceId, presetId, ...(arm && { arm }) }
+  }
+
+  function webPilotResult(source, outcome, binding, task) {
+    const { status, turn, entries = [], deliverables = [] } = outcome
+    const receipt = observedWebSourceResult(source.events, turn, binding)
+    const decision = receipt && entries.findLast(entry => entry.name === 'ask_user_question' && !entry.nested &&
+      entry.state === 'completed' && entry.seq > receipt.seq && entry.choices?.length)
+    return { status, arm: binding.arm, sampleLanguage: task.startsWith('[') ? 'en' : 'zh', verified: Boolean(receipt),
+      ...(receipt && { url: webSourceUrl, version: webSourceVersion, hostVersion: webSourceHostVersion }),
+      ...(decision && { choice: decision.choices.join(' / ') }),
+      ...(status === 'complete' && { deliverables: completedPresentDelivery(outcome) ? deliverables.map(file => file.name) : [] }) }
   }
 
   async function inspectWebSourcePractice({ sessionId }, signal) {
@@ -1486,10 +1538,13 @@ export async function apply(ctx) {
       const workspace = binding && ctx.get('workspaceRegistry')?.get(binding.workspaceId)
       if (!workspace || header.cwd !== workspace.path || !workspace.sessionIds.includes(sessionId) ||
         header.agentPreset !== binding.presetId) return null
-      if (!started) return { view: { status: 'waiting' } }
+      const pilot = Boolean(binding.arm)
+      if (!started) return { view: { status: 'waiting', ...(pilot && { arm: binding.arm, verified: false }) }, binding }
       const outcome = await comparisonEvidence(source, {
         cwd: header.cwd, task: launch.task, presetId: binding.presetId, exactMessages: true,
+        ...(pilot && { includeQuestions: true, includeToolCoordinates: true, linkedChoicesOnly: true, verifyMaterialProof: false }),
       }, receipts)
+      if (pilot) return { view: webPilotResult(source, outcome, binding, launch.task), binding }
       const { status, turn } = outcome
       if (status !== 'complete') return { view: { status } }
       const verified = observedWebSource(source.events, turn, binding)
@@ -1509,12 +1564,18 @@ export async function apply(ctx) {
   }
 
   async function readWebSourcePractice(selection, signal) {
-    return (await inspectWebSourcePractice(selection, signal))?.view ?? null
+    const result = await inspectWebSourcePractice(selection, signal)
+    return result && !result.binding?.arm ? result.view : null
+  }
+
+  async function readWebPilot(selection, signal) {
+    const result = await inspectWebSourcePractice(selection, signal)
+    return result?.binding?.arm ? result.view : null
   }
 
   async function verifiedWebSourceLoadout(sessionId, signal) {
     const original = await inspectWebSourcePractice({ sessionId }, signal)
-    if (original?.view.status !== 'complete' || !original.view.verified || original.view.choice !== 'use-current') {
+    if (original?.view.status !== 'complete' || original.binding.arm || !original.view.verified || original.view.choice !== 'use-current') {
       throw new Error('请先核验试玩原文并选择采用新版清单。')
     }
     const { binding } = original
@@ -7359,8 +7420,10 @@ export async function apply(ctx) {
       }
       if (savedTask?.launch) {
         const { planName, material, task, source, armory, webSourcePractice } = savedTask.launch
-        if (webSourcePractice && savedTask.started) value.webSourcePractice = true
-        if (!savedTask.started) value.planTask = { planName, material, task, ...(webSourcePractice && { webSourcePractice: true }),
+        const webPilotPractice = webSourcePractice?.arm
+        const webPractice = webPilotPractice ? { webPilotPractice } : webSourcePractice ? { webSourcePractice: true } : {}
+        if (savedTask.started) Object.assign(value, webPractice)
+        if (!savedTask.started) value.planTask = { planName, material, task, ...webPractice,
           ...(source && { source }), ...(armory === true && { armory }), ...(savedTask.presetChanged && { presetChanged: true }) }
         else if (source) value.lessonTaskResult = true
         else if (armory === true && personalTaskTarget(savedTask.launch, savedTask.header)) {
@@ -7541,6 +7604,9 @@ export async function apply(ctx) {
         else if (selection?.action === 'growth-starter-open') value = await startLighthouse(selection, english, request.signal)
         else if (selection?.action === 'web-source-preview') value = await previewWebSourcePractice(selection, english, request.signal)
         else if (selection?.action === 'web-source-open') value = await openReviewedTask(selection, english, request.signal, 'web-source')
+        else if (selection?.action === 'web-pilot-preview') value = await previewWebPilot(selection, english, request.signal)
+        else if (selection?.action === 'web-pilot-open') value = await openReviewedTask(selection, english, request.signal, 'web-pilot')
+        else if (selection?.action === 'web-pilot-result') value = await readWebPilot(selection, request.signal)
         else if (selection?.action === 'web-source-result') value = await readWebSourcePractice(selection, request.signal)
         else if (selection?.action === 'web-source-choice') value = await chooseWebSourcePractice(selection, request.signal)
         else if (selection?.action === 'web-source-personal-options') value = await webSourcePersonalOptions(selection, request.signal)

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { matchReport, toolSourceRecord, webRecoveryFingerprint } from '../match-report.js'
 import { englishText } from '../localization.js'
-import { observedWebSource, webSourceUrl } from '../web-source-practice.js'
+import { observedWebSource, observedWebSourceResult, webSourceUrl } from '../web-source-practice.js'
 
 const manifest = await readFile(new URL('./fixtures/web-source-v196.json', import.meta.url), 'utf8')
 const binding = { id: 'tool:web', sourceId: 'plugin:stock-web' }
@@ -21,7 +21,9 @@ function evidence() {
 }
 
 test('Web Research accepts the complete pinned native manifest', () => {
-  assert.equal(observedWebSource(evidence(), 1, binding), true)
+  const events = evidence()
+  assert.equal(observedWebSource(events, 1, binding), true)
+  assert.equal(observedWebSourceResult(events, 1, binding), events[2])
 })
 
 test('Web Research leaves incomplete, changed, and unrelated results unverified', () => {
