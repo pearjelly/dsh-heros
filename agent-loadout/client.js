@@ -1769,7 +1769,7 @@ window.__ModuleLoader__.load({
       return h('p', { className: 'moba-web-pilot-consequence' }, label)
     }
 
-    function WebPilotOutcome({ view, complete }) {
+    function WebPilotOutcome({ view, complete, deferEmptyFiles }) {
       const decision = complete && view?.practiceDecision
       const actual = decision && (decision.actual === 'none' ? t('未记录选择') : view.choice || t(webPilotReportDecisions[decision.actual]))
       return h(Fragment, null,
@@ -1782,7 +1782,7 @@ window.__ModuleLoader__.load({
         decision?.consequence && h(WebPilotConsequence, { consequence: decision.consequence }),
         view?.deliverables?.length > 0 && h('ul', { className: 'moba-web-pilot-files', 'aria-label': t('交付文件') },
           view.deliverables.map((name, index) => h('li', { key: index }, name))),
-        complete && decision?.consequence?.kind !== 'qualify' && view.deliverables?.length === 0 &&
+        complete && !deferEmptyFiles && decision?.consequence?.kind !== 'qualify' && view.deliverables?.length === 0 &&
           h('p', null, t('本局没有交付文件。')))
     }
 
@@ -2089,7 +2089,9 @@ window.__ModuleLoader__.load({
       const receivedPersonal = exchangeView === 'received-personal'
       const receivedComparison = exchangeView === 'received' || receivedPersonal
       const comparison = complete && view.verified ? view.comparison : null
-      const showsSmokeTestGap = ['gather', 'pause'].includes(view?.practiceDecision?.consequence?.kind)
+      const consequence = view?.practiceDecision?.consequence
+      const showsSmokeTestGap = ['gather', 'pause'].includes(consequence?.kind)
+      const deferEmptyFiles = consequence?.kind === 'gather' && view.deliverables?.length === 0
       const promoteReplay = canReplay && canShare && currentArm === 'standard' && !hasReceivedReport && !comparison
       const startReplay = canReplay && h('button', { type: 'button', ref: replayTrigger,
         className: 'moba-settlement-button' + (promoteReplay ? ' moba-web-pilot-replay-primary' : ''),
@@ -2125,7 +2127,7 @@ window.__ModuleLoader__.load({
 
       return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-result', tabIndex: 0, 'aria-label': t(webPilotTitle) },
         h('div', null, h('strong', null, t(webPilotTitle)), armName && h('span', null, t(armName))),
-        view?.practiceDecision && h(WebPilotOutcome, { view, complete }),
+        view?.practiceDecision && h(WebPilotOutcome, { view, complete, deferEmptyFiles }),
         (comparison || canReviewReplays || canShare) && h('div', { className: 'moba-web-pilot-primary-actions' },
           promoteReplay && startReplay,
           hasReceivedReport && h('button', { type: 'button', className: 'moba-settlement-button moba-web-pilot-received',
@@ -2139,6 +2141,7 @@ window.__ModuleLoader__.load({
           !promoteReplay && !hasReceivedReport && canReviewReplays && !comparison && startReplay,
           canShare && h('button', { type: 'button', className: 'moba-settlement-button',
             'aria-haspopup': 'dialog', onClick: event => openExchange('report', event) }, t(webPilotReportTitle))),
+        deferEmptyFiles && h('p', null, t('本局没有交付文件。')),
         current?.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
           h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重新核对'))),
         unavailable && h('p', null, t('这次任务或出装已变化，无法核对本局。')),
@@ -14307,6 +14310,7 @@ window.__ModuleLoader__.load({
       @media (max-width: 600px) {
         .moba-web-pilot-result { box-sizing: border-box; align-content: start;
           max-block-size: max(88px, calc(100dvh - 444px)); overflow: auto; scroll-padding-block: 8px; }
+        .moba-web-pilot-result:has(> .moba-web-pilot-consequence) { max-block-size: max(88px, calc(100dvh - 416px)); }
         .moba-web-pilot-result .moba-web-pilot-primary-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .moba-web-pilot-result .moba-lighthouse-anchor-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .moba-web-pilot-result .moba-lighthouse-anchor-actions a { grid-column: 1 / -1; }
