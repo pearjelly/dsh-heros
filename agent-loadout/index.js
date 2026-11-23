@@ -56,6 +56,7 @@ const webSourceChanged = '试玩出装已变化，请重新核对。'
 const webPilotReplayChanged = '无法核对原局的题目或网页来源，请返回原局。'
 const webPilotReplayUnavailable = '这局复赛已变化，请重新核对。'
 const webPilotPersonalUnavailable = '请从已核对的两局对照里选择一套出装。'
+const receivedWebPilotPersonalUnavailable = '请从本局已核对的好友战报对照使用本机出装。'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
 const heroTrialDigest = createHash('sha256').update(lighthouseHeroContents).digest('hex')
@@ -1885,7 +1886,13 @@ export async function apply(ctx) {
     return { workspaceIds: await personalWorkspaceIds(signal) }
   }
 
-  async function verifiedWebPilotLoadout({ sessionId, arm }, signal) {
+  async function verifiedWebPilotLoadout({ sessionId, arm, received }, signal) {
+    if (received === true) {
+      if (arm !== undefined) throw new Error(receivedWebPilotPersonalUnavailable)
+      const result = await inspectWebSourcePractice({ sessionId }, signal)
+      if (!result?.receivedReport) throw new Error(receivedWebPilotPersonalUnavailable)
+      return verifiedWebPilotBinding(result.binding, signal)
+    }
     if (!['standard', 'evidence'].includes(arm)) throw new Error(webPilotPersonalUnavailable)
     const result = await inspectWebSourcePractice({ sessionId }, signal)
     const pair = await verifiedWebPilotPair(sessionId, result, signal)
@@ -1989,11 +1996,14 @@ export async function apply(ctx) {
       })
   }
 
-  function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm }, signal, kind = 'web-source-personal') {
+  function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm, received }, signal, kind = 'web-source-personal') {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error('开局请求无效，请重试。')
     const pilot = kind === 'web-pilot-personal'
-    return openPersonalWebDraft({ workspaceId, launchId }, signal, [kind, sessionId, ...(pilot ? [arm] : [])],
-      () => pilot ? verifiedWebPilotLoadout({ sessionId, arm }, signal) : verifiedWebSourceLoadout(sessionId, signal))
+    const fromReceived = pilot && received === true
+    if (fromReceived && arm !== undefined) throw new Error(receivedWebPilotPersonalUnavailable)
+    const identity = fromReceived ? ['web-pilot-received-personal', sessionId] : [kind, sessionId, ...(pilot ? [arm] : [])]
+    return openPersonalWebDraft({ workspaceId, launchId }, signal, identity,
+      () => pilot ? verifiedWebPilotLoadout({ sessionId, arm, received: fromReceived }, signal) : verifiedWebSourceLoadout(sessionId, signal))
   }
 
   async function openPersonalWebDraft({ workspaceId, launchId }, signal, identity, loadout, checkCurrent) {

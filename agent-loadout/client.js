@@ -1469,7 +1469,7 @@ window.__ModuleLoader__.load({
         setup && h(AddMaterialsFolder, { setup, disabled: busy, label: '添加工作区', onAdded }))
     }
 
-    function WebSourcePersonalDraft({ sessionId, arm, request, workspaces, onCancel, onOpen }) {
+    function WebSourcePersonalDraft({ sessionId, arm, received, request, workspaces, dialogRef, onCancel, onOpen }) {
       const language = useLanguage()
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [checked, setChecked] = useState(null)
@@ -1479,21 +1479,25 @@ window.__ModuleLoader__.load({
       const [openError, setOpenError] = useState('')
       const opening = useRef(null)
       const launchIds = useRef(new Map())
-      const route = arm ? 'web-pilot-personal' : 'web-source-personal'
-      const loadout = arm ? webPilotArms[arm].name : '极简模式 + 网页检索'
+      const route = arm || received ? 'web-pilot-personal' : 'web-source-personal'
       const membership = JSON.stringify(items.map(item => item.workspaceId).sort())
       const current = checked?.attempt === attempt && checked.language === language && checked.membership === membership ? checked : null
+      const loadout = received ? webPilotArms[current?.options?.arm]?.name : arm ? webPilotArms[arm].name : '极简模式 + 网页检索'
       const available = current?.options ? items.filter(item => current.options.workspaceIds.includes(item.workspaceId)) : empty
       const workspace = available.find(item => item.workspaceId === workspaceId)
 
       useEffect(() => {
         const abort = new AbortController()
         const action = route + '-options'
-        request(action, { action, sessionId, ...(arm && { arm }) }, abort.signal, language)
-          .then(options => { if (!abort.signal.aborted) setChecked({ options, attempt, language, membership }) })
+        request(action, { action, sessionId, ...(received ? { received: true } : arm && { arm }) }, abort.signal, language)
+          .then(options => {
+            if (abort.signal.aborted) return
+            if (received && !Object.hasOwn(webPilotArms, options?.arm)) throw new Error(t('试玩出装已变化，请重新核对。'))
+            setChecked({ options, attempt, language, membership })
+          })
           .catch(reason => { if (!abort.signal.aborted) setChecked({ error: reason.message, attempt, language, membership }) })
         return () => abort.abort()
-      }, [request, sessionId, arm, route, attempt, language, membership])
+      }, [request, sessionId, arm, received, route, attempt, language, membership])
       useEffect(() => () => opening.current?.abort(), [])
 
       async function open(event) {
@@ -1508,7 +1512,8 @@ window.__ModuleLoader__.load({
         }
         try {
           const action = route + '-open'
-          const result = await request(action, { action, sessionId, ...(arm && { arm }), workspaceId, launchId: launchIds.current.get(workspaceId) },
+          const result = await request(action, { action, sessionId, ...(received ? { received: true } : arm && { arm }),
+            workspaceId, launchId: launchIds.current.get(workspaceId) },
             abort.signal, language)
           if (!abort.signal.aborted) onOpen(result.sessionId)
         } catch (reason) {
@@ -1521,8 +1526,8 @@ window.__ModuleLoader__.load({
 
       return h(InstallDialog, { title: t(lessonTaskLabel),
         className: 'moba-starter-dialog moba-web-source-dialog moba-web-personal-dialog',
-        initialFocus: '.moba-web-source-back', busy, onCancel },
-        h(InstallFacts, { facts: [[t('出装'), t(loadout)]] }),
+        initialFocus: '.moba-web-source-back', busy, dialogRef, onCancel },
+        loadout && h(InstallFacts, { facts: [[t('出装'), t(loadout)], [t('来源'), received && t('DSH 内置网页检索')]] }),
         h('p', { className: 'moba-starter-note' }, t('在新草稿中粘贴要核对的链接，写下问题，再手动发送。')),
         !current && h('p', { role: 'status' }, t('正在核对可用工作区…')),
         (openError || current?.error) && h('p', { className: 'moba-alert', role: 'alert' }, openError || current.error),
@@ -1984,6 +1989,7 @@ window.__ModuleLoader__.load({
       const returnFromReplayList = useRef(false)
       const exchangeTrigger = useRef(null)
       const exchangeDialog = useRef(null)
+      const backToPersonalAction = useRef(false)
       const current = state?.language === language && state.attempt === attempt ? state : null
       const view = current?.view
 
@@ -2025,6 +2031,8 @@ window.__ModuleLoader__.load({
       const canReviewReplays = view?.canReviewReplays === true
       const canShare = complete && view.verified === true
       const hasReceivedReport = canShare && view.hasReceivedReport === true
+      const receivedPersonal = exchangeView === 'received-personal'
+      const receivedComparison = exchangeView === 'received' || receivedPersonal
       const comparison = complete && view.verified ? view.comparison : null
       const startReplay = canReplay && h('button', { type: 'button', ref: replayTrigger, className: 'moba-settlement-button',
         'aria-haspopup': 'dialog', onClick: () => setReplayOpen(true) }, t('换另一套出装再试'))
@@ -2037,12 +2045,24 @@ window.__ModuleLoader__.load({
 
       function openExchange(view, event) {
         exchangeTrigger.current = event.currentTarget
+        backToPersonalAction.current = false
         setExchangeView(view)
       }
 
       function closeExchange() {
         exchangeDialog.current?.close()
         setExchangeView('')
+      }
+
+      function openReceivedPersonal() {
+        exchangeDialog.current?.close()
+        setExchangeView('received-personal')
+      }
+
+      function closeReceivedPersonal() {
+        exchangeDialog.current?.close()
+        backToPersonalAction.current = true
+        setExchangeView('received')
       }
 
       return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-result', tabIndex: 0, 'aria-label': t(webPilotTitle) },
@@ -2077,8 +2097,16 @@ window.__ModuleLoader__.load({
           (hasReceivedReport || !canReviewReplays || comparison) && startReplay),
         canShare && exchangeView === 'invite' && h(LighthouseChallengeShare, {
           webPilotSessionId: sessionId, request, dialogRef: exchangeDialog, onBack: closeExchange }),
-        canShare && (exchangeView === 'report' || hasReceivedReport && exchangeView === 'received') && h(WebPilotHandoffReport, {
-          sessionId, request, received: exchangeView === 'received', dialogRef: exchangeDialog, onBack: closeExchange }),
+        canShare && (exchangeView === 'report' || hasReceivedReport && receivedComparison) && h(WebPilotHandoffReport, {
+          sessionId, request, received: receivedComparison, suspended: receivedPersonal, focusPersonal: backToPersonalAction.current,
+          dialogRef: exchangeDialog, onBack: closeExchange, onPersonal: receivedComparison ? openReceivedPersonal : undefined }),
+        hasReceivedReport && receivedPersonal && h(WebSourcePersonalDraft, {
+          sessionId, request, received: true, workspaces, dialogRef: exchangeDialog, onCancel: closeReceivedPersonal,
+          onOpen: targetId => {
+            exchangeTrigger.current = null
+            closeExchange()
+            onOpen(targetId)
+          } }),
         canReviewReplays && replayListOpen && h(WebPilotReplayList, { sessionId, request, workspaces, onCancel: () => {
           returnFromReplayList.current = true
           setReplayListOpen(false)
@@ -3050,7 +3078,7 @@ window.__ModuleLoader__.load({
             onClick: () => { setCompareError(''); setQuery(value => ({ ...value })) } }, t('重新核对'))))
     }
 
-    function WebPilotHandoffReport({ sessionId, request, received, dialogRef, onBack }) {
+    function WebPilotHandoffReport({ sessionId, request, received, suspended, focusPersonal, dialogRef, onBack, onPersonal }) {
       const language = useLanguage()
       const [result, setResult] = useState(null)
       const [input, setInput] = useState('')
@@ -3142,9 +3170,12 @@ window.__ModuleLoader__.load({
         }
       }
 
+      if (suspended) return null
+
       return h(InstallDialog, { title: t(received ? webPilotReceivedReportTitle : webPilotReportTitle),
         className: 'moba-starter-dialog moba-web-pilot-handoff',
-        dialogRef, onCancel: onBack, initialFocus: received ? '.moba-web-pilot-handoff-back' : '.moba-web-pilot-handoff-input',
+        dialogRef, onCancel: onBack, initialFocus: received ? (focusPersonal ? '.moba-web-pilot-received-use' : '.moba-web-pilot-handoff-back')
+          : '.moba-web-pilot-handoff-input',
         onKeyDown: event => closeDialogOnEscape(event, onBack) },
         h('form', { onSubmit: received ? undefined : compare },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
@@ -3168,6 +3199,8 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-handoff-back', onClick: onBack }, t('返回')),
             error && !result && h('button', { type: 'button', className: 'moba-roster-open', onClick: () => retry(value => value + 1) }, t('重新核对')),
+            received && result?.local && result?.friend && onPersonal && h('button', { type: 'button',
+              className: 'moba-start moba-web-pilot-received-use', 'aria-haspopup': 'dialog', onClick: onPersonal }, t('用我的出装')),
             !received && h('button', { type: 'submit', className: 'moba-start', disabled: busy || !result?.local || !input.trim() }, t('对照好友战报')))))
     }
 
