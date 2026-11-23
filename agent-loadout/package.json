@@ -48,6 +48,8 @@
     "catalog.js",
     "cordis.patch.yml",
     "README.md",
+    "README.en.md",
+    "GUIDE.zh.md",
     "ecosystem.js",
     "market.js",
     "standalone-installer.js",
