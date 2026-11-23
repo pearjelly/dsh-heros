@@ -3621,14 +3621,18 @@ export async function apply(ctx) {
     return { code: encodeLighthouseCombinedChallenge(sampleLanguage, played), sampleLanguage, played }
   }
 
+  function combinedLighthouseReviewChoice({ workflowDecisions }) {
+    const review = workflowDecisions.find(item => item.gearId === 'review')?.choices ?? []
+    return review.length === 1 ? lighthouseReviewDecision(review[0]) : review.length ? 'answered' : 'none'
+  }
+
   function combinedLighthouseReportSide(original) {
     const { language: sampleLanguage, mode: played, workflowDecisions, deliverables } = original
     const evidence = workflowDecisions.find(item => item.gearId === 'evidence')?.choices ?? []
-    const review = workflowDecisions.find(item => item.gearId === 'review')?.choices ?? []
     return {
       sampleLanguage, played,
       evidence: evidence.length ? lighthouseEvidenceDecision(evidence) ?? 'answered' : 'none',
-      review: review.length === 1 ? lighthouseReviewDecision(review[0]) : review.length ? 'answered' : 'none',
+      review: combinedLighthouseReviewChoice(original),
       delivered: deliverables.length > 0,
     }
   }
@@ -3645,6 +3649,17 @@ export async function apply(ctx) {
   }
 
   async function checkCombinedLighthousePairSide({ sessionId, pairSide }, signal) {
+    if (pairSide === 'revision') {
+      const current = await readCombinedLighthouseRound(sessionId, signal, 'revision')
+      if (!confirmedCombinedLighthouseRevision(current)) throw new Error(combinedLighthouseReplayUnavailable)
+      const previous = await combinedLighthouseRevisionSource(current, signal)
+      if (!previous) throw new Error(combinedLighthouseReplayUnavailable)
+      const revision = await checkCombinedLighthouseRoundLoadout(current, signal)
+      return { draft: revision.draft, mode: revision.mode, binding: [
+        'lighthouse-revision-carry-v1', previous.sessionId, sessionId, revision.identity, current.target.digest,
+        previous.workflowDecisions, current.workflowDecisions, current.deliverables,
+      ] }
+    }
     if (pairSide === 'shared') {
       const current = await readCombinedLighthouseRound(sessionId, signal, 'confirmed')
       const previous = current && await combinedLighthouseScenarioSource(current, signal)
@@ -3709,9 +3724,13 @@ export async function apply(ctx) {
   }
 
   function eligibleCombinedLighthouseRevision(original) {
-    if (original?.scenario !== 'gap' || original.target.digest !== heroTrialDigest || original.deliverables.length) return false
-    const review = original.workflowDecisions.find(item => item.gearId === 'review')?.choices
-    return review?.length === 1 && lighthouseReviewDecision(review[0]) === 'revise'
+    return original?.scenario === 'gap' && original.target.digest === heroTrialDigest &&
+      !original.deliverables.length && combinedLighthouseReviewChoice(original) === 'revise'
+  }
+
+  function confirmedCombinedLighthouseRevision(current) {
+    return current?.scenario === 'revision' && current.deliverables.length > 0 &&
+      combinedLighthouseReviewChoice(current) === 'confirm'
   }
 
   async function checkCombinedLighthouseRevision({ sourceSessionId }, signal) {
@@ -7697,7 +7716,8 @@ export async function apply(ctx) {
       ...(gapRound && !lighthousePair && { lighthouseOutcomeIds: workflowOutcomeIds(workflowDecisions) }),
       ...(eligibleCombinedLighthouseScenario(gapRound) && { lighthouseScenarioReplay: true }),
       ...(eligibleCombinedLighthouseRevision(gapRound) && { lighthouseRevisionAvailable: true }),
-      ...(lighthouseRevisionPair && { lighthouseRevisionPair }),
+      ...(lighthouseRevisionPair && { lighthouseRevisionPair,
+        ...(confirmedCombinedLighthouseRevision(lighthouseRound) && { lighthouseRevisionCarry: true }) }),
       ...(lighthouseScenarioPair && { lighthouseScenarioPair }), ...(gapRound?.receivedReport && { lighthouseReceivedReport: true }),
       ...(personalWorkflowReceipt && { personalWorkflowReceipt }), ...(personalWorkflowRematch && { personalWorkflowRematch }),
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),

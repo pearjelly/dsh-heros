@@ -2361,7 +2361,10 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       assert.equal(marker.lighthouseReceivedReport, undefined)
       const card = join(draft.workspacePath, combinedPractice.material)
       assert.equal(await readFile(card, 'utf8'), sample)
-      assert.equal((await result(opened.sessionId))?.lighthouseRevisionPair, undefined)
+      const unsentRevision = await result(opened.sessionId)
+      assert.equal(unsentRevision?.lighthouseRevisionPair, undefined)
+      assert.equal(unsentRevision?.lighthouseRevisionCarry, undefined)
+      await pairedDraft(opened.sessionId, 'revision', 422)
       const sampleLanguage = mode === 'review' ? 'zh' : 'en'
       async function pendingRevision(status) {
         const run = (await pendingLighthouse()).runs.find(row => row.sessionId === opened.sessionId)
@@ -2421,6 +2424,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       assert.equal(revised.lighthousePair, undefined)
       assert.equal(revised.lighthouseScenarioPair, undefined)
       assert.notEqual(revised.lighthouseRevisionAvailable, true)
+      assert.equal(revised.lighthouseRevisionCarry, confirm ? true : undefined)
       const completed = (await lighthouseHistory()).runs.find(row => row.sessionId === opened.sessionId)
       assert.ok(completed, 'The completed revision must appear in the Lighthouse history.')
       assert.deepEqual(completed, { sessionId: opened.sessionId, kind: 'revision', mode, sampleLanguage,
@@ -2439,8 +2443,89 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       assert.equal(await readFile(join(before.workspacePath, combinedPractice.material), 'utf8'), sample)
       assert.deepEqual(await native(source.sessionId), before)
       assert.deepEqual(await native(opened.sessionId), revisionNative)
-      revisions.push({ sessionId: opened.sessionId, pair: revised.lighthouseRevisionPair })
+      revisions.push({ sessionId: opened.sessionId, pair: revised.lighthouseRevisionPair, card, native: revisionNative })
     }
+
+    const confirmedRevision = revisions.find(item => item.pair.current.deliverables.length > 0)
+    const returnedRevision = revisions.find(item => item.pair.current.deliverables.length === 0)
+    assert.deepEqual(await pairedDraft(confirmedRevision.sessionId, 'revision'), { draft: review.draft, heroName: '标准模式', mode: 'review' })
+    await pairedDraft(returnedRevision.sessionId, 'revision', 422)
+    await pairedDraft(reviewOpening.sessionId, 'revision', 422)
+    await pairedDraft(variant.sessionId, 'revision', 422)
+    await pairedDraft(confirmedRevision.sessionId, 'current', 422)
+    await personalDraft(confirmedRevision.sessionId, 422)
+
+    const revisionOwnDirectory = join(directory, 'revision-own-workspace')
+    const revisionOwnFile = join(revisionOwnDirectory, privateMaterial)
+    const revisionOwnBytes = '# Private warehouse manifest\nThe morning shift has two spare radios in cabinet 3.\n'
+    await mkdir(dirname(revisionOwnFile), { recursive: true })
+    await writeFile(revisionOwnFile, revisionOwnBytes)
+    const { sessionId: privateSeed } = await host.request('/api/loadout-fixture-session', {
+      presetId: 'standard', workspacePath: revisionOwnDirectory,
+    })
+    const { workspaceId: revisionOwnWorkspaceId } = await native(privateSeed)
+    assert.notEqual(revisionOwnWorkspaceId, confirmedRevision.native.workspaceId)
+    assert.notEqual(revisionOwnWorkspaceId, personalWorkspace)
+    const revisionOwn = { workspaceId: revisionOwnWorkspaceId, material: privateMaterial,
+      task: '核对新的仓库台账有没有一台备用充电器，并拟一份现场交接稿。',
+      lighthousePair: { sessionId: confirmedRevision.sessionId, pairSide: 'revision' } }
+    const revisionOwnPreview = await previewOwn({ ...revisionOwn, draft: both.draft })
+    assert.deepEqual(revisionOwnPreview.gear.map(item => item.id).sort(), ['present', 'review'])
+    assert.equal(revisionOwnPreview.workspaceId, revisionOwnWorkspaceId)
+    assert.equal(revisionOwnPreview.material, privateMaterial)
+    assert.ok(revisionOwnPreview.task.includes(revisionOwn.task))
+    assert.doesNotMatch(revisionOwnPreview.task, /02-lighthouse|revised-handoff|两节备用电池/u)
+    await openOwn({ ...revisionOwn, lighthousePair: { sessionId: returnedRevision.sessionId, pairSide: 'revision' } }, revisionOwnPreview.token, 422)
+    await openOwn({ ...revisionOwn, lighthousePair: { sessionId: confirmedRevision.sessionId, pairSide: 'current' } }, revisionOwnPreview.token, 422)
+    await previewOwn({ ...revisionOwn, workspaceId: confirmedRevision.native.workspaceId, material: combinedPractice.material }, 422)
+    async function assertStaleRevisionCarry() {
+      await pairedDraft(confirmedRevision.sessionId, 'revision', 422)
+      assert.equal((await result(confirmedRevision.sessionId))?.lighthouseRevisionCarry, undefined)
+      await openOwn(revisionOwn, revisionOwnPreview.token, 422)
+    }
+    await withChangedRevisionSource(assertStaleRevisionCarry)
+    try {
+      await appendFile(confirmedRevision.card, '\nRevision source changed after checking the private task.\n')
+      await assertStaleRevisionCarry()
+    } finally {
+      await writeFile(confirmedRevision.card, sample)
+    }
+
+    const carriedRevision = await openOwn({ ...revisionOwn, draft: null }, revisionOwnPreview.token)
+    assert.deepEqual(await openOwn(revisionOwn, revisionOwnPreview.token), carriedRevision)
+    assert.equal(carriedRevision.workspaceId, revisionOwnWorkspaceId)
+    assert.equal(carriedRevision.task, revisionOwnPreview.task)
+    assert.notEqual(carriedRevision.sessionId, confirmedRevision.sessionId)
+    const carriedDraft = await native(carriedRevision.sessionId)
+    assert.equal(carriedDraft.inherited, 0)
+    assert.equal(carriedDraft.presetId, confirmedRevision.native.presetId)
+    assert.ok(!carriedDraft.events.some(event => ['turn/start', 'user/message', 'tool/call'].includes(event.type)))
+    const privateLaunch = carriedDraft.events.find(event => event.type === 'plugin:dsh-agent-loadout/plan-task').data
+    assert.equal(privateLaunch.armory, true)
+    assert.equal(privateLaunch.material, privateMaterial)
+    assert.equal(privateLaunch.source, undefined)
+    const privateLaunchText = JSON.stringify(privateLaunch)
+    assert.doesNotMatch(privateLaunchText, /lighthousePair|lighthouseRevisionOf|lighthouseCarry|lighthouseCombined|02-lighthouse|revised-handoff/u)
+    assert.ok(!privateLaunchText.includes(confirmedRevision.sessionId) && !privateLaunchText.includes(reviewOpening.sessionId))
+
+    const carriedTurn = host.request(turnEndpoint, { sessionId: carriedRevision.sessionId, text: carriedRevision.task })
+    carriedTurn.catch(() => {})
+    await choose(carriedRevision.sessionId, 'fixture-delivery-review', 'Confirm handoff')
+    await carriedTurn
+    const carriedNative = await native(carriedRevision.sessionId)
+    const carriedCalls = carriedNative.events.filter(event => event.type === 'tool/call')
+    assert.deepEqual(carriedCalls.map(event => event.data.name), ['read', 'write', 'ask_user_question', 'present'])
+    assert.equal(JSON.parse(carriedCalls[0].data.arguments).file_path, privateMaterial)
+    const carriedDelivery = carriedNative.events.find(event => event.type === 'deliverables/presented')
+    assert.equal(carriedDelivery.data.files[0].path, join(revisionOwnDirectory, 'direct-handoff.md'))
+    const carriedRevisionResult = await result(carriedRevision.sessionId)
+    assert.deepEqual(carriedRevisionResult.personalWorkflowReceipt, { mode: 'review', outcomeIds: { review: ['confirm'] } })
+    assert.equal(carriedRevisionResult.lighthouseRevisionPair, undefined)
+    assert.equal(carriedRevisionResult.lighthouseRevisionCarry, undefined)
+    assert.equal(await readFile(revisionOwnFile, 'utf8'), revisionOwnBytes)
+    assert.deepEqual(await native(confirmedRevision.sessionId), confirmedRevision.native)
+    assert.deepEqual(await native(reviewOpening.sessionId), firstReviewNative)
+
     assert.deepEqual(await shareChallenge(reviewOpening.sessionId), invitation)
     assert.deepEqual(await readChallengeReport(invited.sessionId), pausedReport)
     const historyBeforeRestart = await lighthouseHistory()

@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.271.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.272.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -179,6 +179,8 @@ Both lobby paths and an invitation to this trial show the same two loadouts and 
 If you leave before sending or while a native question still needs an answer, open **Two decisions in one run** again. Pick the original or replay by time and status. Resuming opens the same conversation with its existing draft or question. You can also start a new run. The dispatch mentions spare batteries. Decide how to handle the missing evidence, then review the handoff draft if you proceed. The task result shows the recorded choices and any delivered files.
 
 After **Request changes** leaves zero files in a verified Lighthouse battery run, choose **Revise and review again**. Keep the same card and loadout, mark the dispatch’s spare battery claim as unverified, and open a separate draft. Send it yourself, then decide whether to deliver the revision. The new result shows both actual review choices and any delivered file.
+
+After a verified revision is approved and presents a file, choose **Use this loadout on my task** from the revision result. Review the exact loadout, choose your own file and write a new task, then open the draft and send it yourself.
 
 Return to **Two decisions in one run** to find a **Revision round** that is waiting for you to send the draft or answer the review. Completed revisions appear in **Lighthouse reports** with the actual delivered file count.
 

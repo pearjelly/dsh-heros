@@ -9427,7 +9427,7 @@ window.__ModuleLoader__.load({
       const briefField = useRef(null)
       const reviewHeading = useRef(null)
       const errorNotice = useRef(null)
-      const revealError = lighthouseSource?.sessionId || focusErrors
+      const revealError = lighthouseSource?.sessionId || lighthousePair?.pairSide === 'revision' || focusErrors
       const materialBusy = Boolean(working || checkingWorkspace)
       const workspace = workspaces.find(item => item.workspaceId === chosenWorkspaceId)
       const preview = reviewed?.value
@@ -13432,7 +13432,8 @@ window.__ModuleLoader__.load({
         'data-compact-gear-pair': compactGearPair || undefined, 'data-lighthouse-revision-pair': revisionPair || undefined },
         h('h4', { id: heading, 'data-personal-workflow-pair': personalPair || undefined, tabIndex: personalPair ? -1 : undefined },
           t(revisionPair ? '修订前后对照' : '对照两局')),
-        (scenarioPair || revisionPair) && h('p', { className: 'moba-match-action-note' }, t('两局沿用同一份补给卡和出装。')),
+        (scenarioPair || revisionPair) && h('p', { className: 'moba-match-action-note' },
+          t(revisionPair ? '同一张补给卡、同一套出装。' : '两局沿用同一份补给卡和出装。')),
         personalPair && h('p', { className: 'moba-lighthouse-note' }, t(personalModes[1] === 'review' ? '只卸下证据核验' : '只加装证据核验')),
         h('table', { 'aria-labelledby': heading },
           h('thead', null, h('tr', null, h('td'), columns.map((label, i) => h('th', { key: label, scope: 'col' }, t(label),
@@ -13468,6 +13469,10 @@ window.__ModuleLoader__.load({
               h('span', null, h('strong', null, label), !compactGearPair && h('small', null, setup)),
               !compactGearPair && h(Glyph, { kind: 'arrow', size: 16 }))
           })),
+        revisionPair && onCarry && h('div', { className: 'moba-lesson-result-options' },
+          h('button', { type: 'button', className: 'moba-match-move', ref: carryButtons.current, 'aria-haspopup': 'dialog',
+            'aria-description': t(lighthouseCarryModeLabels[pair.current.mode]), onClick: () => onCarry('revision') },
+            t(lighthousePersonalTaskLabel), h(Glyph, { kind: 'arrow', size: 16 }))),
         compactReceiptPair && sourceDetails,
         revisionPair ? h('div', { className: 'moba-lesson-result-options', 'data-lighthouse-single-actions': true },
           h('button', { type: 'button', className: 'moba-roster-open', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')),
@@ -13639,7 +13644,7 @@ window.__ModuleLoader__.load({
               ].filter(Boolean).join(' · ')),
               lighthousePair ? h(LighthouseDecisionPair, { pair: lighthousePair, scenarioPair: lighthouseScenarioPair,
                 revisionPair: lighthouseRevisionPair, onOpenMatch,
-                onCarry: !lighthouseRevisionPair && (lighthouseScenarioPair || result.lighthouseReplay) &&
+                onCarry: (lighthouseRevisionPair ? result.lighthouseRevisionCarry === true : lighthouseScenarioPair || result.lighthouseReplay) &&
                   (lighthousePairSide => onPersonalFlow({ mode: 'lighthouse-combined-personal', lighthousePairSide })),
                 carryButtons: { previous: lighthousePreviousPersonalButton, current: lighthousePersonalButton, shared: lighthousePersonalButton } })
                 : compactWorkflowReceipt ? h(WorkflowTaskReceipt, { rows: workflowRows, files: result.deliverables ?? empty,

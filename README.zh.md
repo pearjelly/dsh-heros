@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.271.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.272.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -183,6 +183,8 @@ dsh web
 如果在发送前或原生提问等待回答时离开，从大厅再点 **一局两道选择**。按时间和状态选择原局或复赛，回到已有草稿或提问。也可以另开一局。调度说有两节备用电池，先判断如何处理缺失证据。决定继续交接后，再核对草稿。会话的任务结果显示实际选择和交付文件。
 
 在备用电池题选择「退回修改」且没有交付时，回到本局战报点 **修订后再复核**。沿用原补给卡和出装，把备用电池说法标为未证实，再打开并手动发送独立草稿。第二次复核仍由你决定是否交付。修订结果可对照两次实际选择和交付文件。
+
+修订稿确认并实际交付后，可在修订战报点 **把这套出装用到我的任务**。核对实际使用的组合，再选自己的文件、填写新任务，打开之后手动发送。
 
 中途离开后，回到大厅的 **一局两道选择**，从「修订局」继续同一草稿或回到待复核的提问。完成后的修订局在 **灯塔战报** 显示实际交付数，可直接打开修订前后对照。
 
