@@ -1372,7 +1372,7 @@ test('Lighthouse same-task comparison keeps two original attempts and their nati
   }
 })
 
-test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 60_000 }, async () => {
+test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-playbook-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')
@@ -1825,6 +1825,40 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await readChallengeReport(variant.sessionId, { code: reportCode({ ...pausedRecipe, sample: 'lighthouse-battery-gap-1-en' }) }, 422)
     await readChallengeReport(variant.sessionId, { code: reportCode({ ...pausedRecipe, file: '/x' }) }, 422)
     await readChallengeReport(variant.sessionId, { code: reportCode({ ...pausedRecipe, evidence: 'none' }) }, 422)
+    assert.deepEqual(await native(variant.sessionId), variantNative)
+    const findChallengeReport = (fields, status) => challenge('lighthouse-combined-handoff-find', {
+      code: pausedReport.code, ...fields,
+    }, status)
+    const list = await findChallengeReport()
+    assert.deepEqual(list.friend, pausedReport.local)
+    assert.equal(list.nextBefore, undefined)
+    const eligible = new Map(list.runs.map(({ sessionId, openedAt, ...summary }) => {
+      assert.ok(Number.isFinite(Date.parse(openedAt)))
+      return [sessionId, summary]
+    }))
+    assert.deepEqual(eligible.get(variant.sessionId), deliveredReport.local)
+    assert.deepEqual(eligible.get(invited.sessionId), pausedReport.local)
+    assert.ok(!eligible.has(ownOpening.sessionId))
+    assert.ok(!eligible.has(withEvidence.sessionId))
+    const [latestEligible, ...olderEligible] = list.runs
+    assert.deepEqual((await findChallengeReport({
+      before: Date.parse(latestEligible.openedAt) + ':' + latestEligible.sessionId,
+    })).runs, olderEligible)
+    const oppositeLanguage = reportCode({ ...pausedRecipe, sample: 'lighthouse-battery-gap-1-en' })
+    assert.deepEqual(await findChallengeReport({ code: oppositeLanguage }), {
+      friend: { ...pausedReport.local, sampleLanguage: 'en' }, runs: [],
+    })
+    await findChallengeReport({ before: withEvidence.sessionId }, 422)
+    await findChallengeReport({ code: invitation.code }, 422)
+    const archivedSample = join(variantNative.workspacePath, combinedPractice.material)
+    const archivedBytes = await readFile(archivedSample)
+    try {
+      await appendFile(archivedSample, '\nChanged after opening the received report.\n')
+      assert.ok(!(await findChallengeReport()).runs.some(run => run.sessionId === variant.sessionId))
+      await readChallengeReport(variant.sessionId, { code: pausedReport.code }, 422)
+    } finally {
+      await writeFile(archivedSample, archivedBytes)
+    }
     assert.deepEqual(await native(variant.sessionId), variantNative)
 
     const before = await history(directSession)

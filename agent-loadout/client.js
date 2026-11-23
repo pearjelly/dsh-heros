@@ -3531,7 +3531,7 @@ window.__ModuleLoader__.load({
         code = candidate
       }
       if (code?.startsWith('DSHR4.')) return olderReport ? { problem: multiple } : { reportCode: code }
-      if (code?.startsWith('DSHR5.')) return olderReport ? { problem: multiple } : { combinedReport: true }
+      if (code?.startsWith('DSHR5.')) return olderReport ? { problem: multiple } : { combinedReportCode: code }
       if (olderReport && code?.startsWith('DSHC5.')) return { problem: multiple }
       return code ? { code } : { problem: '没有找到挑战码或试玩战报码。请粘贴完整消息或代码。' }
     }
@@ -3590,7 +3590,7 @@ window.__ModuleLoader__.load({
       const [challengeArm, setChallengeArm] = useState('')
       const [armCheck, setArmCheck] = useState(null)
       const [armAttempt, retryArm] = useState(0)
-      const [activeWebReport, setActiveWebReport] = useState('')
+      const [activeReport, setActiveReport] = useState('')
       const [reportTrial, setReportTrial] = useState(null)
       const pending = useRef(null)
       const launchIds = useRef(new Map())
@@ -3599,13 +3599,14 @@ window.__ModuleLoader__.load({
       const field = useRef(null)
       const errorMessage = useRef(null)
       const returnToReportTrial = useRef(false)
-      const { code: invitationCode, reportCode, combinedReport, problem } = useMemo(() => pastedLighthouseChallenge(input), [input])
+      const { code: invitationCode, reportCode, combinedReportCode, problem } = useMemo(() => pastedLighthouseChallenge(input), [input])
       const trimmed = input.trim()
       const returnedReport = trimmed.length <= lighthouseHandoffReportCodeLimit && reviewHandoffReportCode.test(trimmed)
       const code = reportTrial?.code ?? invitationCode
-      const receivedReportCode = reportTrial ? activeWebReport : undefined
+      const activeCombinedReport = activeReport.startsWith('DSHR5.')
+      const receivedReportCode = reportTrial ? activeReport : undefined
       const preview = reportTrial?.preview ?? (code && checked?.code === code && checked.language === language ? checked.value : undefined)
-      const showFinder = Boolean(activeWebReport && !reportTrial)
+      const showFinder = Boolean(activeReport && !reportTrial)
       const heroTrial = preview?.kind === 'hero-trial'
       const reviewTrial = preview?.kind === 'delivery-review'
       const webTrial = preview?.kind === 'web-pilot'
@@ -3663,7 +3664,7 @@ window.__ModuleLoader__.load({
 
       function editReport() {
         returnToReportTrial.current = false
-        setActiveWebReport('')
+        setActiveReport('')
       }
 
       function backToReport() {
@@ -3674,10 +3675,10 @@ window.__ModuleLoader__.load({
       }
 
       async function check(useLocal = false) {
-        if (pending.current || returnedReport || combinedReport || (useLocal && !canReviewLocal)) return
-        if (reportCode) {
+        if (pending.current || returnedReport || (useLocal && !canReviewLocal)) return
+        if (reportCode || combinedReportCode) {
           editInvitation()
-          setActiveWebReport(reportCode)
+          setActiveReport(combinedReportCode || reportCode)
           return
         }
         if (!code) {
@@ -3744,7 +3745,8 @@ window.__ModuleLoader__.load({
 
       const back = showFinder ? editReport : reportTrial ? backToReport : cancel
       return h(InstallDialog, { title: t(challengeJoinTitle),
-        className: showFinder ? 'moba-starter-dialog moba-web-pilot-handoff moba-web-pilot-handoff-find'
+        className: showFinder ? 'moba-starter-dialog moba-web-pilot-handoff moba-web-pilot-handoff-find' +
+          (activeCombinedReport ? ' moba-lighthouse-combined-report' : '')
           : 'moba-starter-dialog moba-challenge-join' + (requiresArm ? ' moba-web-challenge-join' : '') +
             (combinedTrial ? ' moba-combined-challenge-join' : '') +
             (reportTrial ? ' moba-web-report-trial-preview' : ''), dialogRef: dialog,
@@ -3752,8 +3754,9 @@ window.__ModuleLoader__.load({
         initialFocus: showFinder ? (returnToReportTrial.current ? '.moba-web-report-trial' : '.moba-web-pilot-find-heading')
           : showInput ? '.moba-share-code' : '.moba-handoff-invitation-heading h3',
         onKeyDown: showFinder ? undefined : event => closeDialogOnEscape(event, () => { if (!pending.current) back() }) },
-        activeWebReport && h(WebPilotHandoffFind, { code: activeWebReport, request, active: showFinder, onEdit: editReport,
-          onTrial: result => { editInvitation(); setReportTrial(result) } }),
+        activeReport && h(PracticeReportFinder, { key: activeReport, code: activeReport, request, active: showFinder,
+          combined: activeCombinedReport, onEdit: editReport,
+          onTrial: activeCombinedReport ? undefined : result => { editInvitation(); setReportTrial(result) } }),
         !showFinder && h('form', { onSubmit: event => { event.preventDefault(); if (requiresArm) void start(challengeArm); else void check() } },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
             showInput && h('label', null, t('挑战邀请、试玩战报或代码'),
@@ -3762,8 +3765,6 @@ window.__ModuleLoader__.load({
                 onChange: event => { setInput(event.target.value); setChecked(null); setError(''); setOpeningChoice('') } })),
             returnedReport && h('p', { className: 'moba-starter-note', role: 'status' }, t(onFindHandoffReport
               ? '这是一份交接战报。请选择自己的原局再对照。' : '这是一份交接战报。完成同题交接后即可对照。')),
-            combinedReport && h('p', { className: 'moba-starter-note', role: 'status' },
-              t('这是一份灯塔备用电池战报。打开你已完成的同题战报，点「交换试玩战报」粘贴。')),
             error && h('p', { className: 'moba-alert', role: 'alert', ref: errorMessage, tabIndex: reportTrial ? -1 : undefined }, error),
             busy === 'check' && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对挑战要求…')),
             preview && h('div', { className: 'moba-share-review' },
@@ -3799,8 +3800,8 @@ window.__ModuleLoader__.load({
               t(reportTrial ? '返回好友战报' : '返回')),
             returnedReport && onFindHandoffReport && h('button', { type: 'button', className: 'moba-start',
               onClick: () => onFindHandoffReport(trimmed) }, t(lighthouseHandoffHistoryLabel)),
-            !returnedReport && !combinedReport && showInput && h('button', { type: 'submit', className: canOpen || canReviewLocal ? 'moba-roster-open' : 'moba-start',
-              disabled: Boolean(busy) || !input.trim() }, t(code ? '核对挑战码' : '核对邀请或战报')),
+            !returnedReport && showInput && h('button', { type: 'submit', className: canOpen || canReviewLocal ? 'moba-roster-open' : 'moba-start',
+              disabled: Boolean(busy) || !input.trim() }, t(combinedReportCode ? '查找本机同题对局' : code ? '核对挑战码' : '核对邀请或战报')),
             canReviewLocal && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy),
               onClick: () => void check(true) }, t('核对本机标准出装')),
             selectedArm?.error && h('button', { type: 'button', className: 'moba-roster-open',
@@ -4143,7 +4144,7 @@ window.__ModuleLoader__.load({
         [t('交付文件'), t(side.delivered ? '有交付记录' : '没有交付记录')]]
     }
 
-    function WebPilotHandoffFind({ code, request, active, onEdit, onTrial }) {
+    function PracticeReportFinder({ code, request, active, combined, onEdit, onTrial }) {
       const language = useLanguage()
       const [query, setQuery] = useState({})
       const [page, setPage] = useState(null)
@@ -4166,12 +4167,12 @@ window.__ModuleLoader__.load({
       const friend = current?.friend
       const nextBefore = current?.nextBefore !== query.before ? current?.nextBefore : undefined
       const error = trialError || compareError || (!loading && current?.error)
-      const canTry = friend && !runs.length && !loading && !nextBefore && !current?.error
+      const canTry = onTrial && friend && !runs.length && !loading && !nextBefore && !current?.error
       const date = new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'short' })
 
       useEffect(() => {
         const abort = new AbortController()
-        const action = 'web-pilot-handoff-find'
+        const action = combined ? 'lighthouse-combined-handoff-find' : 'web-pilot-handoff-find'
         request(action, { action, code, before: query.before }, abort.signal, language)
           .then(value => {
             if (abort.signal.aborted) return
@@ -4186,7 +4187,7 @@ window.__ModuleLoader__.load({
               language, query, error: reason.message }))
           })
         return () => abort.abort()
-      }, [code, language, query, request])
+      }, [code, combined, language, query, request])
 
       useEffect(() => () => {
         pendingComparison.current?.abort()
@@ -4229,7 +4230,7 @@ window.__ModuleLoader__.load({
         setComparing(sessionId)
         setCompareError('')
         try {
-          const action = 'web-pilot-handoff-compare'
+          const action = combined ? 'lighthouse-combined-handoff-report' : 'web-pilot-handoff-compare'
           const result = await request(action, { action, sessionId, code }, abort.signal, language)
           if (!abort.signal.aborted) {
             returnToRun.current = sessionId
@@ -4275,21 +4276,23 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'moba-web-pilot-find-flow', onKeyDown: event => closeDialogOnEscape(event, back) },
         h('div', { className: 'moba-plan-fields moba-share-fields' },
-          h('h3', { className: 'moba-web-pilot-find-heading', ref: heading, tabIndex: -1 },
+          !(combined && comparison) && h('h3', { className: 'moba-web-pilot-find-heading', ref: heading, tabIndex: -1 },
             t(comparison ? '同题对照' : '对照好友战报')),
-          comparison ? h('div', { className: 'moba-web-pilot-handoff-sides' },
-            h(WebPilotReportSide, { side: comparison.local, label: '本机核对的取舍' }),
-            h(WebPilotReportSide, { side: comparison.friend, label: '好友分享的取舍' }))
+          comparison ? combined ? h(CombinedLighthouseReportComparison, { ...comparison, headingRef: heading })
+            : h('div', { className: 'moba-web-pilot-handoff-sides' },
+              h(WebPilotReportSide, { side: comparison.local, label: '本机核对的取舍' }),
+              h(WebPilotReportSide, { side: comparison.friend, label: '好友分享的取舍' }))
             : h(Fragment, null,
-              friend && h(WebPilotReportSide, { side: friend, label: '好友分享的取舍' }),
+              friend && (combined ? h(CombinedLighthouseFriendReport, { side: friend })
+                : h(WebPilotReportSide, { side: friend, label: '好友分享的取舍' })),
               friend && h('section', { className: 'moba-web-pilot-find-local' },
                 h('h4', null, t('本机同题对局')),
                 runs.length > 0 && h('ul', { ref: list }, runs.map(run => {
                   const opened = new Date(run.openedAt)
                   return h('li', { key: run.sessionId },
-                    h('strong', null, t(webPilotArms[run.played].name)),
+                    h('strong', null, t(combined ? lighthouseCarryModeLabels[run.played] : webPilotArms[run.played].name)),
                     h('time', { dateTime: opened.toISOString() }, date.format(opened)),
-                    h(InstallFacts, { facts: webPilotReportOutcome(run) }),
+                    h(InstallFacts, { facts: combined ? combinedLighthouseReportFacts(run) : webPilotReportOutcome(run) }),
                     h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-find-use', 'data-run': run.sessionId,
                       'aria-disabled': Boolean(comparing) || loading, onClick: () => void compare(run.sessionId) },
                       t(comparing === run.sessionId ? '正在核对战报…' : '用这局对照')))
@@ -4464,16 +4467,28 @@ window.__ModuleLoader__.load({
       return gear === 'evidence' && mode === 'review' ? '未装备' : '已装备，未记录选择'
     }
 
-    function CombinedLighthouseReportComparison({ local, friend }) {
+    const combinedLighthouseDecisionRows = [
+      ['证据核验', side => side.evidence === 'none' ? missingLighthouseGearDecision('evidence', side.played) : webPilotReportDecisions[side.evidence]],
+      ['交付前复核', side => side.review === 'none' ? missingLighthouseGearDecision('review', side.played) : lighthouseReviewReportDecisions[side.review]],
+      ['交付文件', side => side.delivered ? '有交付记录' : '没有交付记录'],
+    ]
+
+    function combinedLighthouseReportFacts(side) {
+      return combinedLighthouseDecisionRows.map(([label, value]) => [t(label), t(value(side))])
+    }
+
+    function CombinedLighthouseFriendReport({ side }) {
+      return h('article', { className: 'moba-web-pilot-handoff-side' },
+        h('h4', null, t('好友分享的结果')),
+        h(InstallFacts, { facts: [[t('任务语言'), t(side.sampleLanguage === 'en' ? '英文' : '中文')],
+          [t('出装'), t(lighthouseCarryModeLabels[side.played])], ...combinedLighthouseReportFacts(side)] }))
+    }
+
+    function CombinedLighthouseReportComparison({ local, friend, headingRef }) {
       const headingId = useId()
-      const rows = [
-        ['出装', side => lighthouseCarryModeLabels[side.played]],
-        ['证据核验', side => side.evidence === 'none' ? missingLighthouseGearDecision('evidence', side.played) : webPilotReportDecisions[side.evidence]],
-        ['交付前复核', side => side.review === 'none' ? missingLighthouseGearDecision('review', side.played) : lighthouseReviewReportDecisions[side.review]],
-        ['交付文件', side => side.delivered ? '有交付记录' : '没有交付记录'],
-      ]
+      const rows = [['出装', side => lighthouseCarryModeLabels[side.played]], ...combinedLighthouseDecisionRows]
       return h('section', { className: 'moba-lighthouse-replay-pair' },
-        h('h3', { id: headingId, tabIndex: -1 }, t(friend ? '同题对照' : '我的试玩战报')),
+        h('h3', { id: headingId, ref: headingRef, tabIndex: -1 }, t(friend ? '同题对照' : '我的试玩战报')),
         h('p', { className: 'moba-starter-note' }, t('任务语言'), ' · ', t(local.sampleLanguage === 'en' ? '英文' : '中文')),
         h('table', { 'aria-labelledby': headingId },
           h('thead', null, h('tr', null, h('td'), h('th', { scope: 'col' }, t('本机核验的结果')),
@@ -4496,7 +4511,7 @@ window.__ModuleLoader__.load({
       const reportField = useRef(null)
       const pending = useRef(null)
       const action = 'lighthouse-combined-handoff-report'
-      const report = result?.code && t('这是我的深度荣耀灯塔战报。打开你已完成的备用电池试玩战报，点「交换试玩战报」，粘贴这整段即可对照。') +
+      const report = result?.code && t('这是我的深度荣耀灯塔战报。打开大厅，点「加入试玩挑战」，粘贴这整段，再选你的同题对局对照。') +
         '\n\n' + result.code
 
       useEffect(() => {

@@ -3538,12 +3538,14 @@ export async function apply(ctx) {
 
   const combinedLighthouseReplayUnavailable = '灯塔原局暂时无法核对。请回原会话查看。'
 
+  function matchesCombinedLighthouseLoadout(original, current) {
+    return current.draft && current.identity === original.target.identity && current.preview.task === original.target.task
+  }
+
   async function checkCombinedLighthouseRoundLoadout(original, signal) {
     if (!original) throw new Error(combinedLighthouseReplayUnavailable)
     const current = await checkCombinedLighthouseStart(original.language === 'en', signal, original.mode)
-    if (!current.draft || current.identity !== original.target.identity || current.preview.task !== original.target.task) {
-      throw new Error(combinedLighthouseReplayUnavailable)
-    }
+    if (!matchesCombinedLighthouseLoadout(original, current)) throw new Error(combinedLighthouseReplayUnavailable)
     return { ...current, original }
   }
 
@@ -3557,19 +3559,23 @@ export async function apply(ctx) {
     return { code: encodeLighthouseCombinedChallenge(sampleLanguage, played), sampleLanguage, played }
   }
 
-  async function combinedLighthouseReport({ sessionId, code }, signal) {
-    const friend = code === undefined ? undefined : decodeLighthouseCombinedReport(code)
-    const { original } = await checkCombinedLighthouseLoadout(sessionId, signal)
+  function combinedLighthouseReportSide(original) {
     const { language: sampleLanguage, mode: played, workflowDecisions, deliverables } = original
-    if (friend && friend.sampleLanguage !== sampleLanguage) throw new Error('这份交接战报的题目语言和本局不同。')
     const evidence = workflowDecisions.find(item => item.gearId === 'evidence')?.choices ?? []
     const review = workflowDecisions.find(item => item.gearId === 'review')?.choices ?? []
-    const local = {
+    return {
       sampleLanguage, played,
       evidence: evidence.length ? lighthouseEvidenceDecision(evidence) ?? 'answered' : 'none',
       review: review.length === 1 ? lighthouseReviewDecision(review[0]) : review.length ? 'answered' : 'none',
       delivered: deliverables.length > 0,
     }
+  }
+
+  async function combinedLighthouseReport({ sessionId, code }, signal) {
+    const friend = code === undefined ? undefined : decodeLighthouseCombinedReport(code)
+    const { original } = await checkCombinedLighthouseLoadout(sessionId, signal)
+    if (friend && friend.sampleLanguage !== original.language) throw new Error('这份交接战报的题目语言和本局不同。')
+    const local = combinedLighthouseReportSide(original)
     return { local, code: encodeLighthouseCombinedReport(local), ...(friend && { friend }) }
   }
 
@@ -3666,15 +3672,40 @@ export async function apply(ctx) {
     })
   }
 
+  function combinedLighthouseCandidates(registry, root) {
+    return new Map(registry.list().filter(workspace => isLighthouseEvidenceWorkspace(root, workspace.path))
+      .flatMap(workspace => workspace.sessionIds.filter(id => heroAlternateSessionId.test(id))
+        .map(id => [id, { id, createdAt: Date.parse(workspace.createdAt) || 0 }])))
+  }
+
   async function combinedLighthousePending({ before }, signal) {
     const previous = planTaskPageBoundary(before, '找不到这页灯塔试玩记录。')
     const registry = ctx.get('workspaceRegistry')
     const root = await combinedLighthousePracticeRoot()
     if (!registry || !root) return { runs: [] }
-    const candidates = new Map(registry.list().filter(workspace => isLighthouseEvidenceWorkspace(root, workspace.path))
-      .flatMap(workspace => workspace.sessionIds.filter(id => heroAlternateSessionId.test(id))
-        .map(id => [id, { id, createdAt: Date.parse(workspace.createdAt) || 0 }])))
+    const candidates = combinedLighthouseCandidates(registry, root)
     return planTaskRunPage([...candidates.values()], previous, signal, id => pendingCombinedLighthouseRun(id, registry, root, signal))
+  }
+
+  async function findCombinedLighthouseReports({ code, before }, signal) {
+    const friend = decodeLighthouseCombinedReport(code)
+    const previous = planTaskPageBoundary(before, '找不到这页灯塔试玩记录。')
+    const registry = ctx.get('workspaceRegistry')
+    const root = await combinedLighthousePracticeRoot()
+    if (!registry || !root) return { friend, runs: [] }
+    const candidates = combinedLighthouseCandidates(registry, root)
+    const currentLoadouts = new Map()
+    const page = await planTaskRunPage([...candidates.values()], previous, signal, async sessionId => {
+      const round = await readCombinedLighthouseRound(sessionId, signal)
+      if (round?.language !== friend.sampleLanguage) return
+      if (!currentLoadouts.has(round.mode)) {
+        currentLoadouts.set(round.mode, checkCombinedLighthouseStart(round.language === 'en', signal, round.mode))
+      }
+      const current = await currentLoadouts.get(round.mode)
+      if (!matchesCombinedLighthouseLoadout(round, current)) return
+      return { sessionId, openedAt: new Date(candidates.get(sessionId).createdAt).toISOString(), ...combinedLighthouseReportSide(round) }
+    })
+    return { friend, ...page }
   }
 
   async function resumeCombinedLighthouse({ sessionId, resumeToken }, signal) {
@@ -9160,6 +9191,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, 'replay')
         else if (selection?.action === 'lighthouse-combined-challenge-share') value = await shareCombinedLighthouseChallenge(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-handoff-report') value = await combinedLighthouseReport(selection, request.signal)
+        else if (selection?.action === 'lighthouse-combined-handoff-find') value = await findCombinedLighthouseReports(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-personal-draft') value = await readCombinedLighthousePersonalDraft(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-pending') value = await combinedLighthousePending(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-resume') value = await resumeCombinedLighthouse(selection, request.signal)
