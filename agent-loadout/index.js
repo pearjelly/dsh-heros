@@ -1268,6 +1268,14 @@ export async function apply(ctx) {
     return { ...fields, hash }
   }
 
+  function requestedCombinedLighthouseTask(selection, english) {
+    const input = requestedArmoryTask(selection, english)
+    const { lighthouseReplayOf } = selection
+    if (!lighthouseReplayOf) return input
+    const hash = createHash('sha256').update(JSON.stringify([input.hash, lighthouseReplayOf])).digest('hex')
+    return { ...input, lighthouseReplayOf, hash }
+  }
+
   async function checkArmoryTask({ draft, workspaceId, material, task, hash }, signal, readMaterial = readPersonalTaskMaterial) {
     const { workspace, digest } = await readMaterial(workspaceId, material, signal)
     const ecosystem = await discover()
@@ -1358,7 +1366,7 @@ export async function apply(ctx) {
     plan: { input: requestedPlanTask, check: checkPlanTask, unavailable: '当前 DSH 无法从出装方案开启新任务。' },
     lesson: { input: requestedLessonTask, check: checkLessonTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
     armory: { input: requestedArmoryTask, check: checkArmoryTask, unavailable: '当前 DSH 无法用当前出装开启任务。' },
-    'lighthouse-combined': { input: requestedArmoryTask,
+    'lighthouse-combined': { input: requestedCombinedLighthouseTask,
       check: (input, signal) => checkArmoryTask(input, signal, readWorkspaceMaterial),
       readMaterial: readWorkspaceMaterial, unavailable: '灯塔练习工作区不可用。' },
     alternate: { input: requestedHeroAlternateTask, check: checkHeroAlternateTask, unavailable: '当前 DSH 无法使用练习出装开启任务。' },
@@ -1447,6 +1455,7 @@ export async function apply(ctx) {
       const armory = kind === 'armory' || kind === 'lighthouse-combined'
       const target = (source || armory) && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
         ...(kind === 'lighthouse-combined' && { lighthouseCombined: true }),
+        ...(input.lighthouseReplayOf && { lighthouseReplayOf: input.lighthouseReplayOf }),
         ...(source && isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
       if (sourcePlan) buildPlans.read(sourcePlan.id, sourcePlan.revision)
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, task,
@@ -3465,23 +3474,42 @@ export async function apply(ctx) {
     }
   }
 
-  async function openCombinedLighthouseStart({ token, launchId }, english, signal) {
+  async function openCombinedLighthouse(selection, english, signal, replay = false) {
+    const { token, launchId } = selection
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
       throw new Error('请先核对新任务的材料和出装。')
     }
-    const { preview, draft, identity, brief } = await checkCombinedLighthouseStart(english, signal)
+    const { preview, draft, identity, brief, original } = replay ? await checkCombinedLighthouseReplay(selection.sessionId, signal)
+      : await checkCombinedLighthouseStart(english, signal)
     if (!draft || preview.token !== token) throw new Error(preview.reason ?? '材料、任务或出装已变化，请重新核对。')
+    if (original) english = original.language === 'en'
     const registry = ctx.get('workspaceRegistry')
     if (!registry?.create || !ctx.get('sessionController')?.create || !ctx.get('sessionQuery')) {
       throw new Error('灯塔练习工作区不可用。')
     }
     const opening = createHash('sha256').update(JSON.stringify(['lighthouse-combined-v1', token, launchId])).digest('hex').slice(0, 32)
     const { workspace, material } = await lighthouseEvidenceLesson(directory, registry, opening, english, 'gap')
-    const input = { draft, workspaceId: workspace.id, material, task: brief }
-    const checked = await checkArmoryTask(requestedArmoryTask(input, english), signal, readWorkspaceMaterial)
+    const input = { draft, workspaceId: workspace.id, material, task: brief,
+      ...(original && { lighthouseReplayOf: original.sessionId }) }
+    const checked = await checkArmoryTask(requestedCombinedLighthouseTask(input, english), signal, readWorkspaceMaterial)
     if (!checked.token || checked.identity !== identity) throw new Error('材料、任务或出装已变化，请重新核对。')
     return openReviewedTask({ ...input, token: checked.token, launchId: opening }, english, signal, 'lighthouse-combined')
+  }
+
+  const combinedLighthouseReplayUnavailable = '灯塔原局暂时无法核对。请回原会话查看。'
+
+  async function checkCombinedLighthouseReplay(sessionId, signal) {
+    const original = await readCombinedLighthouseRound(sessionId, signal)
+    if (!original) throw new Error(combinedLighthouseReplayUnavailable)
+    const current = await checkCombinedLighthouseStart(original.language === 'en', signal)
+    if (!current.draft || current.identity !== original.target.identity || current.preview.task !== original.target.task) {
+      throw new Error(combinedLighthouseReplayUnavailable)
+    }
+    const token = createHash('sha256').update(JSON.stringify([
+      'lighthouse-combined-replay-v1', sessionId, current.preview.token, original.target.digest, original.workflowDecisions,
+    ])).digest('hex')
+    return { ...current, original, preview: { ...current.preview, token, workflowDecisions: original.workflowDecisions } }
   }
 
   function openReviewStart(selection, english, signal) {
@@ -6756,6 +6784,37 @@ export async function apply(ctx) {
     })
   }
 
+  async function combinedLighthouseRound(sessionId, result, workflowDecisions, signal) {
+    const { target, evidence } = result ?? {}
+    if (target?.lighthouseCombined !== true || evidence?.status !== 'complete' || evidence.materialState !== 'verified' ||
+      evidence.continuationReason || !workflowDecisions.some(item => item.gearId === 'evidence')) return
+    const language = ['en', 'zh'].find(value => target.task === planTaskPrompt({
+      material: lighthouseHeroMaterial, task: lighthouseEvidenceTask(value === 'en', 'gap'),
+    }, value === 'en').task)
+    const workspace = ctx.get('workspaceRegistry')?.get(target.workspaceId)
+    if (!language || !workspace?.sessionIds.includes(sessionId) ||
+      await personalTaskMaterialState(target, signal) !== 'verified') return
+    return { sessionId, language, target, workflowDecisions, deliverables: evidence.deliverables ?? [] }
+  }
+
+  async function readCombinedLighthouseRound(sessionId, signal) {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return
+    const result = await observeLessonTask(sessionId, signal, true)
+    if (result?.target?.lighthouseCombined !== true || !result.evidence.entries?.some(entry => entry.workflowCandidate)) return
+    const ecosystem = await discover()
+    const { workflowDecisions } = observedComparisonWorkflows(result.evidence.entries, result.presetId, ecosystem)
+    return combinedLighthouseRound(sessionId, result, workflowDecisions, signal)
+  }
+
+  async function combinedLighthousePair(current, signal) {
+    if (!current?.target.lighthouseReplayOf) return
+    const previous = await readCombinedLighthouseRound(current.target.lighthouseReplayOf, signal)
+    if (!previous || previous.target.workspaceId === current.target.workspaceId || previous.target.digest !== current.target.digest ||
+      previous.target.task !== current.target.task || previous.target.identity !== current.target.identity) return
+    const side = ({ sessionId, workflowDecisions, deliverables }) => ({ sessionId, workflowDecisions, deliverables })
+    return { previous: side(previous), current: side(current) }
+  }
+
   async function observeLessonTask(sessionId, signal, strict = false) {
     const source = await observePlanTask(sessionId, signal, 'all')
     if (!source) return
@@ -7010,9 +7069,12 @@ export async function apply(ctx) {
     const workflowEnvironment = evidence.entries?.some(entry => entry.workflowCandidate)
       ? await discover().catch(() => { signal?.throwIfAborted() }) : undefined
     const { entries, workflowDecisions } = observedComparisonWorkflows(evidence.entries, presetId, workflowEnvironment)
+    const lighthouseRound = review !== true && await combinedLighthouseRound(sessionId, resultView, workflowDecisions, signal)
+    const lighthousePair = lighthouseRound && await combinedLighthousePair(lighthouseRound, signal)
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
       ...(evidence.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }),
+      ...(lighthouseRound && { lighthouseReplay: true }), ...(lighthousePair && { lighthousePair }),
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
@@ -8903,7 +8965,9 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-review-start-preview') value = (await checkReviewStart(english, request.signal)).preview
         else if (selection?.action === 'lighthouse-review-start-open') value = await openReviewStart(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-combined-start-preview') value = (await checkCombinedLighthouseStart(english, request.signal)).preview
-        else if (selection?.action === 'lighthouse-combined-start-open') value = await openCombinedLighthouseStart(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-combined-start-open') value = await openCombinedLighthouse(selection, english, request.signal)
+        else if (selection?.action === 'lighthouse-combined-replay-preview') value = (await checkCombinedLighthouseReplay(selection.sessionId, request.signal)).preview
+        else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, true)
         else if (selection?.action === 'lighthouse-review-direct-preview') value = await previewLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-open') value = await openLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-challenge-share') value = await shareReviewChallenge(selection, request.signal)

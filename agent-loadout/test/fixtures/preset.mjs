@@ -194,7 +194,8 @@ export async function apply(ctx) {
       const taskMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(materials\/reuse-fixture\.md|案件 材料\/交接 记录\.md|会签 文件\.md)"\n/u)?.[1]
       const heroDeliveryMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(值班 材料\/(?:设备|补给) 台账\.md)"\n/u)?.[1]
       const personalEvidence = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(证据 材料\/(?:设备|更新) 台账\.md)"\n/u)?.[1]
-      const evidenceMaterial = personalEvidence ?? (comparisonMaterial === '02-lighthouse.md' ? comparisonMaterial : undefined)
+      const lighthousePlaybookMaterial = latestText?.match(/^(?:【出装任务】|\[Loadout task\])\n(?:选定材料 |Selected material: )"(02-lighthouse\.md)"\n/u)?.[1]
+      const evidenceMaterial = personalEvidence ?? lighthousePlaybookMaterial ?? (comparisonMaterial === '02-lighthouse.md' ? comparisonMaterial : undefined)
       const supportedFact = personalEvidence ? 'two spare radios' : '2 cans of lamp oil'
       const unverifiedClaim = personalEvidence ? 'a spare charger' : 'two spare batteries'
       const evidenceGap = evidenceMaterial && (personalEvidence ? /a spare charger|一台备用充电器/u : /two spare batteries|两节备用电池/u).test(latestText)
@@ -306,6 +307,7 @@ export async function apply(ctx) {
           .map(block => block.text).join('\n')
         const foundEvidence = results[0]?.content.some(block => block.text?.includes(supportedFact))
         const hasEvidenceCheck = systemText.includes('If a material claim lacks evidence')
+        const review = lighthousePlaybookMaterial && systemText.includes('whether to proceed with the handoff or revise the draft')
         const replay = evidenceGap && !hasEvidenceCheck && tools?.some(tool => tool.name === 'present')
         const asksFormat = personalEvidence && replay && latestText.includes('交接格式') && tools?.some(tool => tool.name === 'ask_user_question')
         const title = personalEvidence ? 'Equipment handoff' : 'Lighthouse handoff'
@@ -315,14 +317,25 @@ export async function apply(ctx) {
           sequence.push('ask_user_question')
           const choice = results[1] && JSON.parse(results[1].content[0].text).answers?.[0]?.selected?.[0]
           if (choice === labels[0]) sequence.push('glob')
-          if (choice === labels[1]) sequence.push('write', 'present')
+          if (choice === labels[1]) {
+            sequence.push('write')
+            if (review) sequence.push('ask_user_question')
+            const confirmed = review && results[3] && JSON.parse(results[3].content[0].text).answers?.[0]?.selected?.includes('Confirm handoff')
+            if (!review || confirmed) sequence.push('present')
+          }
         } else if (foundEvidence && (evidenceConfirmed || replay)) {
           if (asksFormat) sequence.push('ask_user_question')
           sequence.push('write', 'present')
         }
         name = sequence[results.length]
         if (name === 'read') args = { file_path: evidenceMaterial }
-        if (name === 'ask_user_question') {
+        if (name === 'ask_user_question' && review && results.length === 3) {
+          args = { questions: [{
+            id: 'fixture-delivery-review',
+            question: 'The draft notes that spare batteries were unverified. Deliver it or request changes?',
+            options: [{ label: 'Confirm handoff' }, { label: 'Revise draft' }],
+          }] }
+        } else if (name === 'ask_user_question') {
           args = { questions: [asksFormat ? {
             id: 'fixture-handoff-format', question: '交接说明需要哪种格式？',
             options: [{ label: '简明摘要' }, { label: '完整说明' }],

@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.240.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.241.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -177,6 +177,8 @@ dsh web
 在大厅首屏点 **试玩灯塔交接**，选 **直接交付** 或 **复核后交付**，再在 DSH 手动发送试玩任务。第一局就可以选复核，在交付前确认或退回修改。
 
 在同一窗口点 **一局两道选择**，可以用随附的补给卡试打组合出装。调度说有两节备用电池，先判断如何处理缺失证据。决定继续交接后，再核对草稿。会话的任务结果显示实际选择和交付文件。
+
+从已核对的任务结果点 **换个决定再试**，可预览同一张补给卡、题目和出装。打开独立草稿后手动发送，再到复赛结果看两局各自的选择和交付文件，也可回原局。
 
 选路时可以看到两边共用 **标准模式** 和 **交付物预览**。复核路线额外加装 **交付前复核**，把交不交文件的选择留给你。
 

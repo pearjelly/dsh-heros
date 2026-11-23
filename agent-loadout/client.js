@@ -3038,6 +3038,94 @@ window.__ModuleLoader__.load({
             onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对'))))
     }
 
+    const lighthouseDecisionReplayTitle = '换个决定再试'
+
+    function LighthouseCombinedReplay({ sessionId, request, onBack, onOpen }) {
+      const language = useLanguage()
+      const [attempt, retry] = useState(0)
+      const [checked, setChecked] = useState(null)
+      const [opening, setOpening] = useState(false)
+      const [openError, setOpenError] = useState('')
+      const dialog = useRef(null)
+      const pending = useRef(null)
+      const launch = useRef(null)
+      const unavailable = '灯塔原局暂时无法核对。请回原会话查看。'
+      const state = checked?.attempt === attempt && checked.language === language ? checked : null
+      const preview = state?.value
+      const issue = openError || state?.error
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'lighthouse-combined-replay-preview'
+        request(action, { action, sessionId }, abort.signal, language)
+          .then(value => {
+            if (abort.signal.aborted) return
+            if (!value?.token || typeof value.task !== 'string' || !value.task || typeof value.material !== 'string' || !value.material ||
+              !Array.isArray(value.workflowDecisions) || !workflowDecisionRows(value.workflowDecisions).length) throw new Error(t(unavailable))
+            setChecked({ value, attempt, language })
+          })
+          .catch(reason => { if (!abort.signal.aborted) setChecked({ error: reason.message || t(unavailable), attempt, language }) })
+        return () => abort.abort()
+      }, [request, sessionId, attempt, language])
+      useEffect(() => () => pending.current?.abort(), [])
+
+      function close() {
+        if (pending.current) return
+        dialog.current?.close()
+        onBack()
+      }
+
+      async function open() {
+        if (pending.current || !preview?.token || issue) return
+        const abort = pending.current = new AbortController()
+        setOpening(true)
+        setOpenError('')
+        if (launch.current?.token !== preview.token) {
+          const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+          launch.current = { id, token: preview.token }
+        }
+        try {
+          const action = 'lighthouse-combined-replay-open'
+          const result = await request(action, { action, sessionId, token: preview.token, launchId: launch.current.id }, abort.signal, language)
+          if (!result?.sessionId || result.sessionId === sessionId || result.task !== preview.task) throw new Error(t(unavailable))
+          if (!abort.signal.aborted) {
+            dialog.current?.close()
+            onOpen(result.sessionId, result.task)
+          }
+        } catch (reason) {
+          if (!abort.signal.aborted) setOpenError(reason.message || t(unavailable))
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setOpening(false)
+        }
+      }
+
+      return h(InstallDialog, { title: t(lighthouseDecisionReplayTitle),
+        className: 'moba-starter-dialog moba-lighthouse-combined-start moba-lighthouse-combined-replay', dialogRef: dialog,
+        busy: opening, onCancel: close, initialFocus: '.moba-lighthouse-replay-back',
+        onKeyDown: event => closeDialogOnEscape(event, close) },
+        h('div', { className: 'moba-lighthouse-combined-fields' },
+          h('p', { className: 'moba-lighthouse-note' }, t('两局沿用同一份补给卡、题目和出装。')),
+          preview && h(Fragment, null,
+            h('h3', { className: 'moba-lighthouse-replay-heading' }, t('原局选择')),
+            h(WorkflowDecisionReceipts, { rows: workflowDecisionRows(preview.workflowDecisions) }),
+            h('details', { className: 'moba-minimal-replay-detail' }, h('summary', null, t('查看试玩任务')),
+              h(InstallFacts, { facts: [[t('材料文件'), preview.material]] }),
+              h('label', { className: 'moba-lighthouse-task' }, t('试玩任务'),
+                h('textarea', { readOnly: true, rows: 4, value: preview.task })))),
+          !state && h('p', { role: 'status' }, t('正在核对实战来源…')),
+          issue && h('p', { className: 'moba-alert', role: 'alert' }, t(issue)),
+          preview && h('p', { className: 'moba-starter-note', role: opening ? 'status' : undefined },
+            t(opening ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。'))),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-replay-back', disabled: opening,
+            onClick: close }, t('返回任务结果')),
+          issue && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
+            onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
+          h('button', { type: 'button', className: 'moba-start', disabled: opening || !preview?.token || Boolean(issue),
+            onClick: open }, t('打开复赛草稿'), h(Glyph, { kind: 'arrow', size: 16 }))))
+    }
+
     function LighthouseDirectRematch({ kind, comparisonId, arm, request, onBack, onOpen, backLabel = '返回练习记录' }) {
       const language = useLanguage()
       const [attempt, retry] = useState(0)
@@ -12398,6 +12486,24 @@ window.__ModuleLoader__.load({
         })))
     }
 
+    function LighthouseDecisionPair({ pair, onOpenMatch }) {
+      const heading = useId()
+      const sides = [pair.previous, pair.current]
+      const bySide = sides.map(run => new Map(workflowDecisionRows(run.workflowDecisions).map(row => [row.gearId, row.choices.join(' / ')])))
+      return h('section', { className: 'moba-lighthouse-replay-pair', 'aria-labelledby': heading },
+        h('h4', { id: heading }, t('对照两局')),
+        h('table', { 'aria-labelledby': heading },
+          h('thead', null, h('tr', null, h('td'), h('th', { scope: 'col' }, t('原局')), h('th', { scope: 'col' }, t('复赛')))),
+          h('tbody', null,
+            Object.entries(workflowDecisionGear).filter(([id]) => bySide.some(choices => choices.has(id))).map(([id, name]) =>
+              h('tr', { key: id }, h('th', { scope: 'row' }, t(name)),
+                bySide.map((choices, i) => h('td', { key: sides[i].sessionId }, choices.get(id) ?? t('未记录选择'))))),
+            h('tr', null, h('th', { scope: 'row' }, t('交付文件')), sides.map(run =>
+              h('td', { key: run.sessionId }, run.deliverables.length
+                ? h(LessonTaskFiles, { files: run.deliverables, sessionId: run.sessionId, compact: true }) : '0'))))),
+        h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')))
+    }
+
     function LessonTaskResult({ sessionId, version, request, onOpenMatch, onUse, onPersonalFlow, initialPersonalFocus }) {
       const language = useLanguage()
       const headingId = useId()
@@ -12416,6 +12522,7 @@ window.__ModuleLoader__.load({
       const alternateButton = useRef(null)
       const handoffAlternateButton = useRef(null)
       const sourceTrialButton = useRef(null)
+      const lighthouseReplayButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
       const action = 'lesson-task-result'
       const keepButtons = { original: originalReviewButton, alternate: alternateReviewButton, direct: directReviewButton, review: handoffReviewButton }
@@ -12472,7 +12579,7 @@ window.__ModuleLoader__.load({
         if (review || !current || !initialPersonalFocus || restoredPersonalFocus.current) return
         restoredPersonalFocus.current = true
         const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton,
-          'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton }
+          'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton, 'lighthouse-combined-replay': lighthouseReplayButton }
         const button = buttons[initialPersonalFocus]?.current
         const target = button ?? rebaselineButton.current ?? reviewHeading.current
         target?.focus()
@@ -12515,8 +12622,12 @@ window.__ModuleLoader__.load({
                 t(result.status === 'unavailable' ? '暂不可核对' : comparisonArmStates[result.status] ?? result.status),
                 result.turn && t('第 ') + result.turn + t(' 回合'),
               ].filter(Boolean).join(' · ')),
-              h(WorkflowDecisionReceipts, { rows: workflowRows }),
-              (alternateLabel || handoffAlternate || singleSave) && h('div', { className: 'moba-lesson-result-options' },
+              result.lighthousePair ? h(LighthouseDecisionPair, { pair: result.lighthousePair, onOpenMatch })
+                : h(WorkflowDecisionReceipts, { rows: workflowRows }),
+              (result.lighthouseReplay || alternateLabel || handoffAlternate || singleSave) && h('div', { className: 'moba-lesson-result-options' },
+                result.lighthouseReplay === true && h('button', { ref: lighthouseReplayButton, type: 'button', className: 'moba-match-move',
+                  'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-replay' }) },
+                t(lighthouseDecisionReplayTitle), h(Glyph, { kind: 'arrow', size: 16 })),
                 alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                   onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
                 handoffAlternate && h('button', { ref: handoffAlternateButton, type: 'button', className: 'moba-match-move',
@@ -12530,7 +12641,7 @@ window.__ModuleLoader__.load({
                 t('在灯塔试玩标准模式'), h(Glyph, { kind: 'arrow', size: 16 })),
               result.textHandoff && h('p', { className: 'moba-match-action-note' }, t('已记录终端工具完成和助手文字回复。')),
               h(ObservedComparisonCalls, { entries: result.entries, workflowRows }),
-              !result.handoffPair && h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
+              !result.handoffPair && !result.lighthousePair && h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
                 complete: result.status === 'complete', materialDelivered: result.materialDelivered }),
               h(LessonTaskAwards, { awards: result.awards }))),
         h('div', { className: review ? 'moba-settlement-footer moba-lesson-review-actions' : 'moba-settlement-footer' },
@@ -13310,15 +13421,17 @@ window.__ModuleLoader__.load({
       }
 
       function closePersonalFlow(focus = personalFlow.mode) {
-        const { returnAction } = personalFlow
+        const { mode, returnAction } = personalFlow
         setPersonalFlow(null)
-        requestAnimationFrame(() => {
+        const restore = () => {
           const element = popover.current
           if (!element) return
           const source = opener.current?.isConnected ? opener.current : undefined
           setAction({ ...returnAction, initialPersonalFocus: focus })
           if (!element.matches(':popover-open')) element.showPopover(source ? { source } : undefined)
-        })
+        }
+        if (mode === 'lighthouse-combined-replay') restore()
+        else requestAnimationFrame(restore)
       }
 
       function visitPersonalFlow(nextSessionId, task) {
@@ -13587,6 +13700,8 @@ window.__ModuleLoader__.load({
         } }, t('试试交付前复核')) : undefined
 
       return h(Fragment, null,
+        personalFlow?.mode === 'lighthouse-combined-replay' && h(LighthouseCombinedReplay, { sessionId, request,
+          onBack: () => closePersonalFlow(), onOpen: visitPersonalFlow }),
         personalFlow?.mode === 'rematch' && h(RematchEditor, { ...personalFlow.source, sourceSessionId: sessionId, request,
           evidenceReplayHint: personalFlow.evidenceReplay, backLabel: '返回任务结果',
           onBack: closePersonalFlow, onClose: closePersonalFlow, onVisit: visitPersonalFlow }),
@@ -14284,6 +14399,14 @@ window.__ModuleLoader__.load({
       .moba-lesson-result > h3 { margin: 0; color: var(--gold); font-size: 15px; overflow-wrap: anywhere; }
       .moba-lesson-result-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: 6px; }
       .moba-lesson-result-options button { min-width: 0; min-height: 44px; overflow-wrap: anywhere; white-space: normal; }
+      .moba-lighthouse-replay-pair { display: grid; gap: 5px; }
+      .moba-lighthouse-replay-pair h4, .moba-lighthouse-replay-heading { margin: 0; color: var(--gold); font-size: 13px; }
+      .moba-lighthouse-replay-pair table { width: 100%; table-layout: fixed; border-collapse: collapse; text-align: start; font-size: 12px; }
+      .moba-lighthouse-replay-pair :is(th, td) { padding: 4px; border-block-end: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+      .moba-lighthouse-replay-pair tr > :first-child { width: 24%; color: var(--muted); }
+      .moba-lighthouse-replay-pair th[scope="col"] { color: var(--gold); }
+      .moba-lighthouse-replay-pair button { min-block-size: 44px; white-space: normal; overflow-wrap: anywhere; }
+      .moba-lighthouse-replay-pair > button { justify-self: start; }
       .moba-lesson-result .moba-lighthouse-results { margin: 0; }
       .moba-lesson-result .moba-settlement-footer button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
       @media (max-width: 600px) {
@@ -14917,7 +15040,7 @@ window.__ModuleLoader__.load({
       .moba-direct-form input[type="file"]::file-selector-button { margin-right: 8px; padding: 6px 9px; border: 1px solid #745f40; background: #1b2331; color: var(--ink); cursor: pointer; }
       .moba-market-dialog .moba-market-actions { margin-top: 12px; }
       .moba-starter-dialog { width: min(535px, calc(100vw - 28px)); }
-      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation, .moba-lighthouse-lesson) {
+      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation, .moba-lighthouse-lesson, .moba-lighthouse-combined-replay) {
         --ink: #f3e9d2; --muted: #b6b4bc; --gold: #e6bc70; --line: #564532; --blue: #9ed4ec; --deep: #0a0e17;
       }
       .moba-lighthouse-comparison { width: min(700px, calc(100vw - 28px)); }
@@ -15378,7 +15501,10 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-combined-start[open] { display: flex; flex-direction: column; overflow: clip; }
       .moba-lighthouse-combined-start > :is(h2, .moba-starter-actions) { flex: none; }
       .moba-lighthouse-combined-fields { min-block-size: 0; overflow: auto; padding: 2px; }
+      .moba-lighthouse-combined-replay { box-sizing: border-box; }
+      .moba-lighthouse-combined-replay :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
       .moba-lighthouse-combined-choices li { overflow-wrap: anywhere; }
+      .moba-lighthouse-replay-heading { margin-block: 7px 4px; }
       .moba-lighthouse-combined-start summary { display: list-item; align-content: center; min-block-size: 44px; }
       @media (max-width: 390px) {
         .moba-lighthouse-combined-start .moba-starter-actions:not(:has(> button:nth-child(3))) { display: grid;

@@ -1438,11 +1438,74 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.doesNotMatch(sample, /batteries/)
     assert.deepEqual((await host.request(endpoint)).value.plans, plansBefore)
 
+    const replay = async (phase, fields, status) =>
+      (await host.request(endpoint, { action: 'lighthouse-combined-replay-' + phase, ...fields }, status)).value
+    const result = async sessionId => (await host.request(endpoint, { action: 'lesson-task-result', sessionId })).value
+    const native = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
+    const questions = '/api/loadout-fixture-handoff-question'
+    async function choose(sessionId, questionId, choice) {
+      let question
+      for (let attempt = 0; attempt < 100; attempt++) {
+        question = (await host.request(questions, { sessionId })).question
+        if (question?.id === questionId) break
+        await delay(30)
+      }
+      assert.equal(question?.id, questionId)
+      await host.request(questions, { sessionId, choice })
+    }
+
     const { sessionId, task } = practiceDraft
-    await host.request(turnEndpoint, { sessionId, text: task })
-    const combinedResult = (await host.request(endpoint, { action: 'lesson-task-result', sessionId })).value
-    assert.equal(combinedResult.status, 'complete')
-    assert.equal(combinedResult.materialState, 'verified')
+    await replay('preview', { sessionId }, 422)
+    const originalTurn = host.request(turnEndpoint, { sessionId, text: task })
+    originalTurn.catch(() => {})
+    await choose(sessionId, 'fixture-lighthouse-evidence', '暂缓提交')
+    await originalTurn
+    const original = await result(sessionId)
+    const originalNative = await native(sessionId)
+    assert.equal(original.status, 'complete')
+    assert.equal(original.materialState, 'verified')
+    assert.deepEqual(original.workflowDecisions, [{ gearId: 'evidence', choices: ['暂缓提交'] }])
+    assert.deepEqual(original.deliverables, [])
+    assert.equal(original.lighthouseReplay, true)
+
+    const replayResponse = await host.requestRaw(endpoint, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+      body: JSON.stringify({ action: 'lighthouse-combined-replay-preview', sessionId }),
+    })
+    assert.equal(replayResponse.status, 200)
+    const replayView = (await replayResponse.json()).value
+    assert.equal(replayView.task, task)
+    assert.equal(replayView.material, combinedPractice.material)
+    assert.deepEqual(replayView.workflowDecisions, original.workflowDecisions)
+    const replayLaunch = { sessionId, launchId: 'a'.repeat(32), token: replayView.token }
+    await replay('open', { ...replayLaunch, token: combinedPractice.token }, 422)
+    assert.deepEqual(await practiceDirectories(), practiceCreated)
+    const next = await replay('open', replayLaunch)
+    assert.deepEqual(await replay('open', replayLaunch), next)
+    assert.notEqual(next.workspaceId, practiceDraft.workspaceId)
+    assert.notEqual(next.sessionId, sessionId)
+    assert.equal(next.task, task)
+    assert.ok(!(await native(next.sessionId)).events.some(event => event.type === 'user/message'))
+    const newTurn = host.request(turnEndpoint, { sessionId: next.sessionId, text: next.task })
+    newTurn.catch(() => {})
+    await choose(next.sessionId, 'fixture-lighthouse-evidence', '降级推荐')
+    await choose(next.sessionId, 'fixture-delivery-review', 'Confirm handoff')
+    await newTurn
+    const observed = await result(next.sessionId)
+    assert.equal(observed.lighthouseReplay, true)
+    assert.deepEqual(observed.workflowDecisions, [
+      { gearId: 'evidence', choices: ['降级推荐'] }, { gearId: 'review', choices: ['Confirm handoff'] },
+    ])
+    assert.deepEqual(observed.deliverables.map(file => file.name), ['qualified-handoff.md'])
+    const { previous, current } = observed.lighthousePair
+    assert.equal(previous.sessionId, sessionId)
+    assert.deepEqual(previous.workflowDecisions, original.workflowDecisions)
+    assert.deepEqual(previous.deliverables, [])
+    assert.equal(current.sessionId, next.sessionId)
+    assert.deepEqual(current.workflowDecisions, observed.workflowDecisions)
+    assert.deepEqual(current.deliverables, observed.deliverables)
+    assert.deepEqual(await native(sessionId), originalNative)
+    assert.deepEqual(await result(sessionId), original)
 
     const prepare = async draft => (await host.request(endpoint, draft)).value.presetId
     const open = async presetId => (await host.request('/api/loadout-fixture-session', { presetId, workspacePath: directory })).sessionId
@@ -1460,7 +1523,6 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(delivered(await history(directSession)), ['handoff.md'])
 
     const reviewPresetId = await prepare(review.draft)
-    const questions = '/api/loadout-fixture-handoff-question'
     for (const choice of ['Revise draft', 'Confirm handoff']) {
       const sessionId = await open(reviewPresetId)
       const turn = host.request(turnEndpoint, { sessionId, text })
