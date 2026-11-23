@@ -2508,6 +2508,8 @@ test('private personal workflow changes only Evidence Check and compares the exa
     const plannedDraft = await native(planned.sessionId)
     assert.ok(!plannedDraft.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
     assert.equal(plannedDraft.presetId, keptReplay.presetId)
+    assert.equal((await equipmentIn(host, planned.sessionId)).planTask.armory, true)
+    assert.equal((await result(planned.sessionId)).personalWorkflowReceipt, undefined)
     const plannedTurn = host.request(turnEndpoint, { sessionId: planned.sessionId, text: planned.task })
     plannedTurn.catch(() => {})
     await choose(planned.sessionId, 'fixture-delivery-review', 'Confirm handoff')
@@ -2515,6 +2517,49 @@ test('private personal workflow changes only Evidence Check and compares the exa
     const delivery = (await native(planned.sessionId)).events.find(event => event.type === 'deliverables/presented')
     assert.equal(basename(delivery.data.files[0].path), nextMaterial)
     assert.equal(await readFile(join(nextDirectory, nextMaterial), 'utf8'), nextBytes)
+    const nextResult = await result(planned.sessionId)
+    const nextChange = nextResult.personalWorkflowRematch
+    assert.equal((await equipmentIn(host, planned.sessionId)).armoryTaskResult, true)
+    assert.deepEqual(nextResult.personalWorkflowReceipt, { mode: 'review', outcomeIds: { review: ['confirm'] } })
+    assert.deepEqual(nextResult.deliverables, [{ name: nextMaterial, turn: delivery.data.turn, seq: delivery.seq, index: 0 }])
+    assert.deepEqual(nextChange, { kind: 'personal', comparisonId: planned.sessionId.slice('session-'.length),
+      arm: 'task', personalWorkflowReplay: true, change: { addId: 'evidence' } })
+    const nextRematch = await call('rematch-comparison-preview', nextChange)
+    assert.deepEqual([nextRematch.workspaceId, nextRematch.material, nextRematch.task], [nextWorkspaceId, nextMaterial, planned.task])
+
+    const secondMaterial = '证据 材料/更新 台账.md'
+    const secondFile = join(nextDirectory, secondMaterial)
+    await mkdir(dirname(secondFile), { recursive: true })
+    await writeFile(secondFile, 'The new ledger records two spare radios on the shelf.\n')
+    const secondFields = { ...plannedFields, id: renamed.id, revision: renamed.revision, material: secondMaterial,
+      task: '核对新台账是否列出一台备用充电器，准备下一次交接。' }
+    const secondPreview = await call('plan-task-preview', secondFields)
+    const secondOpening = { ...secondFields, token: secondPreview.token, launchId: 'd'.repeat(32) }
+    await appendFile(secondFile, 'The new material changed after preview.\n')
+    await call('plan-task-open', secondOpening, 422)
+    await writeFile(secondFile, 'The new ledger records two spare radios on the shelf.\n')
+    const secondTask = await call('plan-task-open', secondOpening)
+    assert.equal((await equipmentIn(host, secondTask.sessionId)).planTask.armory, true)
+    const secondTurn = host.request(turnEndpoint, { sessionId: secondTask.sessionId, text: secondTask.task })
+    secondTurn.catch(() => {})
+    await choose(secondTask.sessionId, 'fixture-lighthouse-evidence', '暂缓提交')
+    await secondTurn
+    const secondResult = await result(secondTask.sessionId)
+    assert.deepEqual(secondResult.personalWorkflowReceipt, { mode: 'evidence-review', outcomeIds: { evidence: ['pause'] } })
+    assert.deepEqual(secondResult.deliverables, [])
+    assert.deepEqual(secondResult.personalWorkflowRematch.change, { removeId: 'evidence' })
+    const secondRematch = await call('rematch-comparison-preview', secondResult.personalWorkflowRematch)
+    assert.deepEqual([secondRematch.workspaceId, secondRematch.material, secondRematch.task], [nextWorkspaceId, secondMaterial, secondTask.task])
+
+    const reviewDraft = (await call('field-playbook-preview', { id: 'review' })).draft
+    const ordinaryPlan = await call('plan-save', { name: 'Ordinary review recipe', draft: reviewDraft,
+      personalWorkflowOrigin: { comparisonId: revised.id, arm: 'rematch' } })
+    assert.equal(ordinaryPlan.hasPersonalWorkflowOrigin, undefined)
+    const ordinaryFields = { ...plannedFields, id: ordinaryPlan.id, revision: ordinaryPlan.revision }
+    const ordinaryPreview = await call('plan-task-preview', ordinaryFields)
+    const ordinaryTask = await call('plan-task-open', { ...ordinaryFields, token: ordinaryPreview.token, launchId: 'e'.repeat(32) })
+    assert.equal((await equipmentIn(host, ordinaryTask.sessionId)).planTask.armory, undefined)
+    assert.equal(await result(ordinaryTask.sessionId), null)
 
     const inverseDirectory = join(directory, 'inverse-workspace')
     const inverseFile = join(inverseDirectory, material)
@@ -2596,6 +2641,8 @@ test('private personal workflow changes only Evidence Check and compares the exa
 
     await host.stop()
     host = await startHost(env, patch)
+    assert.deepEqual((await result(planned.sessionId)).personalWorkflowReceipt, nextResult.personalWorkflowReceipt)
+    assert.deepEqual((await result(secondTask.sessionId)).personalWorkflowRematch, secondResult.personalWorkflowRematch)
     assert.deepEqual((await readReplay(opened.id)).personalWorkflowPair, compared.personalWorkflowPair)
     assert.deepEqual((await readReplay(added.id)).personalWorkflowPair, completedAdd.personalWorkflowPair)
     assert.deepEqual(await savedSource(keptAdded), { comparisonId: added.id, arm: 'rematch', sessionId: added.sessionId })

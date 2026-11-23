@@ -1241,16 +1241,24 @@ export async function apply(ctx) {
   async function checkPlanTask(input, signal) {
     const { id, revision, workspaceId, material, task, hash } = input
     const saved = buildPlans.read(id, revision)
-    const { workspace, digest } = await readWorkspaceMaterial(workspaceId, material, signal)
+    const personalMaterial = saved.personalWorkflowOrigin && await readPersonalTaskMaterial(workspaceId, material, signal)
+      .catch(() => { signal?.throwIfAborted() })
+    const { workspace, digest } = personalMaterial ?? await readWorkspaceMaterial(workspaceId, material, signal)
     const view = { id, revision, workspaceId, workspaceTitle: workspace.title, material,
       planName: saved.name, planNote: saved.note, task }
     const cwd = workspace.path
     try {
       const ecosystem = await discover()
       const { draft, candidate, identity } = await verifySavedPlan(saved, ecosystem)
-      const token = createHash('sha256').update(JSON.stringify([hash, cwd, digest, saved.presetId, identity])).digest('hex')
+      const personalIdentity = personalMaterial && ['review', 'evidence-review']
+        .some(mode => canonicalWorkflowDraft(draft, ecosystem, mode))
+        ? comparisonLoadoutIdentity(draft, candidate, ecosystem, identity) : undefined
+      const token = createHash('sha256').update(JSON.stringify([
+        hash, cwd, digest, saved.presetId, identity, ...(personalIdentity ? ['personal-workflow', personalIdentity] : []),
+      ])).digest('hex')
       signal?.throwIfAborted()
-      return { view, cwd, draft, candidate, ecosystem, token }
+      return { view, cwd, draft, candidate, ecosystem, token,
+        ...(personalIdentity && { personalWorkflow: true, digest, identity: personalIdentity }) }
     } catch (error) {
       signal?.throwIfAborted()
       return { view, reason: error instanceof Error ? error.message : '无法核对当前出装的配置。' }
@@ -1435,13 +1443,13 @@ export async function apply(ctx) {
       const checked = await check(input, signal)
       if (checked.token !== token) throw new Error('材料、任务或出装已变化，请重新核对。')
       const { presetId, verifyLive: verify } = await prepare(checked.draft, checked.candidate)
-      if (kind === 'plan') buildPlans.read(input.id, input.revision)
-      else if (!webPractice) {
+      if (!webPractice && (kind !== 'plan' || checked.personalWorkflow)) {
         const target = await readMaterial(input.workspaceId, input.material, signal)
         if (target.digest !== checked.digest || target.workspace.path !== checked.cwd) {
           throw new Error('材料、任务或出装已变化，请重新核对。')
         }
       }
+      if (kind === 'plan') buildPlans.read(input.id, input.revision)
       if (decisionReplayOf && (await readInput(selection, english, signal)).hash !== input.hash) throw new Error(webPilotReplayChanged)
       if (lighthouseCarry && (await readInput(selection, english, signal)).hash !== input.hash) {
         throw new Error(combinedLighthouseReplayUnavailable)
@@ -1480,7 +1488,7 @@ export async function apply(ctx) {
       if (checked.stockBindings && !stockTrialLive(source.arm, presetId, agent, checked.stockBindings)) throw new Error(stockTransferChanged)
       const webSourcePractice = webPractice && liveWebSourceBinding(agent, presetId, workspace.id, checked.webToolId,
         input.arm, checked.webToolSource)
-      const armory = kind === 'armory' || kind === 'lighthouse-combined'
+      const armory = kind === 'armory' || kind === 'lighthouse-combined' || checked.personalWorkflow === true
       const target = (source || armory) && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
         ...(kind === 'lighthouse-combined' && { lighthouseCombined: true }),
         ...(input.lighthouseReplayOf && { lighthouseReplayOf: input.lighthouseReplayOf }),
