@@ -1364,16 +1364,91 @@ window.__ModuleLoader__.load({
             t(busy ? '正在准备对局…' : '打开试玩草稿'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function WebSourcePracticeResult({ sessionId, request, onOpen }) {
+    function WebSourcePersonalDraft({ sessionId, request, workspaces, onCancel, onOpen }) {
+      const language = useLanguage()
+      const workspaceSetup = useContext(WorkspaceSetupContext)
+      const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
+      const [checked, setChecked] = useState(null)
+      const [attempt, retry] = useState(0)
+      const [workspaceId, setWorkspace] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [openError, setOpenError] = useState('')
+      const opening = useRef(null)
+      const launchIds = useRef(new Map())
+      const membership = JSON.stringify(items.map(item => item.workspaceId).sort())
+      const current = checked?.attempt === attempt && checked.language === language && checked.membership === membership ? checked : null
+      const available = current?.options ? items.filter(item => current.options.workspaceIds.includes(item.workspaceId)) : empty
+      const workspace = available.find(item => item.workspaceId === workspaceId)
+      const setup = workspaceSetup?.add && (workspaceSetup.pick || workspaceSetup.list) ? workspaceSetup : null
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'web-source-personal-options'
+        request(action, { action, sessionId }, abort.signal, language)
+          .then(options => { if (!abort.signal.aborted) setChecked({ options, attempt, language, membership }) })
+          .catch(reason => { if (!abort.signal.aborted) setChecked({ error: reason.message, attempt, language, membership }) })
+        return () => abort.abort()
+      }, [request, sessionId, attempt, language, membership])
+      useEffect(() => () => opening.current?.abort(), [])
+
+      async function open(event) {
+        event.preventDefault()
+        if (!workspace || opening.current) return
+        const abort = opening.current = new AbortController()
+        setBusy(true)
+        setOpenError('')
+        if (!launchIds.current.has(workspaceId)) {
+          const launchId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+          launchIds.current.set(workspaceId, launchId)
+        }
+        try {
+          const action = 'web-source-personal-open'
+          const result = await request(action, { action, sessionId, workspaceId, launchId: launchIds.current.get(workspaceId) },
+            abort.signal, language)
+          if (!abort.signal.aborted) onOpen(result.sessionId)
+        } catch (reason) {
+          if (!abort.signal.aborted) setOpenError(reason.message)
+        } finally {
+          opening.current = null
+          if (!abort.signal.aborted) setBusy(false)
+        }
+      }
+
+      return h(InstallDialog, { title: t(lessonTaskLabel),
+        className: 'moba-starter-dialog moba-web-source-dialog moba-web-personal-dialog',
+        initialFocus: '.moba-web-source-back', busy, onCancel },
+        h(InstallFacts, { facts: [[t('出装'), t('极简模式 + 网页检索')]] }),
+        h('p', { className: 'moba-starter-note' }, t('在新草稿中粘贴要核对的链接，写下问题，再手动发送。')),
+        !current && h('p', { role: 'status' }, t('正在核对可用工作区…')),
+        (openError || current?.error) && h('p', { className: 'moba-alert', role: 'alert' }, openError || current.error),
+        h('form', { className: 'moba-web-personal-form', onSubmit: open },
+          current?.options && h('label', null, t('工作区'),
+            h('select', { value: workspace?.workspaceId ?? '', disabled: busy || !available.length, required: true,
+              onChange: event => { setWorkspace(event.target.value); setOpenError('') } },
+              h('option', { value: '' }, t(available.length ? '选择自己的工作区' : '请先添加工作区')),
+              available.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceFileLabel(item, available))))),
+          current?.options && setup && h(AddMaterialsFolder, { setup, disabled: busy, label: '添加工作区',
+            onAdded: () => retry(value => value + 1) }),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-web-source-back', onClick: onCancel, disabled: busy }, t('返回')),
+            (openError || current?.error) && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
+              onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
+            h('button', { type: 'submit', className: 'moba-start', disabled: busy || !workspace },
+              t(busy ? '正在准备对局…' : '打开空白草稿'), h(Glyph, { kind: 'arrow', size: 16 })))))
+    }
+
+    function WebSourcePracticeResult({ sessionId, request, workspaces, onOpen }) {
       const language = useLanguage()
       const [view, setView] = useState(null)
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const [attempt, retry] = useState(0)
       const [repeatOpen, setRepeatOpen] = useState(false)
+      const [personalOpen, setPersonalOpen] = useState(false)
       const choosing = useRef(null)
       const recorded = useRef(null)
       const repeatButton = useRef(null)
+      const personalButton = useRef(null)
       useEffect(() => {
         const abort = new AbortController()
         let timer
@@ -1416,6 +1491,7 @@ window.__ModuleLoader__.load({
       const complete = view?.status === 'complete'
       const unavailable = view?.status === 'unavailable'
       const canRepeat = complete && view.sampleLanguage && (!view.verified || view.choice === 'pending')
+      const canUse = complete && view.verified && view.choice === 'use-current'
       return h('section', { className: 'moba-lighthouse-anchor moba-web-source-result', 'aria-label': t('哪一版规则有效？') },
         h('div', null, h('strong', null, t('哪一版规则有效？'))),
         !complete && !unavailable && !error && h('p', { role: 'status' }, t('正在核对本次原文读取…')),
@@ -1428,20 +1504,29 @@ window.__ModuleLoader__.load({
             t('查看发布方清单') + ' · v' + view.version), ' · DSH ' + view.hostVersion),
           view.choice && h('p', { ref: recorded, role: 'status', tabIndex: -1 },
             t(view.choice === 'use-current' ? '已选择采用新版清单。' : '已保留为待核实。')),
-          (!view.choice || canRepeat) && h('div', { className: 'moba-lighthouse-anchor-actions' },
+          (!view.choice || canRepeat || canUse) && h('div', { className: 'moba-lighthouse-anchor-actions' },
             !view.choice && h(Fragment, null,
               view.verified && h('button', { type: 'button', className: 'moba-settlement-button', disabled: busy,
                 onClick: () => choose('use-current') }, t('采用新版清单')),
               h('button', { type: 'button', className: 'moba-settlement-button', disabled: busy,
                 onClick: () => choose('pending') }, t('标为待核实'))),
             canRepeat && h('button', { type: 'button', ref: repeatButton, className: 'moba-settlement-button',
-              disabled: busy, 'aria-haspopup': 'dialog', onClick: () => setRepeatOpen(true) }, t('用同一题再试')))),
+              disabled: busy, 'aria-haspopup': 'dialog', onClick: () => setRepeatOpen(true) }, t('用同一题再试')),
+            canUse && h('button', { type: 'button', ref: personalButton, className: 'moba-settlement-button',
+              disabled: busy, 'aria-haspopup': 'dialog', onClick: () => setPersonalOpen(true) }, t(lessonTaskLabel)))),
         canRepeat && repeatOpen && h(WebSourcePractice, { request, sampleLanguage: view.sampleLanguage, onCancel: () => {
           setRepeatOpen(false)
           requestAnimationFrame(() => repeatButton.current?.focus())
         }, onOpen: (nextSessionId, task) => {
           setRepeatOpen(false)
           onOpen(nextSessionId, task)
+        } }),
+        canUse && personalOpen && h(WebSourcePersonalDraft, { sessionId, request, workspaces, onCancel: () => {
+          setPersonalOpen(false)
+          requestAnimationFrame(() => personalButton.current?.focus())
+        }, onOpen: nextSessionId => {
+          setPersonalOpen(false)
+          onOpen(nextSessionId)
         } }),
         error && h('p', { role: 'alert', className: 'moba-alert' }, error, ' ',
           h('button', { type: 'button', className: 'moba-text', disabled: busy,
@@ -3211,7 +3296,7 @@ window.__ModuleLoader__.load({
             onClick: () => onSelect(directory.path) }, t(adding ? '正在添加材料文件夹…' : '使用此文件夹'))))
     }
 
-    function AddMaterialsFolder({ setup, disabled, onAdded }) {
+    function AddMaterialsFolder({ setup, disabled, onAdded, label = '添加材料文件夹' }) {
       const [pickerOpen, setPickerOpen] = useState(false)
       const [adding, setAdding] = useState(false)
       const [error, setError] = useState('')
@@ -3256,7 +3341,7 @@ window.__ModuleLoader__.load({
       return h(Fragment, null,
         h('button', { ref: trigger, type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
           disabled: disabled || adding, onClick: () => setup.pick ? void add() : setPickerOpen(true) },
-        t(adding && !pickerOpen ? '正在添加材料文件夹…' : '添加材料文件夹')),
+        t(adding && !pickerOpen ? '正在添加材料文件夹…' : label)),
         pickerOpen ? h(WorkspaceFolderPicker, { list: setup.list, adding, error, onCancel: close, onSelect: add,
           onPickNative: setup.pickHost ? () => void add(undefined, setup.pickHost) : undefined })
           : error && h('p', { className: 'moba-alert', role: 'alert' }, t(error)))
@@ -11039,7 +11124,7 @@ window.__ModuleLoader__.load({
           h(Glyph, { kind: 'back', size: 14 }), t('返回这份方案'))),
         snapshot?.planTask && h(PlanTaskDraftAnchor, { key: sessionId, plan: snapshot.planTask, sessionId, request,
           consumeDraft: consumeTaskDraft, putTask: putTaskDraft }),
-        snapshot?.webSourcePractice && h(WebSourcePracticeResult, { key: sessionId, sessionId, request, onOpen: openDraftSession }),
+        snapshot?.webSourcePractice && h(WebSourcePracticeResult, { key: sessionId, sessionId, request, workspaces, onOpen: openDraftSession }),
         snapshot?.heroTrial && h(HeroTrialAnchor, { key: sessionId, member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
           onReturnTask: openTaskResult, consumeDraft: consumeTaskDraft, putTask: putTaskDraft, draftStore,
           hasTurn: Boolean(snapshot.running || receipt), workspaces }),
@@ -12469,6 +12554,11 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor > .moba-task-pending { align-items: center; gap: 4px 7px; }
       .moba-web-source-dialog .moba-market-actions { flex-wrap: wrap; }
       .moba-web-source-dialog .moba-market-actions button, .moba-web-source-result button { min-block-size: 44px; white-space: normal; }
+      .moba-web-personal-dialog { box-sizing: border-box; }
+      .moba-web-personal-form, .moba-web-personal-form label { display: grid; gap: 6px; min-inline-size: 0; }
+      .moba-web-personal-form select { width: 100%; min-inline-size: 0; min-block-size: 44px; padding: 6px;
+        color: var(--ink); background: #141c2a; border: 1px solid var(--line); }
+      .moba-web-personal-form > button { justify-self: start; min-block-size: 44px; }
       .moba-web-source-result { grid-template-columns: minmax(0, 1fr); }
       .moba-web-source-result .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       .moba-web-source-result a { color: #9ed4ec; }

@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.198.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.199.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -32,6 +32,8 @@ dsh web
 从大厅前部点 **网页检索试玩**，也可以在 **装备库 → 网页检索** 点 **哪一版规则有效？**。旧安装表只列了 RC 版，预览版的测试机能用这份出装吗？试玩会给极简模式加装原生网页读取，打开一份独立草稿，由你手动发送。拿到完整的发布方清单后，可以 **采用新版清单**。如果还想观望，可以 **标为待核实**。
 
 原文缺失或对局标为待核实时，可以点 **用同一题再试**，用原题另开草稿。已经记录的选择保留在原会话里。
+
+选择 **采用新版清单** 后，点 **用这套出装做自己的任务**，选个人工作区。打开「极简模式＋网页检索」空白草稿后，粘贴想核对的链接、写下问题，再手动发送。
 
 ## 用同一题试玩两位英雄
 

@@ -1291,12 +1291,18 @@ export async function apply(ctx) {
     return { header, inheritedEventCount, started: firstTurn >= 0, launch, presetChanged }
   }
 
-  function observePlanTask(sessionId, signal, projectionMode) {
+  function observeNativeSession(sessionId, signal, projectionMode) {
     const query = ctx.get('sessionQuery')
-    if (!query || typeof sessionId !== 'string' || !sessionId.startsWith(planTaskSessionPrefix)) return
+    if (!query) return
     return query.observeSession(sessionId, { projectionMode, signal }).catch(error => {
       if (error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
     })
+  }
+
+  function observePlanTask(sessionId, signal, projectionMode) {
+    if (typeof sessionId === 'string' && sessionId.startsWith(planTaskSessionPrefix)) {
+      return observeNativeSession(sessionId, signal, projectionMode)
+    }
   }
 
   async function planTaskSession(sessionId, signal) {
@@ -1427,7 +1433,7 @@ export async function apply(ctx) {
     return { task, hash }
   }
 
-  async function checkWebSourcePractice({ task, hash }, signal) {
+  async function plannedWebSourceLoadout(signal) {
     if (!toolRuntime || !ctx.get('sessionController')?.resolveAgent || !ctx.get('workspaceRegistry')?.create) {
       throw new Error(webSourceUnavailable)
     }
@@ -1443,9 +1449,13 @@ export async function apply(ctx) {
     const { candidate, choices } = await plannedGrowth(draft, { ecosystem })
     const fetches = choices.filter(item => item.kind === 'tool' && item.name === 'web_fetch' && !item.timing)
     if (fetches.length !== 1) throw new Error(webSourceUnavailable)
-    const webToolId = fetches[0].id
-    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, hash, candidate.id, webToolId])).digest('hex')
     signal?.throwIfAborted()
+    return { draft, candidate, webToolId: fetches[0].id }
+  }
+
+  async function checkWebSourcePractice({ task, hash }, signal) {
+    const { draft, candidate, webToolId } = await plannedWebSourceLoadout(signal)
+    const token = createHash('sha256').update(JSON.stringify([planTaskOwner, hash, candidate.id, webToolId])).digest('hex')
     return { token, draft, candidate, webToolId, view: { planName: '网页检索', task } }
   }
 
@@ -1466,7 +1476,7 @@ export async function apply(ctx) {
     return { id, sourceId, workspaceId, presetId }
   }
 
-  async function readWebSourcePractice({ sessionId }, signal) {
+  async function inspectWebSourcePractice({ sessionId }, signal) {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return null
     const source = await observePlanTask(sessionId, signal, 'all')
     if (!source) return null
@@ -1476,25 +1486,98 @@ export async function apply(ctx) {
       const workspace = binding && ctx.get('workspaceRegistry')?.get(binding.workspaceId)
       if (!workspace || header.cwd !== workspace.path || !workspace.sessionIds.includes(sessionId) ||
         header.agentPreset !== binding.presetId) return null
-      if (!started) return { status: 'waiting' }
+      if (!started) return { view: { status: 'waiting' } }
       const outcome = await comparisonEvidence(source, {
         cwd: header.cwd, task: launch.task, presetId: binding.presetId, exactMessages: true,
       }, receipts)
       const { status, turn } = outcome
-      if (status !== 'complete') return { status }
+      if (status !== 'complete') return { view: { status } }
       const verified = observedWebSource(source.events, turn, binding)
       const sampleLanguage = launch.task === webSourceTask(true) ? 'en' : launch.task === webSourceTask(false) ? 'zh' : undefined
       const decisionDirectory = join(directory, 'web-source-decisions')
       const decision = await readFile(join(decisionDirectory, sessionId + '.json'), 'utf8').then(JSON.parse).catch(error => {
         if (error.code !== 'ENOENT') throw error
       })
-      return { status, verified, sampleLanguage,
+      const view = { status, verified, sampleLanguage,
         ...(verified && { url: webSourceUrl, version: webSourceVersion, hostVersion: webSourceHostVersion }),
         ...(decision?.sessionId === sessionId && (decision.choice === 'pending' || verified && decision.choice === 'use-current') &&
           { choice: decision.choice }) }
+      return { view, binding }
     } finally {
       source[Symbol.dispose]()
     }
+  }
+
+  async function readWebSourcePractice(selection, signal) {
+    return (await inspectWebSourcePractice(selection, signal))?.view ?? null
+  }
+
+  async function verifiedWebSourceLoadout(sessionId, signal) {
+    const original = await inspectWebSourcePractice({ sessionId }, signal)
+    if (original?.view.status !== 'complete' || !original.view.verified || original.view.choice !== 'use-current') {
+      throw new Error('请先核验试玩原文并选择采用新版清单。')
+    }
+    const { binding } = original
+    const planned = await plannedWebSourceLoadout(signal)
+    if (planned.candidate.id !== binding.presetId || planned.webToolId !== binding.id) throw new Error(webSourceChanged)
+    return { ...planned, binding }
+  }
+
+  async function webSourcePersonalOptions({ sessionId }, signal) {
+    await verifiedWebSourceLoadout(sessionId, signal)
+    return { workspaceIds: await personalWorkspaceIds(signal) }
+  }
+
+  async function openWebSourcePersonal({ sessionId, workspaceId, launchId }, signal) {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId) || !validOpeningId(launchId)) {
+      throw new Error('开局请求无效，请重试。')
+    }
+    if (typeof workspaceId !== 'string' || !workspaceId || workspaceId.length > 512) {
+      throw new Error('所选工作区不可用，请重新选择。')
+    }
+    const controller = ctx.get('sessionController')
+    const registry = ctx.get('workspaceRegistry')
+    if (!controller?.create || !controller.resolveAgent || !registry || !ctx.get('sessionQuery')) {
+      throw new Error(webSourceUnavailable)
+    }
+    const key = JSON.stringify([planTaskOwner, 'web-source-personal', sessionId, workspaceId, launchId])
+    const next = 'session-' + createHash('sha256').update(key).digest('hex').slice(0, 32)
+    if (openingMatches.has(next)) return openingMatches.get(next)
+
+    const open = async () => {
+      const { draft, candidate, binding } = await verifiedWebSourceLoadout(sessionId, signal)
+      const { presetId, verifyLive: verify } = await prepare(draft, candidate)
+      const includesPath = await personalTaskPathFilter()
+      const workspace = await checkedPersonalWorkspace(registry.get(workspaceId), includesPath)
+      if (!workspace) throw new Error('所选工作区不可用，请重新选择。')
+      const existing = await observeNativeSession(next, signal, 'none')
+      if (existing) {
+        try {
+          const { header, inheritedEventCount, presetChanged } = planTaskDetails(existing)
+          if (!workspace.sessionIds.includes(next) || header.cwd !== workspace.path || header.agentPreset !== presetId ||
+            header.isSeeded || header.parentSession || inheritedEventCount !== 0 || presetChanged) {
+            throw new Error('已有会话与核对过的出装任务不一致。')
+          }
+        } finally {
+          existing[Symbol.dispose]()
+        }
+      }
+      signal?.throwIfAborted()
+      if (closed) throw new Error('配装服务正在关闭，请重试。')
+      if (!existing) {
+        const created = await controller.create({ sessionId: next, workspaceId, agentPreset: presetId })
+        if (created.sessionId !== next) throw new Error('新对局的会话标识已变化，请重新开局。')
+      }
+      const { agent, error } = await controller.resolveAgent(next)
+      if (!agent) throw new Error(error?.message ?? '无法打开新对局。')
+      if (verify) verifyLive({ presetId, sessionId: next })
+      const live = liveWebSourceBinding(agent, presetId, workspaceId, binding.id)
+      if (live.sourceId !== binding.sourceId) throw new Error(webSourceChanged)
+      return { sessionId: next, workspaceId }
+    }
+    const work = open().finally(() => openingMatches.delete(next))
+    openingMatches.set(next, work)
+    return work
   }
 
   async function chooseWebSourcePractice({ sessionId, choice }, signal) {
@@ -4380,12 +4463,16 @@ export async function apply(ctx) {
   async function personalWorkspaceIds(signal) {
     const includesPath = await personalTaskPathFilter()
     const workspaces = ctx.get('workspaceRegistry')?.list() ?? []
-    const allowed = await Promise.all(workspaces.map(async workspace => {
-      const path = await realpath(workspace.path).catch(() => undefined)
-      return path && path === workspace.path && includesPath(path) ? workspace.id : undefined
-    }))
+    const allowed = await Promise.all(workspaces.map(async workspace =>
+      (await checkedPersonalWorkspace(workspace, includesPath))?.id))
     signal?.throwIfAborted()
     return allowed.filter(Boolean)
+  }
+
+  async function checkedPersonalWorkspace(workspace, includesPath) {
+    if (!workspace) return
+    const path = await realpath(workspace.path).catch(() => undefined)
+    if (path && path === workspace.path && includesPath(path)) return workspace
   }
 
   async function lessonTaskOptions(selection, signal) {
@@ -7409,6 +7496,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-source-open') value = await openReviewedTask(selection, english, request.signal, 'web-source')
         else if (selection?.action === 'web-source-result') value = await readWebSourcePractice(selection, request.signal)
         else if (selection?.action === 'web-source-choice') value = await chooseWebSourcePractice(selection, request.signal)
+        else if (selection?.action === 'web-source-personal-options') value = await webSourcePersonalOptions(selection, request.signal)
+        else if (selection?.action === 'web-source-personal-open') value = await openWebSourcePersonal(selection, request.signal)
         else if (selection?.action === 'hero-trial-create') value = await createHeroTrial(selection, english, request.signal)
         else if (selection?.action === 'hero-trial-open') value = await openComparisonArm(heroTrials, selection, english, request.signal)
         else if (selection?.action === 'hero-trial-open-from-task') value = await openStandardFromPersonal(selection, english, request.signal)
