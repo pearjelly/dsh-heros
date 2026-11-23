@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.220.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.221.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -29,7 +29,7 @@ In the Armory, use **Choose a loadout** to jump to **Hero roster**. Select a her
 
 ## Try two loadouts on the same claim
 
-Open **Web Research practice** at the top of the lobby and choose **Stock Standard** or **Standard + Evidence Check** when those loadouts are available. Both read the same publisher statement. Would you recommend a trial without a local test? Review and send the draft. With Evidence Check equipped, the native question card lets you choose how to handle missing evidence. Use the report to check the actual source, choice, and any delivered draft.
+Open **Web Research practice** at the top of the lobby. **Stock Standard** reads the publisher's checklist and gives an assessment. **Standard + Evidence Check** also lets you handle the missing local test on the native question card. Before trying either loadout, you can record what you would do: gather more evidence, qualify the recommendation, or pause. Review the loadout, open the draft, and send it yourself. The verified result shows your opening choice, if you made one, alongside the recorded decision and delivered files.
 
 From a verified result, choose **Try again with the other loadout** and open its draft. After both runs verify the same manifest, the replay lets you compare their recorded choices and delivered files and return to either conversation.
 
