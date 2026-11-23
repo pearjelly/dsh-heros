@@ -1372,7 +1372,7 @@ test('Lighthouse same-task comparison keeps two original attempts and their nati
   }
 })
 
-test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 120_000 }, async () => {
+test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 180_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-playbook-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')
@@ -1638,6 +1638,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(firstReview.lighthouseReplay, true)
     assert.equal(firstReview.lighthouseMode, 'review')
     assert.equal(firstReview.lighthouseScenarioReplay, undefined)
+    assert.equal(firstReview.personalWorkflowReceipt, undefined)
     assert.deepEqual(firstReview.workflowDecisions, [{ gearId: 'review', choices: ['Revise draft'] }])
     assert.deepEqual(firstReview.deliverables, [])
     assert.equal(firstReview.lighthousePair, undefined)
@@ -2016,6 +2017,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(confirmedResult.lighthouseReplay, undefined)
     assert.equal(confirmedResult.lighthouseScenarioReplay, undefined)
     assert.equal(confirmedResult.lighthouseReceivedReport, undefined)
+    assert.equal(confirmedResult.personalWorkflowReceipt, undefined)
     assert.deepEqual(confirmedResult.workflowDecisions, [{ gearId: 'review', choices: ['Confirm handoff'] }])
     assert.deepEqual(confirmedResult.deliverables.map(file => file.name), ['verified-handoff.md'])
     assert.deepEqual(confirmedResult.lighthouseScenarioPair, {
@@ -2080,6 +2082,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const ownLaunchText = JSON.stringify(ownLaunch)
     assert.doesNotMatch(ownLaunchText, /lighthousePair|lighthouseScenarioOf|lighthouseReplayOf|02-lighthouse/)
     assert.ok(!ownLaunchText.includes(confirmed.sessionId) && !ownLaunchText.includes(sessionId))
+    assert.equal((await result(sharedOpening.sessionId)).personalWorkflowReceipt, undefined)
 
     const ownTurn = host.request(turnEndpoint, { sessionId: sharedOpening.sessionId, text: sharedOpening.task })
     ownTurn.catch(() => {})
@@ -2093,6 +2096,41 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     ])
     assert.deepEqual(sharedResult.deliverables.map(file => file.name), ['qualified-handoff.md'])
     assert.equal(sharedResult.lighthouseScenarioPair, undefined)
+    assert.deepEqual(sharedResult.personalWorkflowReceipt, { outcomeIds: { evidence: ['qualify'], review: ['confirm'] } })
+    assert.equal(sharedResult.canReview, true)
+    await host.request(turnEndpoint, { sessionId: sharedOpening.sessionId, text: '读取预设工作目录' })
+    const afterUnrelated = await result(sharedOpening.sessionId)
+    assert.deepEqual(afterUnrelated.personalWorkflowReceipt, sharedResult.personalWorkflowReceipt)
+    assert.deepEqual(afterUnrelated.workflowDecisions, sharedResult.workflowDecisions)
+    assert.deepEqual(afterUnrelated.deliverables, sharedResult.deliverables)
+
+    const pausedPersonal = (await host.request(endpoint, { ...privateInput, action: 'armory-task-open',
+      token: sharedPreview.token, launchId: '7'.repeat(32) })).value
+    const pauseTurn = host.request(turnEndpoint, { sessionId: pausedPersonal.sessionId, text: pausedPersonal.task })
+    pauseTurn.catch(() => {})
+    await choose(pausedPersonal.sessionId, 'fixture-lighthouse-evidence', '暂缓提交', async () => {
+      assert.equal((await result(pausedPersonal.sessionId)).personalWorkflowReceipt, undefined)
+    })
+    await pauseTurn
+    const privatePauseResult = await result(pausedPersonal.sessionId)
+    assert.deepEqual(privatePauseResult.personalWorkflowReceipt, { outcomeIds: { evidence: ['pause'] } })
+    assert.deepEqual(privatePauseResult.workflowDecisions, [{ gearId: 'evidence', choices: ['暂缓提交'] }])
+    assert.deepEqual(privatePauseResult.deliverables, [])
+    assert.equal(privatePauseResult.canReview, true)
+    const pausedReview = (await host.request(endpoint, { action: 'lesson-task-result', sessionId: pausedPersonal.sessionId, review: true })).value
+    assert.deepEqual(pausedReview.gear.map(({ id, evidence }) => ({ id, evidence })).sort((a, b) => a.id.localeCompare(b.id)), [
+      { id: 'evidence', evidence: 'decision' }, { id: 'present', evidence: 'equipped' }, { id: 'review', evidence: 'equipped' },
+    ])
+
+    const privatePath = join(directory, privateMaterial)
+    try {
+      await appendFile(privatePath, '\nEdit after both personal turns.\n')
+      const stale = await result(sharedOpening.sessionId)
+      assert.equal(stale.personalWorkflowReceipt, undefined)
+      assert.deepEqual(stale.deliverables, sharedResult.deliverables)
+    } finally {
+      await writeFile(privatePath, privateCard)
+    }
     assert.ok(!(await pendingLighthouse()).runs.some(run => run.sessionId === sharedOpening.sessionId))
     assert.equal(await readFile(join(directory, privateMaterial), 'utf8'), privateCard)
     assert.equal(await readFile(originalSample, 'utf8'), sample)

@@ -3961,6 +3961,17 @@ window.__ModuleLoader__.load({
           h('div', null, h('strong', null, t(name)), h('small', null, t('实际选择'), ' · ', choices.join(' / '))))))
     }
 
+    function localizedLighthouseChoices(gearId, recorded, ids) {
+      if (!Array.isArray(ids) || ids.length !== recorded?.length) return recorded
+      const labels = gearId === 'evidence' ? evidenceOpeningChoices : lighthouseReviewReportDecisions
+      return [...new Set(recorded.map((choice, index) => {
+        const outcome = ids[index]
+        if (!Object.hasOwn(labels, outcome)) return choice
+        const label = labels[outcome]
+        return t(label, outcome === 'qualify' ? '降级推荐（证据场景对照）' : label)
+      }))]
+    }
+
     function unsummarizedChoices(entry, workflowRows) {
       const observed = entry.name === 'ask_user_question' ? entry.workflowDecision : undefined
       return observed && workflowRows.some(row => row.gearId === observed.gearId && row.choices.includes(observed.choice))
@@ -12980,6 +12991,17 @@ window.__ModuleLoader__.load({
         failed && h('p', { className: 'moba-match-action-error', role: 'alert' }, t('暂时无法打开这份交付文件。可在原会话查看。')))
     }
 
+    function PersonalWorkflowReceipt({ rows, files, sessionId, materialDelivered, outcomeIds }) {
+      return h('div', { className: 'moba-personal-workflow-receipt' },
+        h('dl', { 'aria-label': t('装备实测选择') }, Object.entries(workflowDecisionGear).map(([id, label]) => {
+          const recorded = rows.find(row => row.gearId === id)?.choices
+          const choices = localizedLighthouseChoices(id, recorded, outcomeIds?.[id])
+          return h('div', { key: id }, h('dt', null, t(label)),
+            h('dd', null, choices?.join(' / ') ?? t('已装备，未记录选择')))
+        })),
+        h(LessonTaskFiles, { files, sessionId, complete: true, materialDelivered }))
+    }
+
     const lessonTaskReasons = {
       'changed-task': '发送的任务文字已改动。可到原会话查看处理过程。',
       'changed-loadout': '任务使用的出装已变更。可到原会话查看处理过程。',
@@ -13060,16 +13082,7 @@ window.__ModuleLoader__.load({
                   const side = sides[i]
                   const missing = comparedGear ? missingLighthouseGearDecision(id, side.mode) : '未记录选择'
                   const recorded = choices.get(id)
-                  const ids = scenarioPair && side.outcomeIds?.[id]
-                  const labels = id === 'evidence' ? evidenceOpeningChoices : lighthouseReviewReportDecisions
-                  const displayed = Array.isArray(ids) && ids.length === recorded?.length
-                    ? [...new Set(recorded.map((choice, index) => {
-                      const outcome = ids[index]
-                      if (!Object.hasOwn(labels, outcome)) return choice
-                      const label = labels[outcome]
-                      return t(label, outcome === 'qualify' ? '降级推荐（证据场景对照）' : label)
-                    }))]
-                    : recorded
+                  const displayed = localizedLighthouseChoices(id, recorded, scenarioPair && side.outcomeIds?.[id])
                   return h('td', { key: side.sessionId }, displayed?.join(' / ') ?? t(missing))
                 }))),
             h('tr', null, h('th', { scope: 'row' }, t('交付文件')), sides.map(run =>
@@ -13130,6 +13143,7 @@ window.__ModuleLoader__.load({
       const current = cached && cached.version === version && cached.retry === retry && cached.language === language ? cached : null
       const result = current?.result
       const lighthousePair = result?.lighthousePair ?? result?.lighthouseScenarioPair
+      const personalWorkflowReceipt = result?.personalWorkflowReceipt
       const lighthouseScenarioPair = Boolean(result?.lighthouseScenarioPair && !result.lighthousePair)
       const lighthouseSwitch = result?.lighthouseReplay && !result.lighthousePair?.current.mode &&
         Object.hasOwn(lighthouseReplayModeLabels, result.lighthouseMode) &&
@@ -13233,7 +13247,9 @@ window.__ModuleLoader__.load({
               lighthousePair ? h(LighthouseDecisionPair, { pair: lighthousePair, scenarioPair: lighthouseScenarioPair, onOpenMatch,
                 onCarry: (lighthouseScenarioPair || result.lighthouseReplay) && (lighthousePairSide => onPersonalFlow({ mode: 'lighthouse-combined-personal', lighthousePairSide })),
                 carryButtons: { previous: lighthousePreviousPersonalButton, current: lighthousePersonalButton, shared: lighthousePersonalButton } })
-                : h(WorkflowDecisionReceipts, { rows: workflowRows }),
+                : personalWorkflowReceipt ? h(PersonalWorkflowReceipt, { rows: workflowRows, files: result.deliverables ?? empty,
+                  sessionId, materialDelivered: result.materialDelivered, outcomeIds: personalWorkflowReceipt.outcomeIds })
+                  : h(WorkflowDecisionReceipts, { rows: workflowRows }),
               (result.lighthouseReplay || result.lighthouseScenarioReplay || alternateLabel || handoffAlternate || singleSave) &&
                 h('div', { className: 'moba-lesson-result-options' },
                 lighthouseSwitch && h('button', { ref: lighthouseSwitchButton, type: 'button', className: 'moba-match-move',
@@ -13269,7 +13285,7 @@ window.__ModuleLoader__.load({
                 t('在灯塔试玩标准模式'), h(Glyph, { kind: 'arrow', size: 16 })),
               result.textHandoff && h('p', { className: 'moba-match-action-note' }, t('已记录终端工具完成和助手文字回复。')),
               h(ObservedComparisonCalls, { entries: result.entries, workflowRows }),
-              !result.handoffPair && !lighthousePair && h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
+              !result.handoffPair && !lighthousePair && !personalWorkflowReceipt && h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
                 complete: result.status === 'complete', materialDelivered: result.materialDelivered }),
               h(LessonTaskAwards, { awards: result.awards }))),
         h('div', { className: review ? 'moba-settlement-footer moba-lesson-review-actions' : 'moba-settlement-footer' },
@@ -15036,6 +15052,13 @@ window.__ModuleLoader__.load({
       .moba-lesson-result > h3 { margin: 0; color: var(--gold); font-size: 15px; overflow-wrap: anywhere; }
       .moba-lesson-result-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: 6px; }
       .moba-lesson-result-options button { min-width: 0; min-height: 44px; overflow-wrap: anywhere; white-space: normal; }
+      .moba-personal-workflow-receipt { display: grid; gap: 6px; min-width: 0; }
+      .moba-personal-workflow-receipt dl { display: grid; gap: 4px; margin: 0; font-size: 12px; }
+      .moba-personal-workflow-receipt dl > div { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+        gap: 6px; padding: 5px 7px; border-block-end: 1px solid var(--line); overflow-wrap: anywhere; }
+      .moba-personal-workflow-receipt dt { color: var(--gold); font-weight: 600; }
+      .moba-personal-workflow-receipt dd { margin: 0; white-space: pre-wrap; }
+      .moba-personal-workflow-receipt .moba-lesson-result-files button { min-block-size: 44px; white-space: normal; }
       .moba-lighthouse-replay-pair { display: grid; gap: 5px; }
       .moba-lighthouse-replay-pair h4, .moba-lighthouse-replay-heading { margin: 0; color: var(--gold); font-size: 13px; }
       .moba-lighthouse-replay-pair table { width: 100%; table-layout: fixed; border-collapse: collapse; text-align: start; font-size: 12px; }

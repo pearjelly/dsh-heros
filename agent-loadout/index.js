@@ -7129,19 +7129,24 @@ export async function apply(ctx) {
       original.target.identity === target.identity) return original
   }
 
+  function workflowOutcomeIds(workflowDecisions) {
+    const outcomeIds = {}
+    for (const { gearId, choices } of workflowDecisions) {
+      const ids = choices.map(choice => {
+        const id = gearId === 'evidence' ? lighthouseEvidenceDecision([choice])
+          : gearId === 'review' ? lighthouseReviewDecision(choice) : undefined
+        return id && id !== 'answered' ? id : null
+      })
+      if (ids.some(Boolean)) outcomeIds[gearId] = ids
+    }
+    return outcomeIds
+  }
+
   async function combinedLighthouseScenarioPair(current, signal) {
     const previous = await combinedLighthouseScenarioSource(current, signal)
     if (!previous) return
     const side = ({ sessionId, scenario, workflowDecisions, deliverables }) => {
-      const outcomeIds = {}
-      for (const { gearId, choices } of workflowDecisions) {
-        const ids = choices.map(choice => {
-          const id = gearId === 'evidence' ? lighthouseEvidenceDecision([choice])
-            : gearId === 'review' ? lighthouseReviewDecision(choice) : undefined
-          return id && id !== 'answered' ? id : null
-        })
-        if (ids.some(Boolean)) outcomeIds[gearId] = ids
-      }
+      const outcomeIds = workflowOutcomeIds(workflowDecisions)
       return { sessionId, scenario, workflowDecisions, deliverables, ...(Object.keys(outcomeIds).length && { outcomeIds }) }
     }
     return { previous: side(previous), current: side(current) }
@@ -7348,6 +7353,36 @@ export async function apply(ctx) {
       fileNames: deliverables.map(file => file.name) }
   }
 
+  async function checkedArmoryTaskLoadout(presetId, target, ecosystem) {
+    const native = matchHero(presetId, records.get(presetId))
+    const checked = await verifiedPlanComparisonArm({ presetId, heroId: native.id }, ecosystem)
+    if (!matchesLessonIdentity(target.identity, checked.identity, checked.draft, checked.candidate, ecosystem)) {
+      throw new Error('本机配置已变化，无法核对这局的原出装。')
+    }
+    return { ...checked, ecosystem, heroName: native.name }
+  }
+
+  async function verifiedPersonalWorkflowReceipt(sessionId, { launch, target, evidence, presetId }, workflowDecisions, ecosystem, signal) {
+    if (launch.armory !== true || !target || target.lighthouseCombined || evidence.status !== 'complete' ||
+      evidence.materialState !== 'verified' || evidence.continuationReason ||
+      (!workflowDecisions.length && !evidence.deliverables?.length) || records.get(presetId)?.equipmentIds?.length !== 3) return
+    const workspace = ctx.get('workspaceRegistry')?.get(target.workspaceId)
+    if (workspace?.path !== target.cwd || !workspace.sessionIds.includes(sessionId) ||
+      await personalTaskMaterialState(target, signal) !== 'verified') return
+    try {
+      const environment = ecosystem ?? await discover()
+      const { draft } = await checkedArmoryTaskLoadout(presetId, target, environment)
+      const expected = deliveryPlaybookDraft(environment, 'evidence-review')
+      if (draft.presetId !== expected.presetId ||
+        !isDeepStrictEqual([...draft.equipmentIds].sort(), [...expected.equipmentIds].sort()) ||
+        !isDeepStrictEqual(draft.equipmentSources, expected.equipmentSources) ||
+        !isDeepStrictEqual([...draft.removedEquipmentIds].sort(), [...expected.removedEquipmentIds].sort())) return
+      return { outcomeIds: workflowOutcomeIds(workflowDecisions) }
+    } catch {
+      signal?.throwIfAborted()
+    }
+  }
+
   async function readLessonTaskResult({ sessionId, review, pairSide }, signal) {
     const pairReview = pairSide !== undefined
     const handoffReview = pairSide === 'direct' || pairSide === 'review'
@@ -7430,12 +7465,15 @@ export async function apply(ctx) {
     const gapRound = lighthouseRound?.scenario === 'gap' && lighthouseRound
     const lighthousePair = gapRound && await combinedLighthousePair(gapRound, signal)
     const lighthouseScenarioPair = lighthouseRound?.scenario === 'confirmed' && await combinedLighthouseScenarioPair(lighthouseRound, signal)
+    const personalWorkflowReceipt = review !== true && await verifiedPersonalWorkflowReceipt(
+      sessionId, resultView, workflowDecisions, workflowEnvironment, signal)
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
       ...(evidence.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }),
       ...(gapRound && { lighthouseReplay: true, lighthouseMode: gapRound.mode }), ...(lighthousePair && { lighthousePair }),
       ...(eligibleCombinedLighthouseScenario(gapRound) && { lighthouseScenarioReplay: true }),
       ...(lighthouseScenarioPair && { lighthouseScenarioPair }), ...(gapRound?.receivedReport && { lighthouseReceivedReport: true }),
+      ...(personalWorkflowReceipt && { personalWorkflowReceipt }),
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
@@ -7455,13 +7493,8 @@ export async function apply(ctx) {
         checked = handoff.checked
         heroName = checked.view.heroName
       } else if (armory) {
-        const ecosystem = workflowEnvironment ?? await discover()
-        const native = matchHero(presetId, records.get(presetId))
-        checked = { ...await verifiedPlanComparisonArm({ presetId, heroId: native.id }, ecosystem), ecosystem }
-        if (!matchesLessonIdentity(target.identity, checked.identity, checked.draft, checked.candidate, ecosystem)) {
-          throw new Error('本机配置已变化，无法核对这局的原出装。')
-        }
-        heroName = native.name
+        checked = await checkedArmoryTaskLoadout(presetId, target, workflowEnvironment ?? await discover())
+        heroName = checked.heroName
       } else {
         checked = await verifiedLessonTaskSource(launch.source, signal)
         const pinned = pairReview || isStockTrialSource(launch.source)
