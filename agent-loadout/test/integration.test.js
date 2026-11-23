@@ -1796,6 +1796,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const invitedResult = await result(invited.sessionId)
     assert.equal(invitedResult.lighthouseMode, 'evidence-review')
     assert.equal(invitedResult.lighthousePair, undefined)
+    assert.equal(invitedResult.lighthouseReceivedReport, undefined)
     assert.deepEqual(invitedResult.workflowDecisions, [{ gearId: 'evidence', choices: ['暂缓提交'] }])
     assert.deepEqual(invitedResult.deliverables, [])
     assert.deepEqual(await native(reviewOpening.sessionId), firstReviewNative)
@@ -1806,6 +1807,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await readChallengeReport(withEvidence.sessionId, {}, 422)
     const pausedReport = await readChallengeReport(invited.sessionId)
     const deliveredReport = await readChallengeReport(variant.sessionId)
+    await readChallengeReport(invited.sessionId, { received: true }, 422)
     assert.match(pausedReport.code, /^DSHR5\./)
     const pausedRecipe = JSON.parse(Buffer.from(pausedReport.code.slice(6), 'base64url').toString())
     assert.deepEqual(pausedRecipe, {
@@ -1861,6 +1863,81 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     }
     assert.deepEqual(await native(variant.sessionId), variantNative)
 
+    const reportTrial = (code, status) => challenge('lighthouse-combined-handoff-trial-preview', { code }, status)
+    const beforeReportTrial = (await practiceDirectories()).sort()
+    await reportTrial(invitation.code, 422)
+    const trial = await reportTrial(oppositeLanguage)
+    assert.deepEqual(JSON.parse(Buffer.from(trial.code.slice(6), 'base64url').toString()), {
+      sample: 'lighthouse-battery-gap-1-en', played: 'evidence-review',
+    })
+    assert.match(trial.code, /^DSHC5\./)
+    const englishPractice = await challenge('lighthouse-combined-start-preview', {})
+    assert.deepEqual(trial.preview, {
+      kind: 'lighthouse-combined', sampleLanguage: 'en', played: 'evidence-review',
+      material: combinedPractice.material, task: englishPractice.task, arms: ['evidence-review', 'review'],
+    })
+    const previewDerived = (fields, status) => previewChallenge({ code: trial.code, ...fields }, status)
+    const openDerived = (fields, status) => openChallenge({ code: trial.code, launchId: '5'.repeat(32), ...fields }, status)
+    const information = { arm: 'review', reportCode: oppositeLanguage }
+    const alternativeReport = reportCode({
+      ...pausedRecipe, sample: 'lighthouse-battery-gap-1-en', evidence: 'qualify', review: 'confirm', delivered: true,
+    })
+    const wrongModeReport = reportCode({
+      ...pausedRecipe, sample: 'lighthouse-battery-gap-1-en', played: 'review', evidence: 'none', review: 'revise',
+    })
+    assert.deepEqual(await previewDerived({ reportCode: oppositeLanguage }), trial.preview)
+    await previewDerived({ ...information, reportCode: pausedReport.code }, 422)
+    await previewDerived({ ...information, reportCode: wrongModeReport }, 422)
+    const reviewedReport = await previewDerived(information)
+    const ordinaryInvite = await previewDerived({ arm: 'review' })
+    assert.equal(reviewedReport.arm, 'review')
+    assert.equal(reviewedReport.task, trial.preview.task)
+    assert.notEqual(reviewedReport.token, ordinaryInvite.token)
+    assert.notEqual(reviewedReport.token, (await previewDerived({ ...information, reportCode: alternativeReport })).token)
+    await openDerived({ arm: 'review', token: reviewedReport.token }, 422)
+    await openDerived({ ...information, token: ordinaryInvite.token }, 422)
+    await openDerived({ ...information, arm: 'evidence-review', token: reviewedReport.token }, 422)
+    await openDerived({ ...information, reportCode: pausedReport.code, token: reviewedReport.token }, 422)
+    await openDerived({ ...information, reportCode: wrongModeReport, token: reviewedReport.token }, 422)
+    await openDerived({ ...information, reportCode: alternativeReport, token: reviewedReport.token }, 422)
+    assert.deepEqual((await practiceDirectories()).sort(), beforeReportTrial)
+
+    const approval = { ...information, token: reviewedReport.token }
+    const receivedDraft = await openDerived(approval)
+    assert.deepEqual(await openDerived(approval), receivedDraft)
+    assert.equal(receivedDraft.task, trial.preview.task)
+    assert.ok(![sessionId, invited.sessionId, variant.sessionId, reviewOpening.sessionId].includes(receivedDraft.sessionId))
+    assert.ok(![invited.workspaceId, variant.workspaceId, reviewOpening.workspaceId].includes(receivedDraft.workspaceId))
+    assert.doesNotMatch(JSON.stringify(receivedDraft), /DSHR5\./)
+    const receivedNative = await native(receivedDraft.sessionId)
+    assert.equal(await readFile(join(receivedNative.workspacePath, combinedPractice.material), 'utf8'), reviewSample)
+    assert.ok(!receivedNative.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    const receivedLaunch = receivedNative.events.find(event => event.type === 'plugin:dsh-agent-loadout/plan-task').data
+    assert.equal(receivedLaunch.lighthouseReceivedReport, oppositeLanguage)
+    assert.equal(receivedLaunch.target.lighthouseReplayOf, undefined)
+    assert.equal((await result(receivedDraft.sessionId))?.lighthouseReceivedReport, undefined)
+    await readChallengeReport(receivedDraft.sessionId, { received: true }, 422)
+
+    const receivedTurn = host.request(turnEndpoint, { sessionId: receivedDraft.sessionId, text: receivedDraft.task })
+    receivedTurn.catch(() => {})
+    await choose(receivedDraft.sessionId, 'fixture-delivery-review', 'Confirm handoff')
+    await receivedTurn
+    const receivedResult = await result(receivedDraft.sessionId)
+    assert.equal(receivedResult.lighthouseReceivedReport, true)
+    assert.equal(receivedResult.lighthouseMode, 'review')
+    assert.equal(receivedResult.lighthousePair, undefined)
+    assert.deepEqual(receivedResult.workflowDecisions, [{ gearId: 'review', choices: ['Confirm handoff'] }])
+    assert.equal(receivedResult.deliverables.length, 1)
+    assert.doesNotMatch(JSON.stringify(receivedResult), /DSHR5\./)
+    const ordinaryReport = await readChallengeReport(receivedDraft.sessionId)
+    assert.deepEqual(ordinaryReport.local, { ...deliveredReport.local, sampleLanguage: 'en' })
+    assert.equal(ordinaryReport.friend, undefined)
+    const receivedComparison = { ...ordinaryReport, friend: { ...pausedReport.local, sampleLanguage: 'en' } }
+    assert.deepEqual(await readChallengeReport(receivedDraft.sessionId, { received: true }), receivedComparison)
+    await readChallengeReport(receivedDraft.sessionId, { received: true, code: alternativeReport }, 422)
+    assert.deepEqual(await readChallengeReport(variant.sessionId), deliveredReport)
+    assert.deepEqual(await readChallengeReport(invited.sessionId), pausedReport)
+
     const before = await history(directSession)
     const liveComparison = await preview('review', { sourceSessionId: directSession })
     assert.equal(liveComparison.comparison.live, true)
@@ -1886,6 +1963,12 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       await turn
       assert.deepEqual(delivered(await history(sessionId)), choice === 'Confirm handoff' ? ['handoff.md'] : [])
     }
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.equal((await result(receivedDraft.sessionId)).lighthouseReceivedReport, true)
+    assert.deepEqual(await readChallengeReport(receivedDraft.sessionId, { received: true }), receivedComparison)
+    assert.deepEqual(await readChallengeReport(invited.sessionId), pausedReport)
+    await readChallengeReport(invited.sessionId, { received: true }, 422)
   } finally {
     await host?.stop()
     await rm(directory, { recursive: true, force: true })

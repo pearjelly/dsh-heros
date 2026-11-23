@@ -1282,12 +1282,13 @@ export async function apply(ctx) {
 
   function requestedCombinedLighthouseTask(selection, english) {
     const input = requestedArmoryTask(selection, english)
-    const { lighthouseReplayOf, lighthouseReviewOnly } = selection
-    if (!lighthouseReplayOf && !lighthouseReviewOnly) return input
+    const { lighthouseReplayOf, lighthouseReviewOnly, lighthouseReceivedReport } = selection
+    if (!lighthouseReplayOf && !lighthouseReviewOnly && !lighthouseReceivedReport) return input
     const hash = createHash('sha256').update(JSON.stringify([
       input.hash, lighthouseReplayOf ?? null, ...(lighthouseReviewOnly ? ['review'] : []),
+      ...(lighthouseReceivedReport ? ['received-report', lighthouseReceivedReport] : []),
     ])).digest('hex')
-    return { ...input, lighthouseReplayOf, lighthouseReviewOnly, hash }
+    return { ...input, lighthouseReplayOf, lighthouseReviewOnly, lighthouseReceivedReport, hash }
   }
 
   async function checkArmoryTask({ draft, workspaceId, material, task, hash }, signal, readMaterial = readPersonalTaskMaterial) {
@@ -1482,6 +1483,7 @@ export async function apply(ctx) {
         ...(decisionReplayOf && { webPilotDecisionReplayOf: decisionReplayOf }),
         ...(kind === 'web-pilot' && input.openingChoice && { webPilotOpeningChoice: input.openingChoice }),
         ...(kind === 'web-pilot-challenge' && input.reportCode && { webPilotReceivedReport: input.reportCode }),
+        ...(kind === 'lighthouse-combined' && input.lighthouseReceivedReport && { lighthouseReceivedReport: input.lighthouseReceivedReport }),
         ...(checked.handoffAlternateOf && { handoffAlternateOf: checked.handoffAlternateOf }),
         ...(kind === 'alternate' && { alternateOf: input.alternateOf }) })
       updates.notify(sessionId)
@@ -3494,9 +3496,12 @@ export async function apply(ctx) {
     }
   }
 
-  async function checkCombinedLighthouseChallenge({ code, arm }, signal) {
+  async function checkCombinedLighthouseChallenge({ code, arm, reportCode }, signal) {
     if (arm !== undefined && !lighthouseCombinedModes.includes(arm)) throw new Error(challengeChanged)
     const { sampleLanguage, played } = decodeLighthouseCombinedChallenge(code)
+    const received = reportCode === undefined ? undefined : decodeLighthouseCombinedReport(reportCode)
+    if (received && (received.sampleLanguage !== sampleLanguage || received.played !== played)) throw new Error(challengeChanged)
+    const lighthouseReceivedReport = received && encodeLighthouseCombinedReport(received)
     const options = await Promise.all(lighthouseCombinedModes.map(mode => checkCombinedLighthouseStart(sampleLanguage === 'en', signal, mode)))
     const arms = options.filter(option => option.draft).map(option => option.mode)
     const { task, material } = options[0].preview
@@ -3506,8 +3511,16 @@ export async function apply(ctx) {
     if (!selected?.draft) return { preview: { ...view, blocked: true, reason: reviewRoutesUnavailable } }
     const token = createHash('sha256').update(JSON.stringify([
       'lighthouse-combined-challenge-v1', code.trim(), arm, selected.preview.token,
+      ...(lighthouseReceivedReport ? [lighthouseReceivedReport] : []),
     ])).digest('hex')
-    return { ...selected, preview: { ...view, arm, token } }
+    return { ...selected, lighthouseReceivedReport, preview: { ...view, arm, token } }
+  }
+
+  async function previewCombinedLighthouseReportTrial({ code: reportCode }, signal) {
+    const { sampleLanguage, played } = decodeLighthouseCombinedReport(reportCode)
+    const code = encodeLighthouseCombinedChallenge(sampleLanguage, played)
+    const { preview } = await checkCombinedLighthouseChallenge({ code, reportCode }, signal)
+    return { code, preview }
   }
 
   async function openCombinedLighthouse(selection, english, signal, kind = 'start') {
@@ -3516,7 +3529,7 @@ export async function apply(ctx) {
     if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
       throw new Error('请先核对新任务的材料和出装。')
     }
-    const { preview, draft, identity, brief, original, mode } = kind === 'replay'
+    const { preview, draft, identity, brief, original, mode, lighthouseReceivedReport } = kind === 'replay'
       ? await checkCombinedLighthouseReplay(selection, signal)
       : kind === 'challenge' ? await checkCombinedLighthouseChallenge(selection, signal)
         : await checkCombinedLighthouseStart(english, signal, selection.mode)
@@ -3530,7 +3543,8 @@ export async function apply(ctx) {
     const opening = createHash('sha256').update(JSON.stringify(['lighthouse-combined-v1', token, launchId])).digest('hex').slice(0, 32)
     const { workspace, material } = await lighthouseEvidenceLesson(directory, registry, opening, english, 'gap')
     const input = { draft, workspaceId: workspace.id, material, task: brief,
-      ...(original && { lighthouseReplayOf: original.sessionId }), ...(mode === 'review' && { lighthouseReviewOnly: true }) }
+      ...(original && { lighthouseReplayOf: original.sessionId }), ...(mode === 'review' && { lighthouseReviewOnly: true }),
+      ...(lighthouseReceivedReport && { lighthouseReceivedReport }) }
     const checked = await checkArmoryTask(requestedCombinedLighthouseTask(input, english), signal, readWorkspaceMaterial)
     if (!checked.token || checked.identity !== identity) throw new Error('材料、任务或出装已变化，请重新核对。')
     return openReviewedTask({ ...input, token: checked.token, launchId: opening }, english, signal, 'lighthouse-combined')
@@ -3571,9 +3585,12 @@ export async function apply(ctx) {
     }
   }
 
-  async function combinedLighthouseReport({ sessionId, code }, signal) {
-    const friend = code === undefined ? undefined : decodeLighthouseCombinedReport(code)
+  async function combinedLighthouseReport({ sessionId, code, received }, signal) {
+    if (received !== undefined && (received !== true || code !== undefined)) throw new Error(challengeChanged)
+    const shared = code === undefined ? undefined : decodeLighthouseCombinedReport(code)
     const { original } = await checkCombinedLighthouseLoadout(sessionId, signal)
+    if (received && !original.receivedReport) throw new Error('这局没有可对照的好友战报。')
+    const friend = received ? original.receivedReport : shared
     if (friend && friend.sampleLanguage !== original.language) throw new Error('这份交接战报的题目语言和本局不同。')
     const local = combinedLighthouseReportSide(original)
     return { local, code: encodeLighthouseCombinedReport(local), ...(friend && { friend }) }
@@ -7005,7 +7022,16 @@ export async function apply(ctx) {
     const workspace = ctx.get('workspaceRegistry')?.get(target.workspaceId)
     if (!language || !workspace?.sessionIds.includes(sessionId) ||
       await personalTaskMaterialState(target, signal) !== 'verified') return
-    return { sessionId, language, target, mode, workflowDecisions, deliverables: evidence.deliverables ?? [] }
+    let receivedReport
+    if (result.launch?.lighthouseReceivedReport !== undefined) {
+      try {
+        const received = decodeLighthouseCombinedReport(result.launch.lighthouseReceivedReport)
+        if (received.sampleLanguage === language) receivedReport = received
+      } catch {
+        // A historical report does not prevent using the local result.
+      }
+    }
+    return { sessionId, language, target, mode, workflowDecisions, deliverables: evidence.deliverables ?? [], receivedReport }
   }
 
   async function readCombinedLighthouseRound(sessionId, signal) {
@@ -7296,6 +7322,7 @@ export async function apply(ctx) {
     const result = { source: launch.source, material: launch.material, ...evidence,
       ...(evidence.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }),
       ...(lighthouseRound && { lighthouseReplay: true, lighthouseMode: lighthouseRound.mode }), ...(lighthousePair && { lighthousePair }),
+      ...(lighthouseRound?.receivedReport && { lighthouseReceivedReport: true }),
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
@@ -9191,6 +9218,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, 'replay')
         else if (selection?.action === 'lighthouse-combined-challenge-share') value = await shareCombinedLighthouseChallenge(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-handoff-report') value = await combinedLighthouseReport(selection, request.signal)
+        else if (selection?.action === 'lighthouse-combined-handoff-trial-preview') value = await previewCombinedLighthouseReportTrial(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-handoff-find') value = await findCombinedLighthouseReports(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-personal-draft') value = await readCombinedLighthousePersonalDraft(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-pending') value = await combinedLighthousePending(selection, request.signal)

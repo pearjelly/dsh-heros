@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.252.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.253.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -197,6 +197,8 @@ dsh web
 各自打完后，在已核对的任务结果点 **交换试玩战报**。复制自己的战报，或粘贴好友的同题战报。可以比较两人的出装、实际选择和是否交付文件。分享内容限定在这道公开题的结果。
 
 也可以从大厅的 **加入试玩挑战** 粘贴收到的战报。按时间、出装和结果选自己的已核对对局，再查看同题对照。
+
+如果还没有同题记录，可以点 **我也试同一题**，自选出装，打开草稿后手动发送。打完在任务结果点 **对照收到的战报**，直接看两局取舍和交付。
 
 选路时可以看到两边共用 **标准模式** 和 **交付物预览**。复核路线额外加装 **交付前复核**，把交不交文件的选择留给你。
 

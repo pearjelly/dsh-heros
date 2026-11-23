@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.252.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.253.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -193,6 +193,8 @@ From a verified Lighthouse result, choose **Invite a friend to try the same task
 After each run, open **Exchange practice reports** from your verified result. Copy your report or paste your friend's report for the same task. Compare both loadouts, their recorded choices, and whether each run delivered a file. A shared report carries these outcomes for the public sample.
 
 You can also paste a received report into **Join a practice challenge** in the lobby. Pick one of your verified runs by date, loadout, and outcome to compare it with the received report.
+
+If you have no verified run of the same task, choose **Try the same task**, pick your own loadout, and open the draft. Send the task yourself. After the run, choose **Compare received report** to see both outcomes from the same public sample.
 
 The chooser shows the shared loadout of **Standard** and **Deliverable Preview**. The review route adds **Delivery Review**, which lets you decide whether to hand off the file.
 
