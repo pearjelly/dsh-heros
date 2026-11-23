@@ -1521,7 +1521,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(original.lighthouseScenarioReplay, true)
     assert.deepEqual(await pendingLighthouse(), { runs: [] })
     const carried = await personalDraft(sessionId)
-    assert.deepEqual(carried, { draft: both.draft, heroName: '标准模式' })
+    assert.deepEqual(carried, { draft: both.draft, heroName: '标准模式', mode: 'evidence-review' })
     assert.deepEqual(await practiceDirectories(), practiceCreated)
     assert.deepEqual(await native(sessionId), originalNative)
 
@@ -1638,7 +1638,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     })
     assert.equal(englishPair.status, 200)
     assert.deepEqual((await englishPair.json()).value.lighthousePair, compared.lighthousePair)
-    assert.deepEqual(await personalDraft(variant.sessionId), { draft: review.draft, heroName: '标准模式' })
+    assert.deepEqual(await personalDraft(variant.sessionId), { draft: review.draft, heroName: '标准模式', mode: 'review' })
     assert.deepEqual(await pairedDraft(variant.sessionId, 'previous'), { ...carried, mode: 'evidence-review' })
     assert.deepEqual(await pairedDraft(variant.sessionId, 'current'), { draft: review.draft, heroName: '标准模式', mode: 'review' })
     await pairedDraft(variant.sessionId, null, 422)
@@ -1713,6 +1713,48 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       (await host.request(endpoint, { ...fields, action: 'armory-task-preview' }, status)).value
     const openOwn = async (fields, token, status) =>
       (await host.request(endpoint, { ...fields, action: 'armory-task-open', token, launchId: '2'.repeat(32) }, status)).value
+    const singleInput = sessionId => ({ ...pairFields, lighthouseSource: { sessionId } })
+    const reviewSingle = singleInput(reviewOpening.sessionId)
+    const evidenceSingle = singleInput(sessionId)
+    assert.deepEqual(await personalDraft(reviewOpening.sessionId), { draft: review.draft, heroName: '标准模式', mode: 'review' })
+    assert.ok(!(await native(reviewOpening.sessionId)).events.some(event => event.type === 'deliverables/presented'))
+    await previewOwn({ ...pairFields, lighthouseSource: null }, 422)
+    await previewOwn({ ...pairFields, lighthouseSource: { sessionId, pairSide: 'previous' } }, 422)
+    await previewOwn({ ...reviewSingle, lighthousePair: pairInput('current').lighthousePair }, 422)
+    await previewOwn(singleInput(directSession), 422)
+    await previewOwn({ ...reviewSingle, workspaceId: reviewOpening.workspaceId }, 422)
+    const reviewSinglePreview = await previewOwn({ ...reviewSingle, draft: carried.draft })
+    const evidenceSinglePreview = await previewOwn({ ...evidenceSingle, draft: review.draft })
+    assert.deepEqual(reviewSinglePreview.gear.map(item => item.id).sort(), ['present', 'review'])
+    assert.deepEqual(evidenceSinglePreview.gear.map(item => item.id).sort(), ['evidence', 'present', 'review'])
+    assert.equal(reviewSinglePreview.task, ownPreview.task)
+    assert.equal(evidenceSinglePreview.task, ownPreview.task)
+    assert.notEqual(evidenceSinglePreview.token, ownPreview.token)
+    await openOwn(ownTask, evidenceSinglePreview.token, 422)
+    await openOwn(reviewSingle, evidenceSinglePreview.token, 422)
+    const singleSample = join(originalNative.workspacePath, combinedPractice.material)
+    try {
+      await appendFile(singleSample, '\nOriginal sample changed after checking the personal draft.\n')
+      await openOwn(evidenceSingle, evidenceSinglePreview.token, 422)
+    } finally {
+      await writeFile(singleSample, sample)
+    }
+    for (const [input, preview, origin] of [
+      [reviewSingle, reviewSinglePreview, await native(reviewOpening.sessionId)],
+      [evidenceSingle, evidenceSinglePreview, originalNative],
+    ]) {
+      const opened = await openOwn(input, preview.token)
+      assert.deepEqual(await openOwn(input, preview.token), opened)
+      const archive = await native(opened.sessionId)
+      assert.equal(opened.task, ownPreview.task)
+      assert.equal(opened.workspaceId, personalWorkspace)
+      assert.equal(archive.presetId, origin.presetId)
+      assert.ok(!archive.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+      const launch = archive.events.find(event => event.type === 'plugin:dsh-agent-loadout/plan-task').data
+      const history = JSON.stringify(launch)
+      assert.doesNotMatch(history, /lighthouseSource|lighthouseCarry|lighthousePair|lighthouseReplayOf|02-lighthouse/)
+      assert.ok(!history.includes(input.lighthouseSource.sessionId))
+    }
     await previewOwn({ ...pairFields, lighthousePair: null }, 422)
     await previewOwn(pairInput(null), 422)
     await previewOwn({ ...pairFields, lighthousePair: { sessionId: reviewOpening.sessionId, pairSide: 'current' } }, 422)
@@ -1735,7 +1777,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       await pairedDraft(variant.sessionId, 'current', 422)
       await openOwn(pairInput('current'), currentCarry.token, 422)
       assert.equal((await result(variant.sessionId)).lighthousePair, undefined)
-      assert.deepEqual(await personalDraft(variant.sessionId), { draft: review.draft, heroName: '标准模式' })
+      assert.deepEqual(await personalDraft(variant.sessionId), { draft: review.draft, heroName: '标准模式', mode: 'review' })
     } finally {
       await writeFile(previousSample, previousBytes)
     }

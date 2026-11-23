@@ -1274,15 +1274,19 @@ export async function apply(ctx) {
   }
 
   async function requestedPersonalArmoryTask(selection, english, signal) {
-    if (!Object.hasOwn(selection, 'lighthousePair')) return requestedArmoryTask(selection, english)
-    const { lighthousePair } = selection
-    if (!lighthousePair || typeof lighthousePair !== 'object' || Array.isArray(lighthousePair)) {
+    const hasPair = Object.hasOwn(selection, 'lighthousePair')
+    const hasSource = Object.hasOwn(selection, 'lighthouseSource')
+    if (!hasPair && !hasSource) return requestedArmoryTask(selection, english)
+    const reference = hasPair ? selection.lighthousePair : selection.lighthouseSource
+    if ((hasPair && hasSource) || !reference || typeof reference !== 'object' || Array.isArray(reference)) {
       throw new Error(combinedLighthouseReplayUnavailable)
     }
-    const { draft, binding } = await checkCombinedLighthousePairSide(lighthousePair, signal)
+    if (hasSource && Object.keys(reference).length !== 1) throw new Error(combinedLighthouseReplayUnavailable)
+    const { draft, binding } = hasPair ? await checkCombinedLighthousePairSide(reference, signal)
+      : await checkCombinedLighthouseSingleSource(reference, signal)
     const input = requestedArmoryTask({ ...selection, draft }, english)
     const hash = createHash('sha256').update(JSON.stringify([input.hash, binding])).digest('hex')
-    return { ...input, lighthousePair: true, hash }
+    return { ...input, lighthouseCarry: true, hash }
   }
 
   function requestedCombinedLighthouseTask(selection, english) {
@@ -1406,7 +1410,7 @@ export async function apply(ctx) {
     const webPractice = kind === 'web-source' || webPilot
     const { input: readInput, check, unavailable, readMaterial = readPersonalTaskMaterial } = reviewedTaskKinds[kind]
     const input = await readInput(selection, english, signal)
-    const { sourcePlan, decisionReplayOf, lighthousePair } = input
+    const { sourcePlan, decisionReplayOf, lighthouseCarry } = input
     const controller = ctx.get('sessionController')
     const registry = ctx.get('workspaceRegistry')
     if (!controller?.create || !ctx.get('sessionQuery') || !registry) {
@@ -1439,7 +1443,7 @@ export async function apply(ctx) {
         }
       }
       if (decisionReplayOf && (await readInput(selection, english, signal)).hash !== input.hash) throw new Error(webPilotReplayChanged)
-      if (lighthousePair && (await readInput(selection, english, signal)).hash !== input.hash) {
+      if (lighthouseCarry && (await readInput(selection, english, signal)).hash !== input.hash) {
         throw new Error(combinedLighthouseReplayUnavailable)
       }
       if (webPractice) await mkdir(directory, { recursive: true, mode: 0o700 })
@@ -3642,11 +3646,16 @@ export async function apply(ctx) {
       binding: [sessionId, original.sessionId, pairSide, previous.identity, current.identity, original.target.digest] }
   }
 
+  async function checkCombinedLighthouseSingleSource({ sessionId }, signal) {
+    const { original, draft, mode, identity } = await checkCombinedLighthouseLoadout(sessionId, signal)
+    return { draft, mode, binding: ['lighthouse-single-v1', sessionId, identity, original.target.digest,
+      original.workflowDecisions, original.deliverables] }
+  }
+
   async function readCombinedLighthousePersonalDraft(selection, signal) {
-    const paired = Object.hasOwn(selection, 'pairSide')
-    const { draft, mode } = paired ? await checkCombinedLighthousePairSide(selection, signal)
-      : await checkCombinedLighthouseLoadout(selection.sessionId, signal)
-    return { draft, heroName: presetLabels.get(draft.presetId)[0], ...(paired && { mode }) }
+    const { draft, mode } = Object.hasOwn(selection, 'pairSide')
+      ? await checkCombinedLighthousePairSide(selection, signal) : await checkCombinedLighthouseSingleSource(selection, signal)
+    return { draft, heroName: presetLabels.get(draft.presetId)[0], mode }
   }
 
   async function checkCombinedLighthouseReplay({ sessionId, loadout = 'same' }, signal) {
