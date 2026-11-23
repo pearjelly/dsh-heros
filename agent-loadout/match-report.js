@@ -12,6 +12,11 @@ export const panelActivityRecord = 'plugin:dsh-agent-loadout/panel-activity'
 const validSourceId = id => typeof id === 'string' && id.length > 0 && id.length <= 512
 const terminalTurns = new Set(['completed', 'aborted', 'blocked', 'error', 'max-tokens', 'interrupted', 'forked'])
 const unfinishedTools = new Set(['ABORTED_BEFORE_DISPATCH', 'TOOL_NOT_STARTED', 'TOOL_OUTCOME_UNKNOWN', 'TOOL_INTERRUPTED', 'TOOL_ABORTED'])
+const webConnectionFailures = new Set([
+  'WEB_PROVIDER_ERROR', 'WEB_FETCH_DNS_FAILED', 'WEB_FETCH_CONNECTION_REFUSED', 'WEB_FETCH_CONNECTION_TIMEOUT',
+  'WEB_FETCH_CERTIFICATE_INVALID', 'WEB_FETCH_CONNECTION_INTERRUPTED', 'WEB_FETCH_NETWORK_UNREACHABLE',
+  'WEB_FETCH_NETWORK_ERROR', 'WEB_FETCH_TIMEOUT',
+])
 
 function digest(text) {
   return createHash('sha256').update(text).digest('hex')
@@ -275,12 +280,14 @@ async function reportTurn(source, start, end, receipts) {
   const beginning = events[start]
   const calls = new Map()
   const webCalls = new Set()
+  const recoverable = new Set()
   const nestedCalls = new Map()
   const callsBySeq = new Map()
   const entries = []
   const pendingActions = []
   let status = source.source === 'live' ? 'running' : 'interrupted'
   let endSeq
+  let userTurn = false
   const inherited = start < source.inheritedEventCount
   function addToolCall(name, seq, time, nested = false) {
     const call = { type: 'tool', name, seq, time, state: 'running', ...(nested ? { nested: true } : {}) }
@@ -293,7 +300,9 @@ async function reportTurn(source, start, end, receipts) {
     if (type === 'turn/end') {
       status = terminalTurns.has(data.reason.kind) ? data.reason.kind : 'ended'
       endSeq = seq
-    } else if (type === 'user/message' && data.source.kind === 'user' && data.source.rpcId) {
+    } else if (type === 'user/message' && data.source.kind === 'user') {
+      userTurn = true
+      if (!data.source.rpcId) continue
       pendingActions.push(receipts.find(data.source.rpcId).then(record => {
         if (!record || (record.sessionId !== source.header.id && seq >= source.inheritedEventCount)) return
         const [part] = data.content
@@ -316,6 +325,12 @@ async function reportTurn(source, start, end, receipts) {
         (sourceEventSeqs === undefined || sourceEventSeqs?.[0] === call.seq) &&
         (surfaceOp === undefined || surfaceOp === 'append')) {
         call.webRead = reportWebRead(data, call.state)
+        const read = call.webRead.status
+        if (read === 'truncated' || read === 'http-error' || read === 'failed' && webConnectionFailures.has(data.error?.code)) {
+          recoverable.add(call)
+        } else {
+          recoverable.delete(call)
+        }
       }
     } else if (type === 'tool/ptc-dispatch-start') {
       nestedCalls.set(data.subCallId, addToolCall(data.name, seq, time, true))
@@ -335,8 +350,10 @@ async function reportTurn(source, start, end, receipts) {
       call.webRead = { status: 'unknown' }
     }
   }
+  const latestWeb = entries.findLast(entry => entry.name === 'web_fetch' && !entry.nested)
+  const webRecovery = userTurn && !inherited && status === 'completed' && recoverable.has(latestWeb) ? latestWeb.seq : undefined
   return { seq: start, endSeq, turn: beginning.data.turn, time: beginning.time, inherited, status,
-    entries: entries.sort((a, b) => a.seq - b.seq) }
+    entries: entries.sort((a, b) => a.seq - b.seq), webRecovery }
 }
 
 export function noteDeliveredFiles(files, { files: delivered, turn }, seq) {
@@ -595,8 +612,10 @@ export async function matchReport(source, before, receipts) {
   const commands = []
   const panelActivities = []
   const compactions = []
+  let webRecovery
+  let latestTurn = before === undefined
   const result = () => ({ turns, ...(commands.length && { commands }), ...(panelActivities.length && { panelActivities }),
-    ...(compactions.length && { compactions }) })
+    ...(compactions.length && { compactions }), ...(webRecovery !== undefined && { webRecovery }) })
   const outcomes = new Map()
   const limit = before ?? events.length
   let end = events.length
@@ -623,6 +642,13 @@ export async function matchReport(source, before, receipts) {
       compaction = { seq, time, state: data.error === undefined ? 'completed' : 'failed', inherited: index < source.inheritedEventCount }
     } else if (type === 'turn/start') {
       if (index < limit) turn = await reportTurn(source, index, end, receipts)
+      if (latestTurn && turn?.webRecovery !== undefined) {
+        const lastSubmission = events.findLast(event => event.type === 'turn/end' ||
+          event.type === 'user/message' && event.data.source.kind === 'user')
+        if (lastSubmission?.type === 'turn/end' && lastSubmission.seq === turn.endSeq) webRecovery = turn.webRecovery
+      }
+      latestTurn = false
+      if (turn) delete turn.webRecovery
       end = index
     }
     if (!turn && !command && !panel && !compaction) continue

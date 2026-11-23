@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.200.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.201.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -36,6 +36,8 @@ When the source is missing or the result is marked unverified, **Try the same qu
 After choosing **Use current manifest**, select **Use this loadout on my task** and choose your own workspace. Open a blank Minimal + Web Research draft, paste the link you want to check, then write and send your question.
 
 Open the match report to see what Web Research actually returned. The tool row shows the recorded provider, HTTP status, whether the response was truncated, and a link to the final fetched URL when available.
+
+On the latest turn in your own conversation, choose **Narrow the question** after a truncated response or **Try another source** after a read failure. Write the point to check, review the suggested follow-up, and put it in the same composer to send yourself. If you have an existing draft or attachments, copy the suggestion to use when ready.
 
 ## Try two heroes on the same task
 

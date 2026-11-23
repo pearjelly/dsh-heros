@@ -9197,13 +9197,128 @@ window.__ModuleLoader__.load({
             onClick: () => onUse(preview, false) }, t('试装复练'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function MatchReport({ sessionId, request, refresh, onPrepare, onUse }) {
+    function webRecoveryLink(text) {
+      const value = text.trim()
+      if (!/^https?:\/\//i.test(value)) return
+      try {
+        const url = new URL(value)
+        if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.href
+      } catch {
+        // The user can finish entering the address before it is used in a draft.
+      }
+    }
+
+    function WebRecoveryDraft({ id, entry, sessionId, request, onDraft, onBack }) {
+      const language = useLanguage()
+      const [question, setQuestion] = useState('')
+      const [mode, setMode] = useState('search')
+      const [location, setLocation] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [outcome, setOutcome] = useState('')
+      const [error, setError] = useState('')
+      const [copyStatus, setCopyStatus] = useState('')
+      const questionField = useRef(null)
+      const preview = useRef(null)
+      const pending = useRef(null)
+      const narrowed = entry.webRead.status === 'truncated'
+      const link = narrowed ? entry.webRead.url : mode === 'link' ? webRecoveryLink(location) : undefined
+      const ready = question.trim() && (link || !narrowed && mode === 'search')
+      const task = ready ? [
+        narrowed ? t('上次读取以下地址时，响应被截断。请沿用这个来源。')
+          : link ? t('上次网页读取失败。请核对下面这个替代来源。')
+            : t('上次网页读取失败。请为这个问题查找另一份公开可访问的原始来源。'),
+        link, t('本次只核对这一点'), question.trim(),
+        t('引用能核对的原文并给出链接。找不到依据时，标为待核实。'),
+      ].filter(Boolean).join('\n') : ''
+
+      useEffect(() => {
+        questionField.current?.focus()
+        return () => pending.current?.abort()
+      }, [])
+
+      function resetNotice() {
+        setOutcome('')
+        setError('')
+        setCopyStatus('')
+      }
+
+      async function apply(event) {
+        event.preventDefault()
+        if (!task || pending.current) return
+        resetNotice()
+        const abort = pending.current = new AbortController()
+        setBusy(true)
+        try {
+          const action = 'match-report'
+          const latest = await request(action, { action, sessionId }, abort.signal, language)
+          if (abort.signal.aborted) return
+          const current = latest.turns[0]?.entries.find(item => item.seq === entry.seq)?.webRead
+          if (latest.webRecovery !== entry.seq || current?.status !== entry.webRead.status || current.url !== entry.webRead.url) {
+            setError(t('读取结果已变化，请返回战报查看最新一轮。'))
+            return
+          }
+          setOutcome(onDraft(task))
+        } catch (reason) {
+          if (!abort.signal.aborted) setError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setBusy(false)
+        }
+      }
+
+      async function copy() {
+        try {
+          await navigator.clipboard.writeText(task)
+          setCopyStatus(t('已复制后续问题。'))
+        } catch {
+          preview.current?.focus()
+          preview.current?.select()
+          setCopyStatus(t('已选中后续问题，可以手动复制。'))
+        }
+      }
+
+      return h('form', { id, className: 'moba-web-recovery-form', onSubmit: apply,
+        onKeyDown: event => closeDialogOnEscape(event, onBack) },
+        h('strong', null, t(narrowed ? '缩小问题' : '换个来源')),
+        h('p', null, t(narrowed ? '写下你要核对的一小点，沿用本次实际读取的地址。' : '可以查找另一份公开原文，或使用你提供的新链接。')),
+        h('label', null, t('你想核对哪一点？'),
+          h('textarea', { ref: questionField, rows: 2, maxLength: 400, value: question, required: true, disabled: busy,
+            onChange: event => { setQuestion(event.target.value); resetNotice() } })),
+        !narrowed && h('label', null, t('来源选择'),
+          h('select', { value: mode, disabled: busy,
+            onChange: event => { setMode(event.target.value); resetNotice() } },
+            h('option', { value: 'search' }, t('查找公开替代来源')),
+            h('option', { value: 'link' }, t('使用其他链接')))),
+        !narrowed && mode === 'link' && h('label', null, t('其他来源链接'),
+          h('input', { type: 'url', required: true, maxLength: 2048, value: location, disabled: busy, placeholder: 'https://',
+            onChange: event => { setLocation(event.target.value); resetNotice() } })),
+        !narrowed && mode === 'link' && location.trim() && !link &&
+          h('p', { className: 'moba-match-action-note' }, t('请填写完整的 HTTP 或 HTTPS 地址。')),
+        task && h('label', null, t('后续问题预览'), h('textarea', { ref: preview, rows: 3, value: task, readOnly: true })),
+        h('p', { className: 'moba-match-action-note' }, t('填入后可编辑，再由你手动发送。')),
+        error && h('p', { className: 'moba-match-action-error', role: 'alert' }, error),
+        outcome === 'preserved' && h('p', { role: 'status' }, t('已有草稿。可以复制后续问题，按需粘贴。')),
+        outcome === 'blocked' && h('p', { role: 'status' }, t('暂时无法填入。可以复制后续问题。')),
+        copyStatus && h('p', { role: 'status' }, copyStatus),
+        h('div', { className: 'moba-report-actions' },
+          h('button', { type: 'button', className: 'moba-text', onClick: onBack }, t('返回')),
+          (outcome === 'preserved' || outcome === 'blocked') &&
+            h('button', { type: 'button', className: 'moba-text', onClick: copy }, t('复制后续问题')),
+          h('button', { type: 'submit', className: 'moba-match-move', disabled: !task || busy },
+            t(busy ? '正在核对读取结果…' : '填入输入框'))))
+    }
+
+    function MatchReport({ sessionId, request, refresh, onPrepare, onUse, onDraft }) {
       const [before, setBefore] = useState(undefined)
       const [result, setResult] = useState(null)
       const [error, setError] = useState('')
       const [revision, setRevision] = useState(0)
       const [selected, setSelected] = useState(null)
+      const [recovery, setRecovery] = useState(null)
+      const recoveryId = useId()
       const previewButtons = useRef(new Map())
+      const recoveryTrigger = useRef(null)
+      const reportBody = useRef(null)
       useEffect(() => {
         if (before !== undefined) return
         let timer
@@ -9232,6 +9347,12 @@ window.__ModuleLoader__.load({
         setBefore(cursor)
         setResult(null)
         setError('')
+        setRecovery(null)
+      }
+
+      function closeRecovery() {
+        setRecovery(null)
+        requestAnimationFrame(() => (recoveryTrigger.current ?? reportBody.current)?.focus())
       }
 
       function returnToReport() {
@@ -9252,6 +9373,7 @@ window.__ModuleLoader__.load({
       function eventRow(entry) {
         const action = entry.type === 'action'
         const read = entry.webRead
+        const offered = result?.webRecovery === entry.seq
         return h('li', { key: entry.seq, className: 'moba-report-row', 'data-type': entry.type, 'data-nested': entry.nested },
           entry.kind === 'quest' ? h(Glyph, { kind: 'report', size: 21 })
             : entry.kind === 'hero' ? h(HeroArt, { ...entry, className: 'moba-report-art' })
@@ -9266,13 +9388,18 @@ window.__ModuleLoader__.load({
             read && h('div', { className: 'moba-report-web-read', 'data-web-read': read.status },
               h('strong', null, t(reportWebReadStates[read.status]), read.statusCode && ' · HTTP ' + read.statusCode),
               read.url && h('a', { href: read.url, title: read.url, target: '_blank', rel: 'noopener noreferrer' },
-                t('打开读取地址'), h(Glyph, { kind: 'arrow', size: 13 }))),
+                t('打开读取地址'), h(Glyph, { kind: 'arrow', size: 13 })),
+              offered && h('button', { type: 'button', className: 'moba-text moba-web-recovery-trigger', ref: recoveryTrigger,
+                'aria-expanded': recovery?.seq === entry.seq, 'aria-controls': recovery?.seq === entry.seq ? recoveryId : undefined,
+                onClick: () => setRecovery(entry) },
+              t(read.status === 'truncated' ? '缩小问题' : '换个来源'))),
             !action && entry.choices?.length > 0 && h('small', null, t('已选 ') + entry.choices.join('、'))),
           h('div', { className: 'moba-report-event-status', 'data-state': action ? 'action' : entry.state },
             (!read || !['completed', 'failed'].includes(entry.state)) &&
               h('span', null, action ? entry.kind === 'quest' ? t('任务') : t('操作') : t(reportToolStates[entry.state])),
             !action && entry.duration !== undefined &&
-              h('small', null, entry.duration < 100 ? t('<0.1 秒') : (entry.duration / 1000).toFixed(1) + t(' 秒'))))
+              h('small', null, entry.duration < 100 ? t('<0.1 秒') : (entry.duration / 1000).toFixed(1) + t(' 秒'))),
+          recovery?.seq === entry.seq && h(WebRecoveryDraft, { id: recoveryId, entry: recovery, sessionId, request, onDraft, onBack: closeRecovery }))
       }
 
       const report = result && [
@@ -9287,7 +9414,7 @@ window.__ModuleLoader__.load({
         receiptId: selected.item.followUp.id, request, onUse, onBack: returnToReport })
       if (selected) return h(SettlementFollowUp, { key: selected.item.followUp.id, sessionId, receipt: selected.item.followUp,
         request, onPrepare, backLabel: t('返回对局战报'), onBack: returnToReport })
-      return h('div', { className: 'moba-match-body moba-report' },
+      return h('div', { className: 'moba-match-body moba-report', ref: reportBody, tabIndex: -1 },
         error && h('p', { className: 'moba-match-action-error', role: 'alert' }, error,
           h('button', { type: 'button', onClick: () => setRevision(value => value + 1) }, t('重试'))),
         !result && !error && h('p', { className: 'moba-match-action-note', role: 'status' }, t('正在读取对局战报…')),
@@ -10753,7 +10880,7 @@ window.__ModuleLoader__.load({
     }
 
     function MatchEquipment({ sessionId, blankSession, request, openLobby, openContinuation, openDraftSession, openTaskResult, consumeTaskResult,
-      consumeTaskDraft, putTaskDraft, draftStore, send, workspaces, planSourceStore, returnToPlan, replayPeer }) {
+      consumeTaskDraft, putTaskDraft, focusTaskDraft, draftStore, send, workspaces, planSourceStore, returnToPlan, replayPeer }) {
       const language = useLanguage()
       const planVisit = useSyncExternalStore(planSourceStore.subscribe, planSourceStore.getSnapshot)
       const id = useId()
@@ -10879,6 +11006,15 @@ window.__ModuleLoader__.load({
         popover.current.hidePopover()
         const target = opener.current?.isConnected ? opener.current : growthTrigger.current
         target?.focus()
+      }
+
+      function stageWebRecoveryDraft(task) {
+        const result = putTaskDraft(sessionId, task)
+        if (result === 'applied') {
+          popover.current?.hidePopover()
+          requestAnimationFrame(() => focusTaskDraft(sessionId))
+        }
+        return result
       }
 
       const tools = snapshot?.tools ?? empty
@@ -11277,11 +11413,12 @@ window.__ModuleLoader__.load({
               : h('button', { type: 'button', 'aria-label': t('关闭对局装备'), popoverTarget: id, popoverTargetAction: 'hide' },
                 h(Glyph, { kind: 'close', size: 17 }))),
           pinError && h('p', { className: 'moba-match-action-error moba-match-pin-error', role: 'alert' }, pinError),
-          reporting ? h(MatchReport, { sessionId, request, refresh: refreshReport, onUse: reuseProvenLoadout, onPrepare: followUp => {
-            popover.current.hidePopover()
-            openLobby(sessionId, snapshot, { followUp,
-              selectionPresetId: followUp.heroId === snapshot?.heroId ? undefined : followUp.heroId })
-          } })
+          reporting ? h(MatchReport, { sessionId, request, refresh: refreshReport, onUse: reuseProvenLoadout,
+            onDraft: stageWebRecoveryDraft, onPrepare: followUp => {
+              popover.current.hidePopover()
+              openLobby(sessionId, snapshot, { followUp,
+                selectionPresetId: followUp.heroId === snapshot?.heroId ? undefined : followUp.heroId })
+            } })
           : growing ? h(MatchGrowth, { sessionId, request, initialQuest: action.initialQuest,
             version: snapshot?.growthVersion, teamBoardVersion: snapshot?.teamBoardVersion,
             toolChoiceRevision: JSON.stringify([sessionId, tools.map(item => [item.id, item.state, item.artSourceId, item.activation]),
@@ -11868,6 +12005,14 @@ window.__ModuleLoader__.load({
       .moba-report-web-read[data-web-read="http-error"], .moba-report-web-read[data-web-read="failed"] { color: #f0aca2; }
       .moba-report-web-read a { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; color: #a7dff4;
         text-decoration: underline; text-underline-offset: 2px; }
+      .moba-web-recovery-trigger, .moba-web-recovery-form .moba-report-actions button { min-height: 44px; white-space: normal; text-align: start; }
+      .moba-web-recovery-form { grid-column: 1 / -1; display: grid; gap: 7px; padding: 9px; min-width: 0;
+        border: 1px solid #675439; background: #191f2a; }
+      .moba-web-recovery-form p { margin: 0; font-size: 12px; }
+      .moba-web-recovery-form label { display: grid; gap: 3px; min-width: 0; }
+      .moba-web-recovery-form :is(textarea, select, input) { width: 100%; min-height: 44px; min-width: 0; padding: 5px;
+        border: 1px solid #826c4b; color: inherit; background: #121721; font: inherit; }
+      .moba-web-recovery-form textarea { resize: vertical; }
       .moba-report-event-status { display: grid; justify-items: end; gap: 1px; color: #bbdac5; font-size: 11px; white-space: nowrap; }
       .moba-report-event-status[data-state="running"], .moba-report-event-status[data-state="action"] { color: #efbf73; }
       .moba-report-event-status[data-state="failed"], .moba-report-event-status[data-state="unfinished"],
@@ -13012,6 +13157,14 @@ window.__ModuleLoader__.load({
             return 'blocked'
           }
         }
+        function focusTaskDraft(sessionId) {
+          const binding = ctx.sessions.binding(sessionId)
+          try {
+            if (binding) ctx.get('conversation')?.input?.for?.(binding.ctx)?.focus()
+          } catch {
+            // The native input can be released when the user navigates away.
+          }
+        }
         function draftStore(sessionId) {
           const binding = ctx.sessions.binding(sessionId)
           try {
@@ -13106,7 +13259,7 @@ window.__ModuleLoader__.load({
             const blankSession = session?.blank === true && !session.running && !session.promptAttempted
             return id ? h(WorkspaceSetupContext.Provider, { value: workspaceSetup },
               h(MatchEquipment, { key: id, sessionId: id, blankSession, request, openLobby, send, openDraftSession, openTaskResult, consumeTaskResult,
-                consumeTaskDraft, putTaskDraft, draftStore, workspaces: ctx.workspaces.list, planSourceStore, returnToPlan,
+                consumeTaskDraft, putTaskDraft, focusTaskDraft, draftStore, workspaces: ctx.workspaces.list, planSourceStore, returnToPlan,
                 replayPeer: replayPeer?.sessionId === id ? replayPeer : undefined,
                 openContinuation: next => ctx.uiWorkspace.openSession(next) })) : null
           }))

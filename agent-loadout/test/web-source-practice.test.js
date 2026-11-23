@@ -45,7 +45,7 @@ test('Web Research leaves incomplete, changed, and unrelated results unverified'
   assert.equal(observedWebSource(evidence().slice(0, -1), 1, binding), false)
 })
 
-async function webTurn(change = () => {}) {
+async function webReport(change = () => {}, { before, inheritedEventCount = 0 } = {}) {
   const call = { type: 'tool/call', seq: 1, time: 100, data: { turn: 1, step: 1, callId: 'read',
     name: 'web_fetch', arguments: JSON.stringify({ url: 'https://example.com/request' }) } }
   const source = { type: toolSourceRecord, seq: 2, ignorable: true, data: { callSeq: 1, ...binding, sourceName: 'Web Research' } }
@@ -56,7 +56,11 @@ async function webTurn(change = () => {}) {
   const events = [{ type: 'turn/start', seq: 0, time: 50, data: { turn: 1 } }, call, source, result,
     { type: 'turn/end', seq: 4, time: 300, data: { reason: { kind: 'completed' } } }]
   change(call, result, events)
-  const { turns: [turn] } = await matchReport({ events, inheritedEventCount: 0 }, undefined, { async refresh() {} })
+  return matchReport({ events, inheritedEventCount }, before, { async refresh() {} })
+}
+
+async function webTurn(change) {
+  const { turns: [turn] } = await webReport(change)
   assert.equal(turn.status, 'completed')
   return turn.entries[0]
 }
@@ -100,4 +104,54 @@ test('the report only surfaces causally matched, structured Web evidence and saf
   assert.equal(legacy.webRead.status, 'complete')
   const otherTool = await webTurn(call => { call.data.name = 'bash' })
   assert.equal(otherTool.webRead, undefined)
+})
+
+test('only the current, completed user turn can offer a follow-up for its latest direct Web read', async () => {
+  const user = { type: 'user/message', seq: 1, time: 80, data: { source: { kind: 'user' } } }
+  function submit(call, result, events) {
+    events.splice(1, 0, user)
+    for (const event of events.slice(2)) event.seq++
+    events[3].data.callSeq = call.seq
+    result.sourceEventSeqs = [call.seq]
+  }
+  function httpFailure(call, result, events) {
+    submit(call, result, events)
+    result.data.meta.statusCode = 404
+  }
+  const report = await webReport(httpFailure)
+  assert.equal(report.webRecovery, 2)
+  assert.equal(report.turns[0].webRecovery, undefined)
+  assert.equal((await webReport(httpFailure, { inheritedEventCount: 6 })).webRecovery, undefined)
+  assert.equal((await webReport(httpFailure, { before: 0 })).webRecovery, undefined)
+  assert.equal((await webReport((call, result) => { result.data.meta.truncated = true })).webRecovery, undefined)
+  for (const [code, expected] of [
+    ['WEB_PROVIDER_ERROR', 2], ['WEB_FETCH_CONNECTION_INTERRUPTED', 2], ['WEB_FETCH_DNS_FAILED', 2],
+    ['BAD_TOOL_ARGUMENTS', undefined], ['WEB_FETCH_TOO_LARGE', undefined],
+  ]) {
+    const failed = await webReport((call, result, events) => {
+      submit(call, result, events)
+      result.data.message.isError = true
+      result.data.error = { code }
+      delete result.data.meta
+    })
+    assert.equal(failed.webRecovery, expected)
+  }
+  const pendingSubmission = await webReport((call, result, events) => {
+    httpFailure(call, result, events)
+    events.push({ ...user, seq: 6 })
+  })
+  assert.equal(pendingSubmission.webRecovery, undefined)
+  const laterEmptyTurn = await webReport((call, result, events) => {
+    httpFailure(call, result, events)
+    events.push({ ...events[0], seq: 6, data: { turn: 2 } }, { ...events.at(-1), seq: 7 })
+  })
+  assert.equal(laterEmptyTurn.webRecovery, undefined)
+  const laterRead = await webReport((call, result, events) => {
+    httpFailure(call, result, events)
+    events.splice(-1, 0, { ...call, seq: 5, data: { ...call.data, callId: 'later' } },
+      { ...result, seq: 6, sourceEventSeqs: [5], data: { ...result.data, meta: { ...result.data.meta, statusCode: 200 },
+        message: { ...result.data.message, toolCallId: 'later' } } })
+    events[events.length - 1] = { ...events.at(-1), seq: 7 }
+  })
+  assert.equal(laterRead.webRecovery, undefined)
 })
