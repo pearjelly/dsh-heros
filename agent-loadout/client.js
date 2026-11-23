@@ -2699,6 +2699,12 @@ window.__ModuleLoader__.load({
 
     const handoffStyleLabels = { direct: '直接交付', review: '复核后交付' }
 
+    function pairedHandoffStyle(source) {
+      if (!source?.handoffPairId) return undefined
+      if (source.kind === 'workspace' && Object.hasOwn(handoffStyleLabels, source.arm)) return source.arm
+      if (source.kind === 'rematch' && source.arm === 'rematch') return 'review'
+    }
+
     function HandoffOutcomeSummary({ outcome, onPreserve, preserveRefs, onVisit, onLessonTask, busy, armory, ownReview }) {
       const heading = useId()
       return h('section', { className: 'moba-handoff-outcome', 'aria-labelledby': heading, 'data-armory-handoff': armory || undefined },
@@ -3117,15 +3123,15 @@ window.__ModuleLoader__.load({
       const pathInput = materialField ?? defaultMaterialField
       const browseButton = useRef(null)
       const workspace = workspaces.find(item => item.workspaceId === workspaceId)
+      const personalMaterials = materialAction === 'lesson-task-materials'
 
       useEffect(() => {
-        if (picker?.previousWorkspace !== undefined && picker.workspaceId === workspace?.workspaceId) {
-          if (picker.previousWorkspace !== picker.workspaceId) setMaterial('')
+        if (picker?.awaitingWorkspace && picker.workspaceId === workspace?.workspaceId) {
           setPicker({ workspaceId: picker.workspaceId })
-        } else if (picker && picker.previousWorkspace === undefined && picker.workspaceId !== workspace?.workspaceId) {
+        } else if (picker && !picker.awaitingWorkspace && picker.workspaceId !== workspace?.workspaceId) {
           setPicker(null)
         }
-      }, [picker, workspace?.workspaceId, setMaterial])
+      }, [picker, workspace?.workspaceId])
 
       function closePicker(target) {
         setPicker(null)
@@ -3139,7 +3145,7 @@ window.__ModuleLoader__.load({
       }
 
       function chooseWorkspace(id, browsing) {
-        if (browsing && id !== workspaceId) {
+        if (personalMaterials && id !== workspaceId) {
           pathInput.current?.setCustomValidity('')
           setMaterial('')
         }
@@ -3148,7 +3154,7 @@ window.__ModuleLoader__.load({
       }
 
       function addWorkspace(id, browsing) {
-        setPicker(browsing ? { workspaceId: id, previousWorkspace: workspaceId } : null)
+        setPicker(browsing ? { workspaceId: id, awaitingWorkspace: true } : null)
         onWorkspaceAdded(id)
       }
 
@@ -3160,7 +3166,7 @@ window.__ModuleLoader__.load({
       const folderButton = browsing => workspaceSetup && h(AddMaterialsFolder, { setup: workspaceSetup, disabled: busy,
         onAdded: id => addWorkspace(id, browsing) })
       const label = workspace && workspaceFileLabel(workspace, workspaces)
-      const switchInPicker = materialAction === 'lesson-task-materials' && workspaces.length > 1
+      const switchInPicker = personalMaterials && workspaces.length > 1
       const workspaceControls = (workspaceSetup || switchInPicker) && h('div', { className: 'moba-material-input moba-material-workspace' },
         switchInPicker ? workspaceSelect(true) : h('p', { className: 'moba-lighthouse-note' }, label),
         folderButton(true))
@@ -4529,10 +4535,14 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const handoffStyle = pairedHandoffStyle(plan.source)
+      const label = handoffStyle ? handoffStyleLabels[handoffStyle]
+        : plan.armory ? '当前出装新任务' : plan.source ? '练习出装新任务' : '出装方案新任务'
       return h('div', { className: 'moba-lighthouse-anchor moba-plan-task-draft' },
-        h('div', null, h('strong', null, t(plan.armory ? '当前出装新任务' : plan.source ? '练习出装新任务' : '出装方案新任务')),
-          h('span', null, plan.armory ? t(plan.planName) : plan.planName), plan.material && h('span', null, plan.material)),
-        h('div', null,
+        h('div', null, h('strong', null, t(label)),
+          !handoffStyle && h('span', null, plan.armory ? t(plan.planName) : plan.planName),
+          plan.material && h('span', null, plan.material)),
+        h('div', { className: 'moba-lighthouse-anchor-actions' },
           presetChanged ? h('button', { type: 'button', className: 'moba-settlement-button', disabled: Boolean(restoring),
             onClick: restore }, t('恢复核对过的出装'))
             : h('button', { ref: fillButton, type: 'button', className: 'moba-settlement-button', disabled: restoring === 'requesting',
@@ -6157,6 +6167,7 @@ window.__ModuleLoader__.load({
       const addedVisible = addedWorkspace && workspaces.some(item => item.workspaceId === addedWorkspace.id)
       const addedAllowed = refreshed && !current.error && addedWorkspace && allowed.some(item => item.workspaceId === addedWorkspace.id)
       const waitingForWorkspace = addedWorkspace && !addedAllowed && (!refreshed || !addedVisible)
+      const checkingWorkspace = Boolean(addedAllowed || waitingForWorkspace && !(refreshed && current?.error))
       const unavailableWorkspace = addedWorkspace && !addedAllowed && refreshed && addedVisible && !current.error
       const setup = workspaceSetup?.add && (workspaceSetup.pick || workspaceSetup.list) ? workspaceSetup : null
 
@@ -6175,11 +6186,13 @@ window.__ModuleLoader__.load({
 
       const stockTaskLabel = kind === 'hero-trial' && stockTrialTaskLabels[arm]
       const alternateHandoff = rebaseline && handoffStyle
+      const route = pairedHandoffStyle(options?.source) ?? handoffStyle
       return h(InstallDialog, { title: t(alternateHandoff ? '尝试另一种交接打法'
         : rebaseline ? rebaselineTaskLabel : armoryDraft ? armoryTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
         className: stockTaskLabel ? 'moba-lighthouse-comparison moba-stock-trial-task' : 'moba-lighthouse-comparison',
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
-        handoffStyle && h(InstallFacts, { facts: [[t('交接打法'), t(handoffStyle === 'review' ? '复核后交付' : '直接交付')]] }),
+        route && h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t(handoffStyleLabels[route])), ' · ',
+          t(route === 'review' ? '交付前由你确认，或者退回修改。' : '准备好就直接交付文件。')),
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t(alternateHandoff
           ? '已带入刚才的文件和任务说明。核对后打开新草稿，再手动发送。'
           : '用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
@@ -6188,8 +6201,8 @@ window.__ModuleLoader__.load({
           workspaceSetup: setup, addedWorkspace: addedAllowed ? addedWorkspace : undefined,
           onWorkspaceAdded: id => { setAddedWorkspace({ id }); retry(value => value + 1) },
           onWorkspaceApplied: applied => setAddedWorkspace(current => current === applied ? null : current),
-          workspaceStatus: !current?.error && (waitingForWorkspace ? '正在核对新增的工作区…'
-            : unavailableWorkspace ? '无法用新添加的文件夹开启此任务。' : ''),
+          checkingWorkspace, workspaceStatus: checkingWorkspace ? '正在核对新增的工作区…'
+            : unavailableWorkspace ? '无法用新添加的文件夹开启此任务。' : '',
           workspaceError: refreshed ? current?.error : undefined, retryWorkspaces: () => retry(value => value + 1),
           onBack, onOpened: ({ sessionId, task }) => onVisit(sessionId, task), onOpeningChange: setOpening })
           : h(Fragment, null, refreshed && current?.error
@@ -6273,7 +6286,7 @@ window.__ModuleLoader__.load({
     function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, fixedPlanRevision, lessonSource, armoryDraft, workspaces, initialWorkspaceId,
       handoffAlternateOf,
       initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange,
-      workspaceSetup, addedWorkspace, onWorkspaceAdded, onWorkspaceApplied, workspaceStatus, workspaceError, retryWorkspaces }) {
+      workspaceSetup, addedWorkspace, onWorkspaceAdded, onWorkspaceApplied, checkingWorkspace, workspaceStatus, workspaceError, retryWorkspaces }) {
       const language = useLanguage()
       const [choices, setChoices] = useState(() => plan ? [plan, ...testedAlternatives] : empty)
       const [selectedPlanId, setSelectedPlanId] = useState(plan?.id)
@@ -6298,8 +6311,10 @@ window.__ModuleLoader__.load({
       const materialField = useRef(null)
       const briefField = useRef(null)
       const reviewHeading = useRef(null)
+      const materialBusy = Boolean(working || checkingWorkspace)
       const workspace = workspaces.find(item => item.workspaceId === chosenWorkspaceId)
       const preview = reviewed?.value
+      const reviewedWorkspace = reviewed && workspaces.find(item => item.workspaceId === reviewed.input.workspaceId)
       const origin = preview?.source ?? lessonSource
       const originArm = origin && comparisonArmConfig(origin.kind, origin.arm, origin.publicEvidenceReplay === true)
       const heroTrialOrigin = origin?.heroDeliveryTrial === true
@@ -6313,13 +6328,18 @@ window.__ModuleLoader__.load({
 
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => {
-        if (addedWorkspace && appliedWorkspace.current !== addedWorkspace) {
-          appliedWorkspace.current = addedWorkspace
-          setWorkspace(addedWorkspace.id)
-          setError('')
-          onWorkspaceApplied(addedWorkspace)
+        if (working || !addedWorkspace || appliedWorkspace.current === addedWorkspace) return
+        appliedWorkspace.current = addedWorkspace
+        if (chosenWorkspaceId !== addedWorkspace.id) {
+          materialField.current?.setCustomValidity('')
+          setMaterial('')
+          setReviewed(null)
+          setNeedsRefresh(false)
         }
-      }, [addedWorkspace, onWorkspaceApplied])
+        setWorkspace(addedWorkspace.id)
+        setError('')
+        onWorkspaceApplied(addedWorkspace)
+      }, [addedWorkspace, chosenWorkspaceId, onWorkspaceApplied, working])
       useEffect(() => {
         if (!planCatalog) return
         const abort = new AbortController()
@@ -6345,7 +6365,7 @@ window.__ModuleLoader__.load({
       }
 
       async function review(refresh = false) {
-        if (!workspace || !brief.trim() || !canReview || pending.current) return
+        if (!workspace || !brief.trim() || !canReview || checkingWorkspace || pending.current) return
         const abort = pending.current = new AbortController()
         setWorking('review')
         setError('')
@@ -6405,7 +6425,7 @@ window.__ModuleLoader__.load({
       }
 
       async function open() {
-        if (pending.current || !preview?.token || needsRefresh) return
+        if (pending.current || !preview?.token || needsRefresh || checkingWorkspace) return
         const abort = pending.current = new AbortController()
         const { input, language: reviewLanguage } = reviewed
         const key = JSON.stringify([input, reviewLanguage])
@@ -6462,7 +6482,7 @@ window.__ModuleLoader__.load({
             h('p', { className: 'moba-plan-note', role: 'status' }, t(workspaceSetup
               ? '选择含有任务材料的文件夹，即可继续。' : '请先在 DeepSeek Harness 中添加自己的工作区。')),
           h(WorkspaceFileFields, { workspaces, workspaceId: workspace?.workspaceId ?? '', setWorkspaceId: setWorkspace,
-            material, setMaterial, workspaceField, materialField, request, busy: Boolean(working),
+            material, setMaterial, workspaceField, materialField, request, busy: materialBusy,
             materialAction: personal ? 'lesson-task-materials' : undefined, workspaceSetup, onWorkspaceAdded }),
           workspaceStatus && h('p', { className: 'moba-lighthouse-note', role: 'status' }, t(workspaceStatus)),
           workspaceError && h('p', { className: 'moba-alert', role: 'alert' }, t(workspaceError), ' ',
@@ -6472,7 +6492,7 @@ window.__ModuleLoader__.load({
               onChange: event => { event.target.setCustomValidity(''); setBrief(event.target.value) } })), messages),
         h('footer', { className: 'moba-gallery-footer' },
           h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t(backLabel)),
-          h('button', { className: 'moba-start', type: 'submit', disabled: Boolean(working) || !workspace || !canReview },
+          h('button', { className: 'moba-start', type: 'submit', disabled: materialBusy || !workspace || !canReview },
             t('核对材料和出装'), h(Glyph, { kind: 'arrow', size: 16 }))))
         : h('section', { className: 'moba-plan-form moba-plan-task', onKeyDown: event => closeDialogOnEscape(event, editTask) },
           h('div', { className: 'moba-plan-fields' },
@@ -6480,7 +6500,7 @@ window.__ModuleLoader__.load({
             h(InstallFacts, { facts: [
               [t(armoryDraft ? '选定出装' : origin ? '练习出装' : '出装方案'), armoryDraft?.heroName ?? sourceLabel ?? preview.planName ?? version?.name],
               [t('装备来源'), gearSource],
-              [t('工作区'), workspace ? workspaceFileLabel(workspace, workspaces) : preview.workspaceTitle],
+              [t('工作区'), reviewedWorkspace ? workspaceFileLabel(reviewedWorkspace, workspaces) : preview.workspaceTitle],
               [t('材料文件相对路径'), preview.material],
             ] }),
             origin && h(RematchChangeFacts, { change: origin.change }),
@@ -6494,9 +6514,9 @@ window.__ModuleLoader__.load({
             preview.reason && h('p', { className: 'moba-alert', role: 'status' }, preview.reason), messages),
           h('footer', { className: 'moba-gallery-footer' },
             h('button', { className: 'moba-roster-open', type: 'button', disabled: Boolean(working), onClick: editTask }, t('返回编辑任务')),
-            (needsRefresh || !preview.token) && h('button', { className: 'moba-roster-open', type: 'button', disabled: Boolean(working) || !workspace,
-              onClick: () => review(true) }, t('重新核对材料和出装')),
-            h('button', { className: 'moba-start', type: 'button', disabled: Boolean(working) || needsRefresh || !preview.token,
+            (needsRefresh || !preview.token) && h('button', { className: 'moba-roster-open', type: 'button',
+              disabled: materialBusy || !workspace, onClick: () => review(true) }, t('重新核对材料和出装')),
+            h('button', { className: 'moba-start', type: 'button', disabled: materialBusy || needsRefresh || !preview.token,
               onClick: open }, t('确认并打开会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
@@ -12234,8 +12254,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending], [data-review-invitation]) { grid-template-columns: minmax(0, 1fr); }
       .moba-lighthouse-anchor:is([data-evidence-result], [data-task-pending], [data-review-invitation]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       @media (max-width: 600px) {
-        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return]) { grid-template-columns: minmax(0, 1fr); }
-        .moba-lighthouse-anchor:is([data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
+        .moba-lighthouse-anchor:is(.moba-plan-task-draft, [data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return]) { grid-template-columns: minmax(0, 1fr); }
+        .moba-lighthouse-anchor:is(.moba-plan-task-draft, [data-delivery-review-result], [data-hero-delivery-replay], [data-hero-report-copy], [data-hero-task-return]) .moba-lighthouse-anchor-actions { justify-content: flex-start; }
       }
       .moba-lighthouse-peer-steps { display: flex; flex-wrap: wrap; gap: 7px 12px; padding-block: 4px 6px; border-block-end: 1px solid #38555a; }
       .moba-lighthouse-peer-steps > div { display: grid; min-width: 0; gap: 2px; align-content: start; }
