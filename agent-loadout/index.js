@@ -2012,7 +2012,19 @@ export async function apply(ctx) {
     return { workspaceIds: await personalWorkspaceIds(signal) }
   }
 
-  async function verifiedWebPilotLoadout({ sessionId, arm, received }, signal) {
+  async function verifiedWebPilotDecisionBinding({ sessionId, decisionOriginSessionId, arm, received }, signal) {
+    if (arm !== undefined || received !== undefined) throw new Error(webPilotPersonalUnavailable)
+    const reference = await webPilotReplayParent(decisionOriginSessionId, signal)
+    const replay = await readWebPilotReplay(sessionId, reference, signal)
+    if (!replay?.decisionComparison) throw new Error(webPilotPersonalUnavailable)
+    return replay.result.binding
+  }
+
+  async function verifiedWebPilotLoadout({ sessionId, arm, received, decisionOriginSessionId }, signal) {
+    if (decisionOriginSessionId !== undefined) {
+      const binding = await verifiedWebPilotDecisionBinding({ sessionId, arm, received, decisionOriginSessionId }, signal)
+      return verifiedWebPilotBinding(binding, signal)
+    }
     if (received === true) {
       if (arm !== undefined) throw new Error(receivedWebPilotPersonalUnavailable)
       const result = await inspectWebSourcePractice({ sessionId }, signal)
@@ -2194,9 +2206,17 @@ export async function apply(ctx) {
       })
   }
 
-  function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm, received }, signal, kind = 'web-source-personal') {
+  function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm, received, decisionOriginSessionId }, signal,
+    kind = 'web-source-personal') {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error('开局请求无效，请重试。')
     const pilot = kind === 'web-pilot-personal'
+    if (decisionOriginSessionId !== undefined) {
+      if (!pilot || arm !== undefined || received !== undefined) throw new Error(webPilotPersonalUnavailable)
+      const readBinding = () => verifiedWebPilotDecisionBinding({ sessionId, decisionOriginSessionId }, signal)
+      return openPersonalWebDraft({ workspaceId, launchId }, signal,
+        ['web-pilot-decision-personal', decisionOriginSessionId, sessionId],
+        async () => verifiedWebPilotBinding(await readBinding(), signal), readBinding)
+    }
     const fromReceived = pilot && received === true
     if (fromReceived && arm !== undefined) throw new Error(receivedWebPilotPersonalUnavailable)
     const identity = fromReceived ? ['web-pilot-received-personal', sessionId] : [kind, sessionId, ...(pilot ? [arm] : [])]
@@ -2240,7 +2260,15 @@ export async function apply(ctx) {
       }
       signal?.throwIfAborted()
       if (closed) throw new Error('配装服务正在关闭，请重试。')
-      checkCurrent?.()
+      const pendingBinding = checkCurrent?.()
+      if (pendingBinding) {
+        if (!isDeepStrictEqual(await pendingBinding, binding)) throw new Error(webSourceChanged)
+        if ((await checkedPersonalWorkspace(registry.get(workspaceId), includesPath))?.path !== workspace.path) {
+          throw new Error('所选工作区不可用，请重新选择。')
+        }
+        signal?.throwIfAborted()
+        if (closed) throw new Error('配装服务正在关闭，请重试。')
+      }
       if (!existing) {
         const created = await controller.create({ sessionId: next, workspaceId, agentPreset: presetId })
         if (created.sessionId !== next) throw new Error('新对局的会话标识已变化，请重新开局。')

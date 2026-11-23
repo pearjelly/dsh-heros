@@ -1508,7 +1508,7 @@ window.__ModuleLoader__.load({
         setup && h(AddMaterialsFolder, { setup, disabled: busy, label: '添加工作区', onAdded }))
     }
 
-    function WebSourcePersonalDraft({ sessionId, arm, received, request, workspaces, dialogRef, onCancel, onOpen }) {
+    function WebSourcePersonalDraft({ sessionId, arm, received, decisionOriginSessionId, request, workspaces, dialogRef, onCancel, onOpen }) {
       const language = useLanguage()
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [checked, setChecked] = useState(null)
@@ -1518,25 +1518,31 @@ window.__ModuleLoader__.load({
       const [openError, setOpenError] = useState('')
       const opening = useRef(null)
       const launchIds = useRef(new Map())
-      const route = arm || received ? 'web-pilot-personal' : 'web-source-personal'
+      const verifiedScope = Boolean(received || decisionOriginSessionId)
+      const route = arm || verifiedScope ? 'web-pilot-personal' : 'web-source-personal'
+      const scope = useMemo(() => decisionOriginSessionId ? { decisionOriginSessionId }
+        : received ? { received: true } : arm ? { arm } : {}, [decisionOriginSessionId, received, arm])
       const membership = JSON.stringify(items.map(item => item.workspaceId).sort())
       const current = checked?.attempt === attempt && checked.language === language && checked.membership === membership ? checked : null
-      const loadout = received ? webPilotArms[current?.options?.arm]?.name : arm ? webPilotArms[arm].name : '极简模式 + 网页检索'
+      const loadout = verifiedScope ? webPilotArms[current?.options?.arm]?.name : arm ? webPilotArms[arm].name : '极简模式 + 网页检索'
       const available = current?.options ? items.filter(item => current.options.workspaceIds.includes(item.workspaceId)) : empty
       const workspace = available.find(item => item.workspaceId === workspaceId)
 
       useEffect(() => {
         const abort = new AbortController()
         const action = route + '-options'
-        request(action, { action, sessionId, ...(received ? { received: true } : arm && { arm }) }, abort.signal, language)
+        request(action, { action, sessionId, ...scope }, abort.signal, language)
           .then(options => {
             if (abort.signal.aborted) return
-            if (received && !Object.hasOwn(webPilotArms, options?.arm)) throw new Error(t('试玩出装已变化，请重新核对。'))
+            if ((received && !Object.hasOwn(webPilotArms, options?.arm)) ||
+              (decisionOriginSessionId && (options?.arm !== 'evidence' || !Array.isArray(options.workspaceIds)))) {
+              throw new Error(t('试玩出装已变化，请重新核对。'))
+            }
             setChecked({ options, attempt, language, membership })
           })
           .catch(reason => { if (!abort.signal.aborted) setChecked({ error: reason.message, attempt, language, membership }) })
         return () => abort.abort()
-      }, [request, sessionId, arm, received, route, attempt, language, membership])
+      }, [request, sessionId, scope, received, decisionOriginSessionId, route, attempt, language, membership])
       useEffect(() => () => opening.current?.abort(), [])
 
       async function open(event) {
@@ -1551,9 +1557,12 @@ window.__ModuleLoader__.load({
         }
         try {
           const action = route + '-open'
-          const result = await request(action, { action, sessionId, ...(received ? { received: true } : arm && { arm }),
+          const result = await request(action, { action, sessionId, ...scope,
             workspaceId, launchId: launchIds.current.get(workspaceId) },
             abort.signal, language)
+          if (decisionOriginSessionId && (!result?.sessionId || result.workspaceId !== workspaceId)) {
+            throw new Error(t('试玩出装已变化，请重新核对。'))
+          }
           if (!abort.signal.aborted) onOpen(result.sessionId)
         } catch (reason) {
           if (!abort.signal.aborted) setOpenError(reason.message)
@@ -1566,7 +1575,7 @@ window.__ModuleLoader__.load({
       return h(InstallDialog, { title: t(lessonTaskLabel),
         className: 'moba-starter-dialog moba-web-source-dialog moba-web-personal-dialog',
         initialFocus: '.moba-web-source-back', busy, dialogRef, onCancel },
-        loadout && h(InstallFacts, { facts: [[t('出装'), t(loadout)], [t('来源'), received && t('DSH 内置网页检索')]] }),
+        loadout && h(InstallFacts, { facts: [[t('出装'), t(loadout)], [t('来源'), verifiedScope && t('DSH 内置网页检索')]] }),
         h('p', { className: 'moba-starter-note' }, t('在新草稿中粘贴要核对的链接，写下问题，再手动发送。')),
         !current && h('p', { role: 'status' }, t('正在核对可用工作区…')),
         (openError || current?.error) && h('p', { className: 'moba-alert', role: 'alert' }, openError || current.error),
@@ -1868,21 +1877,38 @@ window.__ModuleLoader__.load({
 
     function WebPilotComparison({ sessionId, comparison, request, workspaces, savedPlan, decisionsOnly, onCancel, onVisit, dialogRef }) {
       const [action, setAction] = useState(null)
+      const ownDialog = useRef(null)
+      const comparisonDialog = dialogRef ?? ownDialog
+      const comparisonBody = useRef(null)
+      const personalDialog = useRef(null)
       const canUseLoadout = !savedPlan && !decisionsOnly
+      const canUseDecisionLoadout = decisionsOnly && !savedPlan
       function closeAction() {
         setAction(null)
         requestAnimationFrame(() => action.trigger.focus())
       }
+      function openDecisionTask(event) {
+        const scrollTop = comparisonBody.current.scrollTop
+        comparisonDialog.current?.close()
+        setAction({ type: 'decision-personal', trigger: event.currentTarget, scrollTop })
+      }
+      function closeDecisionTask() {
+        personalDialog.current?.close()
+        comparisonDialog.current?.showModal()
+        action.trigger.focus({ preventScroll: true })
+        comparisonBody.current.scrollTop = action.scrollTop
+        setAction(null)
+      }
       function back() {
-        dialogRef?.current?.close()
+        comparisonDialog.current?.close()
         onCancel()
       }
       return h(Fragment, null,
         h(InstallDialog, { title: t(decisionsOnly ? webPilotDecisionCompareTitle : savedPlan ? '此方案保存自这局' : '对照两局'),
           className: 'moba-starter-dialog moba-web-pilot-comparison' + (decisionsOnly ? ' moba-web-pilot-decision-comparison' : ''),
-          dialogRef, onCancel: back, initialFocus: '.moba-web-pilot-comparison-back',
+          dialogRef: comparisonDialog, onCancel: back, initialFocus: '.moba-web-pilot-comparison-back',
           onKeyDown: event => closeDialogOnEscape(event, back) },
-          h(decisionsOnly ? 'div' : Fragment, decisionsOnly ? { className: 'moba-web-pilot-practice-fields' } : null,
+          h(decisionsOnly ? 'div' : Fragment, decisionsOnly ? { className: 'moba-web-pilot-practice-fields', ref: comparisonBody } : null,
             savedPlan && h('p', { className: 'moba-plan-note' }, h('strong', null, savedPlan.name)),
             decisionsOnly && h('p', null, t(webPilotDecisionReplayDescription)),
             h('a', { href: comparison.url, target: '_blank', rel: 'noopener noreferrer' }, t('查看发布方清单')),
@@ -1907,7 +1933,15 @@ window.__ModuleLoader__.load({
             }))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-comparison-back', onClick: back },
-              t(savedPlan ? '返回方案库' : '返回')))),
+              t(savedPlan ? '返回方案库' : '返回')),
+            canUseDecisionLoadout && h('button', { type: 'button', className: 'moba-start',
+              'aria-haspopup': 'dialog', onClick: openDecisionTask }, t('用这套出装做我的任务')))),
+        action?.type === 'decision-personal' && h(WebSourcePersonalDraft, { request, workspaces,
+          sessionId: comparison.runs[1].sessionId, decisionOriginSessionId: comparison.runs[0].sessionId,
+          dialogRef: personalDialog, onCancel: closeDecisionTask, onOpen: targetId => {
+            personalDialog.current?.close()
+            onVisit(targetId)
+          } }),
         action?.type === 'personal' && h(WebSourcePersonalDraft, { sessionId, arm: action.run.arm, request, workspaces,
           onCancel: closeAction, onOpen: onVisit }),
         action?.type === 'save' && h(WebPilotPlanSave, { sessionId, run: action.run, request, onCancel: closeAction }))
@@ -14289,6 +14323,8 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-comparison .moba-web-pilot-personal-entry { color: #ffe3ab; background: #392e20; border-color: #ad8c52; }
       .moba-web-pilot-decision-comparison[open] { box-sizing: border-box; display: flex; flex-direction: column; overflow: clip; }
       .moba-web-pilot-decision-comparison > :is(h2, .moba-starter-actions) { flex: none; }
+      .moba-web-pilot-decision-comparison > .moba-starter-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+      .moba-web-pilot-decision-comparison > .moba-starter-actions button { justify-content: center; white-space: normal; }
       .moba-web-pilot-decision-comparison .moba-web-pilot-practice-fields > p { margin: 0; }
       .moba-web-pilot-saved-arm { margin-inline-start: 7px; color: #ffe3ab; font-size: 11px; }
       .moba-web-pilot-save-summary { display: grid; gap: 5px; min-inline-size: 0; padding: 8px;
