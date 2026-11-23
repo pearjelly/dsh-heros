@@ -6189,7 +6189,8 @@ window.__ModuleLoader__.load({
       const route = pairedHandoffStyle(options?.source) ?? handoffStyle
       return h(InstallDialog, { title: t(alternateHandoff ? '尝试另一种交接打法'
         : rebaseline ? rebaselineTaskLabel : armoryDraft ? armoryTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
-        className: stockTaskLabel ? 'moba-lighthouse-comparison moba-stock-trial-task' : 'moba-lighthouse-comparison',
+        className: 'moba-lighthouse-comparison' + (alternateHandoff ? ' moba-handoff-alternate-task'
+          : stockTaskLabel ? ' moba-stock-trial-task' : ''),
         onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
         route && h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t(handoffStyleLabels[route])), ' · ',
           t(route === 'review' ? '交付前由你确认，或者退回修改。' : '准备好就直接交付文件。')),
@@ -9802,7 +9803,7 @@ window.__ModuleLoader__.load({
               !result.handoffPair && h(LessonTaskFiles, { sessionId, files: result.deliverables ?? empty,
                 complete: result.status === 'complete', materialDelivered: result.materialDelivered }),
               h(LessonTaskAwards, { awards: result.awards }))),
-        h('div', { className: 'moba-settlement-footer' },
+        h('div', { className: review ? 'moba-settlement-footer moba-lesson-review-actions' : 'moba-settlement-footer' },
           review ? h(Fragment, null,
             h('button', { type: 'button', className: 'moba-text', onClick: returnToResult }, t('返回任务结果')),
             h('button', { type: 'button', className: 'moba-match-move', disabled: !result?.draft,
@@ -11539,6 +11540,15 @@ window.__ModuleLoader__.load({
       .moba-lesson-result-options button { min-width: 0; min-height: 44px; overflow-wrap: anywhere; white-space: normal; }
       .moba-lesson-result .moba-lighthouse-results { margin: 0; }
       .moba-lesson-result .moba-settlement-footer button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
+      @media (max-width: 600px) {
+        .moba-settlement .moba-mastery-meter > div { flex-wrap: wrap; }
+        .moba-settlement .moba-mastery-meter span { white-space: normal; }
+        .moba-settlement:has(.moba-lesson-review-actions) { scroll-padding-block-end: 64px; }
+        .moba-lesson-review-actions { position: sticky; inset-block-end: 0; z-index: 1; display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding-block-start: 6px;
+          border-block-start: 1px solid #705a3c; background: #201d26; }
+        .moba-lesson-review-actions button { min-block-size: 44px; }
+      }
       .moba-lesson-result [data-hero-personal-pair] { --ink: #f3e9d2; --muted: #cdc4b7; --line: #564532; margin: 0; }
       .moba-lesson-result [data-personal-handoff-pair] { --ink: #f3e9d2; --muted: #cdc4b7; --line: #564532; }
       .moba-lesson-result [data-personal-handoff-pair] > .moba-handoff-outcome { margin: 0; }
@@ -11907,11 +11917,23 @@ window.__ModuleLoader__.load({
       .moba-plan-task dt { color: var(--muted); }
       .moba-plan-task dd { margin: 0; overflow-wrap: anywhere; }
       .moba-plan-task .moba-lighthouse-note { margin: 0; }
-      .moba-stock-trial-task .moba-plan-task,
-      .moba-stock-trial-task .moba-plan-fields { grid-template-columns: minmax(0, 1fr); }
-      .moba-stock-trial-task .moba-plan-fields :is(input, select, textarea) { box-sizing: border-box; }
-      .moba-stock-trial-task .moba-gallery-footer { flex-wrap: wrap; }
-      .moba-stock-trial-task .moba-gallery-footer button { white-space: normal; }
+      :is(.moba-stock-trial-task, .moba-handoff-alternate-task) :is(.moba-plan-task, .moba-plan-fields) { grid-template-columns: minmax(0, 1fr); }
+      :is(.moba-stock-trial-task, .moba-handoff-alternate-task) .moba-plan-fields :is(input, select, textarea) { box-sizing: border-box; }
+      :is(.moba-stock-trial-task, .moba-handoff-alternate-task) .moba-gallery-footer { flex-wrap: wrap; }
+      :is(.moba-stock-trial-task, .moba-handoff-alternate-task) .moba-gallery-footer button { white-space: normal; }
+      @media (max-width: 600px) {
+        .moba-handoff-alternate-task[open] { box-sizing: border-box; display: flex; flex-direction: column; padding: 12px; }
+        .moba-handoff-alternate-task .moba-plan-task { flex: 1 1 auto; }
+        .moba-handoff-alternate-task .moba-plan-fields { padding: 8px 4px; }
+        .moba-handoff-alternate-task .moba-material-input button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
+        .moba-handoff-alternate-task .moba-gallery-footer { display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px 4px 0; }
+        .moba-handoff-alternate-task .moba-gallery-footer button { min-block-size: 44px; min-inline-size: 0; overflow-wrap: anywhere; }
+      }
+      @media (max-width: 380px) {
+        .moba-handoff-alternate-task .moba-material-input { grid-template-columns: minmax(0, 1fr); }
+        .moba-handoff-alternate-task .moba-material-input button { justify-self: start; }
+      }
       .moba-plan-fields .moba-share-code { font: 12px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
       .moba-share-fields > h3, .moba-share-review > h3, .moba-handoff-invitation-heading > h3, .moba-share-section h3 { margin: 0; overflow-wrap: anywhere; }
       .moba-share-fields > h3, .moba-share-review > h3, .moba-handoff-invitation-heading > h3 { color: var(--gold); font-size: 17px; }
