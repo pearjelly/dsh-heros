@@ -891,7 +891,7 @@
   "请先在当前对局选择可用模型。": "Please select the available model first in the current match.",
   "请先在当前会话选择可用模型。": "Select the available model first for the current session.",
   "向下滚到输入栏底部，选一个可用模型后再发送。": "Scroll to the bottom of the composer and choose a model before sending.",
-  "没有可用模型。需要时先打开侧边栏，再选「账号菜单 → 设置 → 模型」。配置后关闭设置，回到本草稿。": "No model available. Open the sidebar if needed, then Account menu → Settings → Models. Close Settings to return to this draft.",
+  "没有可用模型。需要时先打开侧边栏，再点「账号菜单 → 设置 → 模型」。配置后关闭设置。若侧边栏挡住草稿，请先收起。": "No model available. Open sidebar if needed → Account menu → Settings → Models. Close Settings. Collapse the sidebar if it covers this draft.",
   "发送前请在「设置 → 模型」配置模型。": "Set up a model in Settings → Models before sending.",
   "任务已填入输入栏。": "The task is in the composer.",
   "请先在英雄自带中卸下 ": "Please unload the hero first ",

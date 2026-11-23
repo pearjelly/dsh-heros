@@ -7372,7 +7372,7 @@ window.__ModuleLoader__.load({
           }
           const canChoose = selection.groups.some(group => group.models.length)
           setInstruction(canChoose ? '向下滚到输入栏底部，选一个可用模型后再发送。'
-            : selection.failures?.length ? '' : '没有可用模型。需要时先打开侧边栏，再选「账号菜单 → 设置 → 模型」。配置后关闭设置，回到本草稿。')
+            : selection.failures?.length ? '' : '没有可用模型。需要时先打开侧边栏，再点「账号菜单 → 设置 → 模型」。配置后关闭设置。若侧边栏挡住草稿，请先收起。')
         }
         const unsubscribe = store.subscribe(update)
         update()
