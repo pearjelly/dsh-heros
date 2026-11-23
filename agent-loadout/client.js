@@ -4492,7 +4492,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [attempt, retry] = useState(0)
       const dialog = useRef(null)
-      const field = useRef(null)
+      const feedback = useRef(null)
       const reportField = useRef(null)
       const pending = useRef(null)
       const action = 'lighthouse-combined-handoff-report'
@@ -4523,6 +4523,10 @@ window.__ModuleLoader__.load({
         if (result?.friend) dialog.current?.querySelector('.moba-lighthouse-replay-pair h3')?.focus()
       }, [result?.friend])
 
+      useLayoutEffect(() => {
+        if (error) feedback.current?.focus()
+      }, [error])
+
       function close() {
         pending.current?.abort()
         dialog.current?.close()
@@ -4540,8 +4544,9 @@ window.__ModuleLoader__.load({
         if (pending.current || !result?.local) return
         const { code, problem } = pastedCombinedLighthouseReport(input)
         if (!code) {
-          setError(t(problem))
-          field.current?.focus()
+          const message = t(problem)
+          if (error === message) feedback.current?.focus()
+          else setError(message)
           return
         }
         const abort = pending.current = new AbortController()
@@ -4585,9 +4590,9 @@ window.__ModuleLoader__.load({
                 spellCheck: false, onFocus: event => event.currentTarget.select() })),
             notice && h('p', { className: 'moba-empty', role: 'status' }, notice),
             h('label', null, t('好友试玩战报或战报码'),
-              h('textarea', { className: 'moba-share-code', ref: field, rows: 2, value: input, readOnly: busy,
+              h('textarea', { className: 'moba-share-code', rows: 2, value: input, readOnly: busy,
                 spellCheck: false, autoComplete: 'off', autoCapitalize: 'off', maxLength: lighthouseInvitationLimit + 1, onChange: edit })),
-            error && h('p', { className: 'moba-alert', role: 'alert' }, error),
+            error && h('p', { className: 'moba-alert', role: 'alert', ref: feedback, tabIndex: -1 }, error),
             (busy || !result && !error) && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对战报…'))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-report-back', onClick: close }, t('返回')),
