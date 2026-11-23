@@ -12761,7 +12761,13 @@ window.__ModuleLoader__.load({
               h('td', { key: run.sessionId }, t(lighthouseReplayModeLabels[run.mode])))),
             Object.entries(workflowDecisionGear).filter(([id]) => bySide.some(choices => choices.has(id))).map(([id, name]) =>
               h('tr', { key: id }, h('th', { scope: 'row' }, t(name)),
-                bySide.map((choices, i) => h('td', { key: sides[i].sessionId }, choices.get(id) ?? t('未记录选择'))))),
+                bySide.map((choices, i) => {
+                  const side = sides[i]
+                  let missing = '未记录选择'
+                  if (comparedGear) missing = id === 'evidence' && side.mode === 'review'
+                    ? '未装备' : '已装备，未记录选择'
+                  return h('td', { key: side.sessionId }, choices.get(id) ?? t(missing))
+                }))),
             h('tr', null, h('th', { scope: 'row' }, t('交付文件')), sides.map(run =>
               h('td', { key: run.sessionId }, run.deliverables.length
                 ? h(LessonTaskFiles, { files: run.deliverables, sessionId: run.sessionId, compact: true }) : '0'))))),
