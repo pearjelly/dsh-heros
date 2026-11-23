@@ -238,6 +238,24 @@ function settleTool(call, outcome, error, time) {
   if (call.name === 'ask_user_question' && call.state === 'completed') call.choices = answerChoices(outcome)
 }
 
+function reportWebRead({ meta, error }, toolState) {
+  if (toolState === 'failed') return { status: 'failed' }
+  if (toolState !== 'completed' || error || !meta || typeof meta !== 'object' || Array.isArray(meta)) return { status: 'unknown' }
+  const { url, statusCode, truncated } = meta
+  if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 599 || typeof truncated !== 'boolean' ||
+    typeof url !== 'string' || url.length > 4096 || /[\p{Cc}\p{Z}]/u.test(url) || !/^https?:\/\//i.test(url)) {
+    return { status: 'unknown' }
+  }
+  try {
+    const parsed = new URL(url)
+    if (parsed.username || parsed.password || !['http:', 'https:'].includes(parsed.protocol)) return { status: 'unknown' }
+    const status = statusCode < 200 || statusCode >= 300 ? 'http-error' : truncated ? 'truncated' : 'complete'
+    return { status, statusCode, url: parsed.href }
+  } catch {
+    return { status: 'unknown' }
+  }
+}
+
 function applyToolSource(call, { id, sourceId, sourceName, blocked, registeredSourceName }) {
   if (typeof id === 'string' && /^tool:[a-f0-9]{12}$/.test(id)) call.id = id
   if (blocked === true) {
@@ -256,6 +274,7 @@ async function reportTurn(source, start, end, receipts) {
   const events = source.events
   const beginning = events[start]
   const calls = new Map()
+  const webCalls = new Set()
   const nestedCalls = new Map()
   const callsBySeq = new Map()
   const entries = []
@@ -270,7 +289,7 @@ async function reportTurn(source, start, end, receipts) {
     return call
   }
   for (let index = start + 1; index < end; index++) {
-    const { type, data, seq, time, sourceEventSeqs, ignorable } = events[index]
+    const { type, data, seq, time, sourceEventSeqs, surfaceOp, ignorable } = events[index]
     if (type === 'turn/end') {
       status = terminalTurns.has(data.reason.kind) ? data.reason.kind : 'ended'
       endSeq = seq
@@ -283,10 +302,21 @@ async function reportTurn(source, start, end, receipts) {
         entries.push({ type: 'action', id, kind, title, label, seq, edited })
       }))
     } else if (type === 'tool/call') {
-      calls.set(data.step + '\0' + data.callId, addToolCall(data.name, seq, time))
+      const key = data.step + '\0' + data.callId
+      if (calls.has(key)) webCalls.delete(key)
+      else if (data.name === 'web_fetch' && data.turn === beginning.data.turn) webCalls.add(key)
+      calls.set(key, addToolCall(data.name, seq, time))
     } else if (type === 'tool/result') {
-      const call = callsBySeq.get(sourceEventSeqs?.[0]) ?? calls.get(data.step + '\0' + data.message.toolCallId)
-      if (call) settleTool(call, data.message, data.error, time)
+      const key = data.step + '\0' + data.message.toolCallId
+      const matching = calls.get(key)
+      const call = callsBySeq.get(sourceEventSeqs?.[0]) ?? matching
+      if (!call) continue
+      settleTool(call, data.message, data.error, time)
+      if (call === matching && webCalls.has(key) && data.turn === beginning.data.turn &&
+        (sourceEventSeqs === undefined || sourceEventSeqs?.[0] === call.seq) &&
+        (surfaceOp === undefined || surfaceOp === 'append')) {
+        call.webRead = reportWebRead(data, call.state)
+      }
     } else if (type === 'tool/ptc-dispatch-start') {
       nestedCalls.set(data.subCallId, addToolCall(data.name, seq, time, true))
     } else if (type === 'tool/ptc-dispatch') {
@@ -299,8 +329,11 @@ async function reportTurn(source, start, end, receipts) {
   }
   await Promise.all(pendingActions)
   if (!entries.length) return
-  if (status !== 'running') {
-    for (const call of callsBySeq.values()) if (call.state === 'running') call.state = 'unfinished'
+  for (const call of callsBySeq.values()) {
+    if (status !== 'running' && call.state === 'running') call.state = 'unfinished'
+    if (call.name === 'web_fetch' && !call.nested && call.state !== 'running' && !call.webRead) {
+      call.webRead = { status: 'unknown' }
+    }
   }
   return { seq: start, endSeq, turn: beginning.data.turn, time: beginning.time, inherited, status,
     entries: entries.sort((a, b) => a.seq - b.seq) }

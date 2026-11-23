@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.199.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.200.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -34,6 +34,8 @@ dsh web
 原文缺失或对局标为待核实时，可以点 **用同一题再试**，用原题另开草稿。已经记录的选择保留在原会话里。
 
 选择 **采用新版清单** 后，点 **用这套出装做自己的任务**，选个人工作区。打开「极简模式＋网页检索」空白草稿后，粘贴想核对的链接、写下问题，再手动发送。
+
+打开对局战报，查看网页检索的实际读取情况。工具行显示调用来源、HTTP 状态和响应是否截断。留有读取地址时，可以直接打开最终访问的网页。
 
 ## 用同一题试玩两位英雄
 

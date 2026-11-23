@@ -9101,6 +9101,9 @@ window.__ModuleLoader__.load({
       'max-tokens': '达到输出上限', interrupted: '已中断', forked: '已分支', ended: '已结束',
     }
     const reportToolStates = { completed: '完成', running: '调用中', failed: '失败', unfinished: '结果未确认', conflict: '来源冲突' }
+    const reportWebReadStates = {
+      complete: '响应未截断', truncated: '响应已截断', 'http-error': '网页读取失败', failed: '网页读取失败', unknown: '读取状态未记录',
+    }
     const reportClocks = Object.fromEntries(['zh', 'en'].map(locale => [
       locale, new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
     ]))
@@ -9248,6 +9251,7 @@ window.__ModuleLoader__.load({
 
       function eventRow(entry) {
         const action = entry.type === 'action'
+        const read = entry.webRead
         return h('li', { key: entry.seq, className: 'moba-report-row', 'data-type': entry.type, 'data-nested': entry.nested },
           entry.kind === 'quest' ? h(Glyph, { kind: 'report', size: 21 })
             : entry.kind === 'hero' ? h(HeroArt, { ...entry, className: 'moba-report-art' })
@@ -9259,9 +9263,14 @@ window.__ModuleLoader__.load({
             entry.sourceNames?.length > 0 && h('small', null, t('调用来源 ') + entry.sourceNames.join('、')),
             entry.expectedSourceName && h('small', null, t('所选来源 ') + entry.expectedSourceName),
             entry.blockedSourceName && h('small', null, t('拦截来源 ') + entry.blockedSourceName),
+            read && h('div', { className: 'moba-report-web-read', 'data-web-read': read.status },
+              h('strong', null, t(reportWebReadStates[read.status]), read.statusCode && ' · HTTP ' + read.statusCode),
+              read.url && h('a', { href: read.url, title: read.url, target: '_blank', rel: 'noopener noreferrer' },
+                t('打开读取地址'), h(Glyph, { kind: 'arrow', size: 13 }))),
             !action && entry.choices?.length > 0 && h('small', null, t('已选 ') + entry.choices.join('、'))),
           h('div', { className: 'moba-report-event-status', 'data-state': action ? 'action' : entry.state },
-            h('span', null, action ? entry.kind === 'quest' ? t('任务') : t('操作') : t(reportToolStates[entry.state])),
+            (!read || !['completed', 'failed'].includes(entry.state)) &&
+              h('span', null, action ? entry.kind === 'quest' ? t('任务') : t('操作') : t(reportToolStates[entry.state])),
             !action && entry.duration !== undefined &&
               h('small', null, entry.duration < 100 ? t('<0.1 秒') : (entry.duration / 1000).toFixed(1) + t(' 秒'))))
       }
@@ -11854,6 +11863,11 @@ window.__ModuleLoader__.load({
       .moba-report-event { display: grid; gap: 1px; font-size: 12px; }
       .moba-report-row[data-type="action"] strong { color: #f0d6a5; }
       .moba-report-row small { color: #c2bcb3; font-size: 11px; }
+      .moba-report-web-read { display: grid; justify-items: start; gap: 2px; min-width: 0; padding-block-start: 3px; color: #b8d9c3; }
+      .moba-report-web-read[data-web-read="truncated"], .moba-report-web-read[data-web-read="unknown"] { color: #eacb90; }
+      .moba-report-web-read[data-web-read="http-error"], .moba-report-web-read[data-web-read="failed"] { color: #f0aca2; }
+      .moba-report-web-read a { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; color: #a7dff4;
+        text-decoration: underline; text-underline-offset: 2px; }
       .moba-report-event-status { display: grid; justify-items: end; gap: 1px; color: #bbdac5; font-size: 11px; white-space: nowrap; }
       .moba-report-event-status[data-state="running"], .moba-report-event-status[data-state="action"] { color: #efbf73; }
       .moba-report-event-status[data-state="failed"], .moba-report-event-status[data-state="unfinished"],
