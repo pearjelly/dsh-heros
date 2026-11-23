@@ -7371,8 +7371,8 @@ window.__ModuleLoader__.load({
             return
           }
           const canChoose = selection.groups.some(group => group.models.length)
-          setInstruction(canChoose ? '请先用输入栏的模型选择器选一个可用模型。'
-            : selection.failures?.length ? '' : '没有可用模型。请在 Harness 的设置 → 模型里完成配置，再回来发送。')
+          setInstruction(canChoose ? '向下滚到输入栏底部，选一个可用模型后再发送。'
+            : selection.failures?.length ? '' : '没有可用模型。需要时先打开侧边栏，再选「账号菜单 → 设置 → 模型」。配置后关闭设置，回到本草稿。')
         }
         const unsubscribe = store.subscribe(update)
         update()
