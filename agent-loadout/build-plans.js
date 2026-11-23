@@ -40,8 +40,8 @@ function handoffOrigin(value) {
 
 function webPilotOrigin(value) {
   if (typeof value?.sessionId === 'string' && planTaskSessionId.test(value.sessionId) &&
-    (value.arm === 'standard' || value.arm === 'evidence')) {
-    return { sessionId: value.sessionId, arm: value.arm }
+    (value.arm === 'standard' || value.arm === 'evidence') && (value.received === undefined || value.received === true)) {
+    return { sessionId: value.sessionId, arm: value.arm, ...(value.received && { received: true }) }
   }
 }
 

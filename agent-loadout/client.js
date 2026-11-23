@@ -1738,7 +1738,7 @@ window.__ModuleLoader__.load({
         complete && view.deliverables?.length === 0 && h('p', null, t('本局没有交付文件。')))
     }
 
-    function WebPilotPlanSave({ sessionId, run, request, onCancel }) {
+    function WebPilotPlanSave({ sessionId, run, receivedOutcome, request, dialogRef, onCancel }) {
       const language = useLanguage()
       const [name, setName] = useState('')
       const [note, setNote] = useState('')
@@ -1750,6 +1750,7 @@ window.__ModuleLoader__.load({
       const saveIds = useRef(new Map())
 
       useEffect(() => () => pending.current?.abort(), [])
+      useLayoutEffect(() => { if (savedName) receipt.current?.focus() }, [savedName])
 
       async function save(event) {
         event.preventDefault()
@@ -1766,12 +1767,10 @@ window.__ModuleLoader__.load({
         }
         try {
           const action = 'web-pilot-plan-save'
-          const plan = await request(action, { action, sessionId, arm: run.arm, name: planName, note: planNote,
+          const scope = receivedOutcome ? { received: true } : { arm: run.arm }
+          const plan = await request(action, { action, sessionId, ...scope, name: planName, note: planNote,
             saveId: saveIds.current.get(key) }, abort.signal, language)
-          if (!abort.signal.aborted) {
-            setSavedName(plan.name)
-            requestAnimationFrame(() => receipt.current?.focus())
-          }
+          if (!abort.signal.aborted) setSavedName(plan.name)
         } catch (reason) {
           if (!abort.signal.aborted) setError(reason.message)
         } finally {
@@ -1782,11 +1781,12 @@ window.__ModuleLoader__.load({
 
       return h(InstallDialog, { title: t('保存出装方案'),
         className: 'moba-starter-dialog moba-web-source-dialog moba-web-pilot-save',
-        initialFocus: '.moba-web-pilot-plan-name', busy, onCancel,
+        initialFocus: '.moba-web-pilot-plan-name', busy, dialogRef, onCancel,
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onCancel() }) },
-        h('div', { className: 'moba-web-pilot-save-summary' },
-          h('strong', null, t(webPilotArms[run.arm].name)),
-          h(WebPilotOutcome, { view: run, complete: true })),
+        receivedOutcome ? h(WebPilotReportSide, { side: receivedOutcome, label: '本机核对的取舍' })
+          : h('div', { className: 'moba-web-pilot-save-summary' },
+            h('strong', null, t(webPilotArms[run.arm].name)),
+            h(WebPilotOutcome, { view: run, complete: true })),
         h('form', { onSubmit: save },
           savedName ? h('p', { ref: receipt, role: 'status', tabIndex: -1 },
             t('已保存为出装方案「%s」。').replace('%s', () => savedName))
@@ -3087,11 +3087,13 @@ window.__ModuleLoader__.load({
       const [attempt, retry] = useState(0)
       const [notice, setNotice] = useState('')
       const [manualCopy, setManualCopy] = useState(false)
+      const [saveOutcome, setSaveOutcome] = useState(null)
       const field = useRef(null)
       const reportField = useRef(null)
       const heading = useRef(null)
       const errorMessage = useRef(null)
       const pending = useRef(null)
+      const focusSave = useRef(false)
       const report = result?.code && t('这是我的深度荣耀网页试玩战报。打开大厅，点「加入试玩挑战」，粘贴这整段，再选你的对局对照。') + '\n\n' + result.code
 
       useEffect(() => {
@@ -3171,11 +3173,17 @@ window.__ModuleLoader__.load({
       }
 
       if (suspended) return null
+      if (saveOutcome) return h(WebPilotPlanSave, { sessionId, receivedOutcome: saveOutcome, request, dialogRef, onCancel: () => {
+        dialogRef.current?.close()
+        focusSave.current = true
+        setSaveOutcome(null)
+      } })
 
+      const receivedFocus = focusSave.current ? '.moba-web-pilot-received-save'
+        : focusPersonal ? '.moba-web-pilot-received-use' : '.moba-web-pilot-handoff-back'
       return h(InstallDialog, { title: t(received ? webPilotReceivedReportTitle : webPilotReportTitle),
         className: 'moba-starter-dialog moba-web-pilot-handoff',
-        dialogRef, onCancel: onBack, initialFocus: received ? (focusPersonal ? '.moba-web-pilot-received-use' : '.moba-web-pilot-handoff-back')
-          : '.moba-web-pilot-handoff-input',
+        dialogRef, onCancel: onBack, initialFocus: received ? receivedFocus : '.moba-web-pilot-handoff-input',
         onKeyDown: event => closeDialogOnEscape(event, onBack) },
         h('form', { onSubmit: received ? undefined : compare },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
@@ -3184,8 +3192,11 @@ window.__ModuleLoader__.load({
               h('div', { className: 'moba-web-pilot-handoff-sides' },
                 h(WebPilotReportSide, { side: result.local, label: '本机核对的取舍' }),
                 result.friend && h(WebPilotReportSide, { side: result.friend, label: '好友分享的取舍' }))),
-            report && h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-handoff-copy', disabled: busy,
-              onClick: copy }, t('复制战报给好友')),
+            report && h('div', { className: 'moba-web-pilot-handoff-copy-actions' },
+              h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-handoff-copy', disabled: busy,
+                onClick: copy }, t('复制战报给好友')),
+              received && result.local && result.friend && h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-received-save',
+                'aria-haspopup': 'dialog', onClick: () => { dialogRef.current?.close(); setSaveOutcome(result.local) } }, t('保存出装'))),
             manualCopy && report && h('label', null, t('我的试玩战报'),
               h('textarea', { className: 'moba-share-code', ref: reportField, value: report, readOnly: true, rows: 3,
                 spellCheck: false, onFocus: event => event.currentTarget.select() })),
@@ -3200,7 +3211,10 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-handoff-back', onClick: onBack }, t('返回')),
             error && !result && h('button', { type: 'button', className: 'moba-roster-open', onClick: () => retry(value => value + 1) }, t('重新核对')),
             received && result?.local && result?.friend && onPersonal && h('button', { type: 'button',
-              className: 'moba-start moba-web-pilot-received-use', 'aria-haspopup': 'dialog', onClick: onPersonal }, t('用我的出装')),
+              className: 'moba-start moba-web-pilot-received-use', 'aria-haspopup': 'dialog', onClick: () => {
+                focusSave.current = false
+                onPersonal()
+              } }, t('用我的出装')),
             !received && h('button', { type: 'submit', className: 'moba-start', disabled: busy || !result?.local || !input.trim() }, t('对照好友战报')))))
     }
 
@@ -8003,10 +8017,17 @@ window.__ModuleLoader__.load({
       const [state, setState] = useState(null)
       const trigger = useRef(null)
       const pending = useRef(null)
+      const receivedDialog = useRef(null)
+      const restoreReceivedFocus = useRef(false)
       const webPilot = plan.hasWebPilotOrigin === true
       const handoff = plan.hasHandoffOrigin === true
 
       useEffect(() => () => pending.current?.abort(), [])
+      useLayoutEffect(() => {
+        if (state || !restoreReceivedFocus.current) return
+        restoreReceivedFocus.current = false
+        trigger.current?.focus()
+      }, [state])
 
       async function open() {
         if (pending.current) return
@@ -8017,7 +8038,9 @@ window.__ModuleLoader__.load({
           const source = await request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
           if (abort.signal.aborted) return
           const valid = webPilot
-            ? source?.status === 'ready' && source.comparison?.runs?.some(run => run.arm === source.arm)
+            ? source?.status === 'ready' && (source.received === true
+              ? typeof source.sessionId === 'string' && source.sessionId && Object.hasOwn(webPilotArms, source.arm)
+              : source.comparison?.runs?.some(run => run.arm === source.arm))
             : source?.sessionId && (handoff ? Object.hasOwn(handoffStyleLabels, source.style)
               : source.comparisonId && ['baseline', 'rematch'].includes(source.arm))
           if (!valid) {
@@ -8032,11 +8055,16 @@ window.__ModuleLoader__.load({
       }
 
       function back() {
+        if (received) {
+          receivedDialog.current?.close()
+          restoreReceivedFocus.current = true
+        }
         setState(null)
-        requestAnimationFrame(() => trigger.current?.focus())
+        if (!received) requestAnimationFrame(() => trigger.current?.focus())
       }
 
       const source = state?.source
+      const received = webPilot && source?.received === true
       const visit = sessionId => onVisit(sessionId, webPilot || sessionId === source.sessionId
         ? { id: plan.id, revision: plan.revision, name: plan.name } : undefined)
       return h(Fragment, null,
@@ -8044,8 +8072,19 @@ window.__ModuleLoader__.load({
           ref: trigger, disabled: Boolean(state?.loading), 'aria-haspopup': 'dialog', onClick: open }, t('查看实战来源')),
         state?.loading && h('p', { className: 'moba-plan-note', role: 'status' }, t('正在核对实战来源…')),
         state?.error && h('p', { className: 'moba-alert', role: 'alert' }, state.error),
-        source && (webPilot ? h(WebPilotComparison, { comparison: source.comparison, savedPlan: { name: plan.name, arm: source.arm },
-          onCancel: back, onVisit: visit })
+        source && (received ? h(InstallDialog, { title: t('此方案保存自这局'), dialogRef: receivedDialog,
+          className: 'moba-starter-dialog moba-web-pilot-handoff moba-web-pilot-received-origin',
+          onCancel: back, initialFocus: '.moba-web-pilot-received-origin-back',
+          onKeyDown: event => closeDialogOnEscape(event, back) },
+          h('p', { className: 'moba-plan-note' }, h('strong', null, plan.name)),
+          h(InstallFacts, { facts: [[t('出装'), t(webPilotArms[source.arm].name)]] }),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-received-origin-back', onClick: back }, t('返回方案库')),
+            h('button', { type: 'button', className: 'moba-start', onClick: () => {
+              receivedDialog.current?.close()
+              visit(source.sessionId)
+            } }, t('打开原局会话'))))
+          : webPilot ? h(WebPilotComparison, { comparison: source.comparison, savedPlan: { name: plan.name, arm: source.arm }, onCancel: back, onVisit: visit })
           : handoff ? h(HandoffSourceDialog, { source, planName: plan.name, onBack: back, onVisit: visit })
             : h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId, testedSourceArm: source.arm, evidenceReplayHint: true,
               request, onVisit: visit, onClose: back, onBack: back, backLabel: t('返回方案库') })))
@@ -13924,7 +13963,11 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-handoff .moba-share-fields { min-block-size: 0; padding: 4px; }
       .moba-web-pilot-handoff :is(button, textarea) { box-sizing: border-box; min-block-size: 44px; }
       .moba-web-pilot-handoff :is(button, textarea, h3):focus-visible { outline: 2px solid #9ed4ec; outline-offset: 2px; }
-      .moba-web-pilot-handoff .moba-web-pilot-handoff-copy { justify-self: start; }
+      .moba-web-pilot-handoff-copy-actions { display: flex; align-items: stretch; gap: 7px; }
+      .moba-web-pilot-handoff-copy-actions button { min-inline-size: 0; max-inline-size: 100%; white-space: normal; }
+      .moba-web-pilot-received-save { flex: none; }
+      .moba-web-pilot-received-origin .moba-plan-note { margin: 0; overflow-wrap: anywhere; }
+      .moba-web-pilot-received-origin .moba-starter-actions button { max-inline-size: 100%; white-space: normal; }
       .moba-web-pilot-handoff-outcome h3 { margin: 0 0 7px; color: var(--gold); }
       .moba-web-pilot-handoff-sides { display: grid; gap: 7px;
         grid-template-columns: repeat(auto-fit, minmax(min(196px, 100%), 1fr)); }
