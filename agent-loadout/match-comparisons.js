@@ -155,6 +155,8 @@ export function validRematchComparison(record) {
     /^session-[a-f0-9]{32}$/.test(baseline.sessionId) && /^[a-f0-9]{64}$/.test(inputHash) && /^[a-f0-9]{64}$/.test(token) &&
     edit && change && (edit.addId !== undefined || edit.removeId !== undefined) &&
     (baseline.evidenceReplay === undefined || (baseline.evidenceReplay === true && baseline.kind === 'personal' && evidenceRemoval())) &&
+    (baseline.personalWorkflowReplay === undefined || (baseline.personalWorkflowReplay === true && baseline.kind === 'personal' &&
+      baseline.evidenceReplay === undefined && baseline.publicEvidenceReplay === undefined && record.lesson === undefined && evidenceRemoval())) &&
     (baselineEvidenceArm ? baseline.publicEvidenceReplay === true && evidenceRemoval() : baseline.publicEvidenceReplay === undefined) &&
     (edit.removeId === undefined ? change.removed === undefined : label(change.removed) && change.removed.id === edit.removeId) &&
     (edit.addId === undefined ? change.added === undefined : label(change.added) && change.added.id === edit.addId)

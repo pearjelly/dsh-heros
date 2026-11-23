@@ -2177,6 +2177,143 @@ test('field playbooks preview read-only and add a real handoff decision to the s
   }
 })
 
+test('private personal workflow removes only Evidence Check and compares the exact native runs', { timeout: 150_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-private-workflow-'))
+  const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
+  const patch = join(directory, 'fixture.yml')
+  const material = '证据 材料/配装 台账.md'
+  const file = join(directory, material)
+  const originalBytes = 'The record lists two spare radios for the handoff.\n'
+  let host
+  try {
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'loadout-fixture', name: join(fixtures, 'preset.mjs') }] }]))
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, originalBytes)
+    await installProfile(directory, env)
+    host = await startHost(env, patch)
+    const call = async (action, fields = {}, status) => (await host.request(endpoint, { ...fields, action }, status)).value
+    const native = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
+    const privateWorkspace = await host.request('/api/loadout-fixture-session', { presetId: 'standard', workspacePath: directory })
+    const { workspaceId } = await native(privateWorkspace.sessionId)
+    const playbook = await call('field-playbook-preview', { id: 'evidence-review' })
+    const fields = { draft: playbook.draft, workspaceId, material, task: '核对值班台账能否证明有一台备用充电器，拟定交接稿。' }
+    const preview = await call('armory-task-preview', fields)
+    const primary = await call('armory-task-open', { ...fields, token: preview.token, launchId: '3'.repeat(32) })
+    const result = sessionId => call('lesson-task-result', { sessionId })
+    const request = { kind: 'personal', comparisonId: primary.sessionId.slice('session-'.length), arm: 'task', personalWorkflowReplay: true }
+    const previewReplay = (fields = {}, status) => call('rematch-comparison-preview', { ...request, change: { removeId: 'evidence' }, ...fields }, status)
+    const openReplay = (fields, status) => call('rematch-comparison-open', { ...request, change: { removeId: 'evidence' }, ...fields }, status)
+    const readReplay = comparisonId => call('rematch-comparison', { comparisonId })
+    await previewReplay({}, 422)
+    async function choose(sessionId, expectedId, choice) {
+      const endpoint = '/api/loadout-fixture-handoff-question'
+      let question
+      for (let attempt = 0; attempt < 100; attempt++) {
+        question = (await host.request(endpoint, { sessionId })).question
+        if (question?.id === expectedId) break
+        await delay(30)
+      }
+      assert.equal(question?.id, expectedId)
+      assert.ok(question.options.some(item => item.label === choice))
+      await host.request(endpoint, { sessionId, choice })
+    }
+    const firstTurn = host.request(turnEndpoint, { sessionId: primary.sessionId, text: primary.task })
+    firstTurn.catch(() => {})
+    await choose(primary.sessionId, 'fixture-lighthouse-evidence', '降级推荐')
+    await choose(primary.sessionId, 'fixture-delivery-review', 'Confirm handoff')
+    await firstTurn
+    const primaryResult = await result(primary.sessionId)
+    const primaryNative = await native(primary.sessionId)
+    assert.deepEqual(primaryResult.personalWorkflowRematch, request)
+    assert.equal(primaryResult.rematchSource, undefined)
+    const primaryFile = await readFile(join(directory, 'qualified-handoff.md'), 'utf8')
+    await call('rematch-comparison-options', { ...request, personalWorkflowReplay: undefined }, 422)
+    await call('rematch-comparison-options', { ...request, personalWorkflowReplay: false }, 422)
+    await previewReplay({ change: { removeId: 'review' } }, 422)
+    await previewReplay({ change: { removeId: 'evidence', addId: 'web' } }, 422)
+    await previewReplay({ comparisonId: privateWorkspace.sessionId.slice('session-'.length) }, 422)
+    const options = await call('rematch-comparison-options', request)
+    assert.equal(options.personalWorkflowReplay, true)
+    assert.deepEqual(options.available, [])
+    assert.equal(options.evidenceReplay, undefined)
+    const checked = await previewReplay({ workspaceId: 'other', task: 'Wrong brief', material: 'other.md' })
+    assert.equal(checked.personalWorkflowReplay, true)
+    assert.equal(checked.evidenceReplay, undefined)
+    assert.equal(checked.task, primary.task)
+    assert.equal(checked.workspaceId, workspaceId)
+    assert.equal(checked.material, material)
+    assert.deepEqual(Object.keys(checked.change), ['removed'])
+    assert.equal(checked.change.removed.id, 'evidence')
+    assert.deepEqual(checked.baseline.workflowDecisions, primaryResult.workflowDecisions)
+    assert.deepEqual(checked.baseline.deliverables, primaryResult.deliverables)
+    const opening = { token: checked.token, launchId: '4'.repeat(32) }
+    await openReplay({ ...opening, personalWorkflowReplay: undefined }, 422)
+    await openReplay({ ...opening, token: 'd'.repeat(64) }, 422)
+    try {
+      await appendFile(file, '\nMaterial changed before confirmation.\n')
+      await openReplay(opening, 422)
+    } finally {
+      await writeFile(file, originalBytes)
+    }
+    const opened = await openReplay(opening)
+    assert.deepEqual(await openReplay(opening), opened)
+    assert.equal(opened.task, primary.task)
+    assert.notEqual(opened.sessionId, primary.sessionId)
+    const waiting = await readReplay(opened.id)
+    assert.equal(waiting.personalWorkflowReplay, true)
+    assert.equal(waiting.personalWorkflowPair, undefined)
+    assert.equal(waiting.arms.find(item => item.id === 'rematch').status, 'waiting')
+    assert.equal(waiting.arms.find(item => item.id === 'rematch').canReuse, false)
+    const child = await native(opened.sessionId)
+    assert.equal(child.workspaceId, workspaceId)
+    assert.notEqual(child.presetId, primaryNative.presetId)
+    assert.ok(!child.events.some(event => event.type === 'turn/start' || event.type === 'user/message' || event.type === 'tool/call'))
+    const member = await equipmentIn(host, opened.sessionId)
+    assert.equal(member.rematchComparison.personalWorkflowReplay, true)
+    assert.equal(member.rematchComparison.evidenceReplay, undefined)
+    const replayTurn = host.request(turnEndpoint, { sessionId: opened.sessionId, text: opened.task })
+    replayTurn.catch(() => {})
+    await choose(opened.sessionId, 'fixture-delivery-review', 'Confirm handoff')
+    await replayTurn
+    const compared = await readReplay(opened.id)
+    assert.equal(compared.materialState, 'verified')
+    assert.equal(compared.personalWorkflowReplay, true)
+    assert.equal(compared.evidenceOutcome, undefined)
+    assert.equal(compared.publicReviewOutcome, undefined)
+    assert.equal(compared.handoffOutcome, undefined)
+    assert.deepEqual(compared.personalWorkflowPair.previous, {
+      sessionId: primary.sessionId, workflowDecisions: primaryResult.workflowDecisions,
+      outcomeIds: { evidence: ['qualify'], review: ['confirm'] }, deliverables: primaryResult.deliverables,
+    })
+    const childResult = compared.personalWorkflowPair.current
+    assert.equal(childResult.sessionId, opened.sessionId)
+    assert.deepEqual(childResult.outcomeIds, { review: ['confirm'] })
+    assert.deepEqual(childResult.workflowDecisions, [{ gearId: 'review', choices: ['Confirm handoff'] }])
+    assert.deepEqual(childResult.deliverables.map(file => file.name), ['direct-handoff.md'])
+    assert.ok(childResult.deliverables.every(item => Number.isSafeInteger(item.seq) && Number.isSafeInteger(item.index)))
+    assert.deepEqual((await native(opened.sessionId)).events.filter(event => event.type === 'tool/call').map(event => event.data.name),
+      ['read', 'write', 'ask_user_question', 'present'])
+    assert.deepEqual(await native(primary.sessionId), primaryNative)
+    assert.equal(await readFile(join(directory, 'qualified-handoff.md'), 'utf8'), primaryFile)
+    await call('lighthouse-combined-handoff-report', { sessionId: opened.sessionId }, 422)
+    try {
+      await appendFile(file, '\nMaterial changed after both rounds.\n')
+      await openReplay(opening, 422)
+      assert.equal((await readReplay(opened.id)).personalWorkflowPair, undefined)
+    } finally {
+      await writeFile(file, originalBytes)
+    }
+    await host.stop()
+    host = await startHost(env, patch)
+    assert.deepEqual((await readReplay(opened.id)).personalWorkflowPair, compared.personalWorkflowPair)
+    assert.deepEqual(await native(primary.sessionId), primaryNative)
+    assert.equal(await readFile(file, 'utf8'), originalBytes)
+  } finally {
+    await host?.stop()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('stock heroes use the same Lighthouse card and show which delivery need each native session meets', { timeout: 180_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-stock-hero-trial-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }

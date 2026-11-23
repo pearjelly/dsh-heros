@@ -2871,10 +2871,10 @@ export async function apply(ctx) {
     if (!heroTrialLive(arm, presetId, agent)) return false
     const scope = toolRuntime.scopeOf(agent.ctx)
     const origins = ctx.get('agentLoadoutToolOrigins')
-    return bindings.every(({ tool, id, sourceId }) => {
+    return bindings.every(({ tool, id, sourceId, module }) => {
       const definition = ctx.tools.get(tool, scope)
       const origin = definition && origins?.get(definition, scope)
-      if (origin?.moduleName !== stockTrialTools[arm][tool]) return false
+      if (origin?.moduleName !== (module ?? stockTrialTools[arm][tool])) return false
       const actual = dispatchedToolDetails(ctx, scope, definition, agent.ctx, records.get(presetId)?.definition.plugins)
       return actual.id === id && actual.sourceId === sourceId
     })
@@ -6307,34 +6307,42 @@ export async function apply(ctx) {
   async function checkedPersonalRematchBaseline(selection, signal, original) {
     original ??= await personalRematchEvidence(selection, signal)
     if (!original || !original.canReuse) throw new Error('请选择一局已核验的实战作为原局。')
-    const { target, hero, observed, sessionId, evidenceReplay, stockStandardTask, presentBinding } = original
+    const { target, hero, observed, sessionId, evidenceReplay, stockStandardTask, presentBinding, workflow } = original
     const { workspaceId, cwd, material, digest, task, presetId, identity } = target
     const workspace = ctx.get('workspaceRegistry')?.get(workspaceId)
     if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
-    const state = await personalTaskMaterialState(target, signal)
+    const state = workflow ? 'verified' : await personalTaskMaterialState(target, signal)
     if (state !== 'verified') throw new Error(state === 'changed' ? '材料已变化，请用现在的文件开始新的对照。'
       : '无法读取所选材料，请核对工作区内的文件路径。')
-    const ecosystem = await discover()
+    const ecosystem = workflow?.ecosystem ?? await discover()
     const heroId = hero.id
     const preset = ecosystem.presets.find(item => item.id === heroId && !item.broken)
     if (!preset) throw new Error('当前英雄的基础阵容不可用。')
-    const { draft, candidate, identity: current } = await verifiedPlanComparisonArm({ presetId, heroId }, ecosystem)
+    const { draft, candidate, identity: current } = workflow ?? await verifiedPlanComparisonArm({ presetId, heroId }, ecosystem)
     if (!matchesLessonIdentity(identity, current, draft, candidate, ecosystem) ||
       (presentBinding && !isDeepStrictEqual(presentBinding, retainedRematchTool({ ecosystem, draft, candidate }, candidate)))) {
       throw new Error('本机配置已变化，无法核对这局的原出装。')
     }
     const { kind, comparisonId, arm } = selection
     const baseline = { kind, comparisonId, arm, sessionId, presetId, heroId, heroName: hero.name, identity,
-      ...(evidenceReplay && { evidenceReplay }) }
+      ...(evidenceReplay && { evidenceReplay }), ...(workflow && { personalWorkflowReplay: true }) }
     const { title: workspaceTitle } = workspace
-    const view = { workspaceId, workspaceTitle, material, task, baseline: { sessionId, heroName: hero.name } }
+    const view = { workspaceId, workspaceTitle, material, task, baseline: { sessionId, heroName: hero.name,
+      ...(workflow && personalWorkflowComparisonSide(sessionId, observed)) } }
     const brief = task.split('\n').slice(2, -1).join('\n').trim()
     signal?.throwIfAborted()
     return { ecosystem, preset, draft, candidate, baseline, view, observed, stockStandardTask, presentBinding,
       fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
   }
 
+  function validatePersonalWorkflowReplay({ kind, personalWorkflowReplay }) {
+    if (personalWorkflowReplay !== undefined && (personalWorkflowReplay !== true || kind !== 'personal')) {
+      throw new Error('请选择一局已核验的实战作为原局。')
+    }
+  }
+
   async function checkedRematchBaseline(selection, signal) {
+    validatePersonalWorkflowReplay(selection)
     if (selection.kind === 'personal') return checkedPersonalRematchBaseline(selection, signal)
     const { comparisons, record, arm } = rematchReference(selection)
     const publicEvidenceReplay = comparisons === workspaceComparisons && arm === 'evidence' &&
@@ -6404,8 +6412,7 @@ export async function apply(ctx) {
     return { builtIn, removed, equipped }
   }
 
-  function retainedRematchTool({ ecosystem, draft, candidate: before }, after, name = 'present') {
-    const module = standardTrialTools[name]
+  function retainedRematchTool({ ecosystem, draft, candidate: before }, after, name = 'present', module = standardTrialTools[name]) {
     const rows = build => flatten(build.record?.definition.plugins ?? ecosystem.definitions.get(draft.presetId) ?? [])
       .filter(row => row.disabled !== true && legacy.moduleName(row.name) === module)
     const original = rows(before)
@@ -6451,6 +6458,10 @@ export async function apply(ctx) {
     const { ecosystem, preset, view } = checked
     const { removed, equipped } = rematchGear(checked)
     const evidenceReplay = evidenceReplayView(checked.baseline)
+    if (checked.baseline.personalWorkflowReplay) {
+      await checkRematch(requestedRematch({ ...selection, change: { removeId: 'evidence' } }), signal, checked)
+      return { ...view, equipped, available: [], personalWorkflowReplay: true }
+    }
     if (evidenceReplay) {
       await checkRematch(requestedRematch({ ...selection, change: { removeId: 'evidence' } }), signal, checked)
       const baseline = { ...view.baseline, choices: comparisonChoices(checked.observed), deliverables: checked.observed.deliverables }
@@ -6484,8 +6495,12 @@ export async function apply(ctx) {
   }
 
   function requestedRematch(selection) {
-    const { kind, comparisonId, arm } = selection
+    validatePersonalWorkflowReplay(selection)
+    const { kind, comparisonId, arm, personalWorkflowReplay } = selection
     const { removeId, addId, sourceId } = selection.change ?? {}
+    if (personalWorkflowReplay && (removeId !== 'evidence' || addId !== undefined || sourceId !== undefined)) {
+      throw new Error('这次对照只能卸下证据核验。')
+    }
     if ((removeId === undefined && addId === undefined) || (removeId !== undefined && !validEquipmentIds([removeId])) ||
       (addId !== undefined && !validEquipmentIds([addId])) ||
       (sourceId !== undefined && (!addId || !validEquipmentSources({ [addId]: sourceId }, [addId])))) {
@@ -6493,7 +6508,7 @@ export async function apply(ctx) {
     }
     const change = { ...(removeId !== undefined && { removeId }), ...(addId !== undefined && { addId }),
       ...(sourceId !== undefined && { sourceId }) }
-    const input = { kind, comparisonId, arm, change }
+    const input = { kind, comparisonId, arm, change, ...(personalWorkflowReplay && { personalWorkflowReplay }) }
     return { ...input, inputHash: createHash('sha256').update(JSON.stringify(input)).digest('hex') }
   }
 
@@ -6545,6 +6560,20 @@ export async function apply(ctx) {
     if (stockReview && (!retainedReader?.sourceId || !retainedDelivery.sourceId)) {
       throw new Error('原局的读取或交付工具来源已变化，请重新核对。')
     }
+    let personalBindings
+    if (baseline.personalWorkflowReplay) {
+      const askModule = equipmentById.get('review').requires
+      const read = retainedRematchTool(checked, candidate, 'read')
+      const present = retainedRematchTool(checked, candidate)
+      const review = retainedRematchTool(checked, candidate, 'ask_user_question', askModule)
+      if (!canonicalWorkflowDraft(assembled, ecosystem, 'review') || !read?.sourceId || !present || !review?.sourceId) {
+        throw new Error('原局的读取、复核或交付工具来源已变化，请重新核对。')
+      }
+      // The built-in featured Present tool may have no source in the catalog. Its
+      // canonical module declaration still determines the provider ID in native dispatch.
+      const sourceId = present.sourceId ?? 'plugin:' + unitFingerprint({ name: equipmentById.get('present').module })
+      personalBindings = [read, { ...present, sourceId }, { ...review, module: askModule }]
+    }
     const identity = comparisonLoadoutIdentity(assembled, candidate, ecosystem)
     if (!identity) throw new Error('无法核对当前出装的配置。')
     const loadout = { presetId: candidate.id, heroId: baseline.heroId, heroName: baseline.heroName, identity }
@@ -6553,10 +6582,13 @@ export async function apply(ctx) {
     const { inputHash } = input
     const token = createHash('sha256').update(JSON.stringify([inputHash, fields.cwd, fields.digest, baseline, loadout])).digest('hex')
     signal?.throwIfAborted()
-    return { view: { ...view, change, token, ...evidenceReplay },
+    return { view: { ...view, change, token, ...evidenceReplay,
+      ...(baseline.personalWorkflowReplay && { personalWorkflowReplay: true }) },
       record: { ...fields, baseline, loadout, change, edit: input.change, inputHash, token },
       draft, before, candidate, ecosystem, againstDraft: checked.draft,
-      ...(stockReview && { stockReviewBindings: [retainedReader, retainedDelivery] }) }
+      observed: checked.observed,
+      ...(stockReview && { stockReviewBindings: [retainedReader, retainedDelivery] }),
+      ...(personalBindings && { stockReviewBindings: personalBindings }) }
   }
 
   async function previewRematch(selection, signal) {
@@ -6648,11 +6680,16 @@ export async function apply(ctx) {
     return record
   }
 
-  async function prepareRematch(comparison, signal) {
-    const { kind, comparisonId, arm } = comparison.baseline
-    const selection = { kind, comparisonId, arm, change: comparison.edit }
+  async function checkStoredRematch(comparison, signal) {
+    const { kind, comparisonId, arm, personalWorkflowReplay } = comparison.baseline
+    const selection = { kind, comparisonId, arm, personalWorkflowReplay, change: comparison.edit }
     const checked = await checkRematch(requestedRematch(selection), signal)
     if (checked.record.token !== comparison.token) throw new Error('材料、任务或出装已变化，请重新核对。')
+    return checked
+  }
+
+  async function prepareRematch(comparison, signal) {
+    const checked = await checkStoredRematch(comparison, signal)
     const prepared = await prepare(checked.draft, checked.candidate)
     return { ...prepared, stockReviewBindings: checked.stockReviewBindings }
   }
@@ -6671,6 +6708,10 @@ export async function apply(ctx) {
         return { id: arm, ...labels, status: 'unopened' }
       }
       source = await ctx.get('sessionQuery').observeSession(sessionId, { projectionMode: comparison.material ? 'all' : 'none', signal })
+      const personalWorkflowReplay = comparison.baseline?.personalWorkflowReplay === true
+      if (personalWorkflowReplay && (saved.presetId !== comparison.loadout.presetId || !workspace?.sessionIds.includes(sessionId))) {
+        return { id: arm, ...labels, sessionId, status: 'unavailable', reason: 'session-unavailable' }
+      }
       const lesson = comparisons === workspaceComparisons && comparison.lesson === lighthouseLesson
       const lessonBaseline = lesson && arm === 'direct'
       const reviewChallenge = lesson && comparison.reviewChallengeArm !== undefined
@@ -6685,11 +6726,11 @@ export async function apply(ctx) {
       if (lessonBaseline && result.status === 'complete' && !result.materialDelivered) {
         result.reason = '未交付本次练习的灯塔补给卡。请查看原会话或开始新的练习。'
       }
-      const canReuse = evidencePractice
+      const canReuse = !personalWorkflowReplay && (evidencePractice
         ? result.status === 'complete' && (comparisonChoices(result).length > 0 ||
           (comparison.scenario === 'confirmed' && result.deliverables.length > 0))
         : !publicEvidenceReplay && (!lessonBaseline || result.materialDelivered === true) && (!strictEvidence || !result.continuationReason) &&
-          reusableComparisonArm(arm, result)
+          reusableComparisonArm(arm, result))
       const canRematch = canReuse && !evidencePractice && !evidenceReplay && materialComparisonStores.includes(comparisons) &&
         (!comparison.baseline || Boolean(previousComparison(comparison)))
       const canTransfer = canReuse && saved?.opened && (comparison.lesson === lighthouseLesson ||
@@ -6835,7 +6876,41 @@ export async function apply(ctx) {
     }) }
   }
 
+  function personalWorkflowComparisonSide(sessionId, { workflowDecisions = [], deliverables = [] }) {
+    return { sessionId, workflowDecisions, deliverables, outcomeIds: workflowOutcomeIds(workflowDecisions) }
+  }
+
+  async function readPersonalWorkflowComparison(record, signal) {
+    let checked
+    try {
+      checked = await checkStoredRematch(record, signal)
+    } catch {
+      signal?.throwIfAborted()
+    }
+    if (!checked) {
+      const unavailable = { status: 'unavailable', reason: 'session-unavailable' }
+      return { personalWorkflowReplay: true, arms: [
+        { id: 'baseline', sessionId: record.baseline.sessionId, ...unavailable }, { id: 'rematch', ...unavailable },
+      ] }
+    }
+    const baseline = { id: 'baseline', heroName: record.baseline.heroName, ...checked.observed,
+      sessionId: record.baseline.sessionId, canReuse: false }
+    const replay = await readComparisonArm(rematchComparisons, record, 'rematch', signal, {
+      verifyPersonalDelivery: true, linkedChoicesOnly: true, includeFileCoordinates: true, includeWorkflowDecisions: true,
+    })
+    const { entries, workflowDecisions } = observedComparisonWorkflows(replay.entries, checked.candidate.id, checked.ecosystem)
+    const current = { ...replay, ...(replay.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }) }
+    const pair = verifiedEvidenceArm(baseline) && verifiedEvidenceArm(current) && {
+      previous: personalWorkflowComparisonSide(baseline.sessionId, baseline),
+      current: personalWorkflowComparisonSide(current.sessionId, current),
+    }
+    return { personalWorkflowReplay: true, arms: [baseline, current], ...(pair && { personalWorkflowPair: pair }) }
+  }
+
   async function readComparisonArms(comparisons, record, signal) {
+    if (comparisons === rematchComparisons && record.baseline?.personalWorkflowReplay) {
+      return readPersonalWorkflowComparison(record, signal)
+    }
     const previous = previousComparison(record)
     const styles = comparisons === rematchComparisons && personalHandoffStyles(record, previous)
     const publicReview = comparisons === rematchComparisons && isLighthouseReviewRematch(record, previous)
@@ -7215,6 +7290,15 @@ export async function apply(ctx) {
     const { target, evidence, presetId, presentBinding, launch } = original
     const record = records.get(presetId)
     const hero = matchHero(presetId, record)
+    if (selection.personalWorkflowReplay === true) {
+      if (!isPersonalWorkflowResult(original)) return
+      const ecosystem = await discover()
+      const { entries, workflowDecisions } = observedComparisonWorkflows(evidence.entries, presetId, ecosystem)
+      if (!workflowDecisions.some(item => item.gearId === 'evidence')) return
+      const workflow = await checkedPersonalWorkflowTask(sessionId, original, workflowDecisions, ecosystem, signal)
+      if (!workflow) return
+      return { sessionId, target, hero, observed: { ...evidence, entries, workflowDecisions }, canReuse: true, workflow }
+    }
     if (launch.armory === true) {
       const canReuse = evidence.status === 'complete' && Boolean(presentBinding) && verifiedPresentHandoff(evidence) &&
         !evidence.entries.some(item => item.name === 'ask_user_question')
@@ -7362,22 +7446,29 @@ export async function apply(ctx) {
     return { ...checked, ecosystem, heroName: native.name }
   }
 
-  async function verifiedPersonalWorkflowReceipt(sessionId, { launch, target, evidence, presetId }, workflowDecisions, ecosystem, signal) {
-    if (launch.armory !== true || !target || target.lighthouseCombined || evidence.status !== 'complete' ||
-      evidence.materialState !== 'verified' || evidence.continuationReason ||
-      (!workflowDecisions.length && !evidence.deliverables?.length) || records.get(presetId)?.equipmentIds?.length !== 3) return
+  function canonicalWorkflowDraft(draft, ecosystem, mode) {
+    const expected = deliveryPlaybookDraft(ecosystem, mode)
+    return draft.presetId === expected.presetId &&
+      isDeepStrictEqual([...draft.equipmentIds].sort(), [...expected.equipmentIds].sort()) &&
+      isDeepStrictEqual(draft.equipmentSources, expected.equipmentSources) &&
+      isDeepStrictEqual([...draft.removedEquipmentIds].sort(), [...expected.removedEquipmentIds].sort())
+  }
+
+  function isPersonalWorkflowResult({ launch, target, evidence, presetId }) {
+    return launch.armory === true && target && !target.lighthouseCombined && evidence.status === 'complete' &&
+      evidence.materialState === 'verified' && !evidence.continuationReason && records.get(presetId)?.equipmentIds?.length === 3
+  }
+
+  async function checkedPersonalWorkflowTask(sessionId, result, workflowDecisions, ecosystem, signal) {
+    const { target, evidence, presetId } = result
+    if (!isPersonalWorkflowResult(result) || (!workflowDecisions.length && !evidence.deliverables?.length)) return
     const workspace = ctx.get('workspaceRegistry')?.get(target.workspaceId)
     if (workspace?.path !== target.cwd || !workspace.sessionIds.includes(sessionId) ||
       await personalTaskMaterialState(target, signal) !== 'verified') return
     try {
       const environment = ecosystem ?? await discover()
-      const { draft } = await checkedArmoryTaskLoadout(presetId, target, environment)
-      const expected = deliveryPlaybookDraft(environment, 'evidence-review')
-      if (draft.presetId !== expected.presetId ||
-        !isDeepStrictEqual([...draft.equipmentIds].sort(), [...expected.equipmentIds].sort()) ||
-        !isDeepStrictEqual(draft.equipmentSources, expected.equipmentSources) ||
-        !isDeepStrictEqual([...draft.removedEquipmentIds].sort(), [...expected.removedEquipmentIds].sort())) return
-      return { outcomeIds: workflowOutcomeIds(workflowDecisions) }
+      const checked = await checkedArmoryTaskLoadout(presetId, target, environment)
+      if (canonicalWorkflowDraft(checked.draft, environment, 'evidence-review')) return checked
     } catch {
       signal?.throwIfAborted()
     }
@@ -7465,15 +7556,18 @@ export async function apply(ctx) {
     const gapRound = lighthouseRound?.scenario === 'gap' && lighthouseRound
     const lighthousePair = gapRound && await combinedLighthousePair(gapRound, signal)
     const lighthouseScenarioPair = lighthouseRound?.scenario === 'confirmed' && await combinedLighthouseScenarioPair(lighthouseRound, signal)
-    const personalWorkflowReceipt = review !== true && await verifiedPersonalWorkflowReceipt(
+    const personalWorkflow = review !== true && await checkedPersonalWorkflowTask(
       sessionId, resultView, workflowDecisions, workflowEnvironment, signal)
+    const personalWorkflowReceipt = personalWorkflow && { outcomeIds: workflowOutcomeIds(workflowDecisions) }
+    const personalWorkflowRematch = personalWorkflow && workflowDecisions.some(item => item.gearId === 'evidence') &&
+      { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task', personalWorkflowReplay: true }
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
       ...(evidence.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }),
       ...(gapRound && { lighthouseReplay: true, lighthouseMode: gapRound.mode }), ...(lighthousePair && { lighthousePair }),
       ...(eligibleCombinedLighthouseScenario(gapRound) && { lighthouseScenarioReplay: true }),
       ...(lighthouseScenarioPair && { lighthouseScenarioPair }), ...(gapRound?.receivedReport && { lighthouseReceivedReport: true }),
-      ...(personalWorkflowReceipt && { personalWorkflowReceipt }),
+      ...(personalWorkflowReceipt && { personalWorkflowReceipt }), ...(personalWorkflowRematch && { personalWorkflowRematch }),
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),
@@ -7725,7 +7819,7 @@ export async function apply(ctx) {
       arms: (comparisons === workspaceComparisons ? workspaceComparisonArms : comparisons.arms).map(id => ({ id, status: 'unopened' })) }
     const { id, task, workspaceId, material } = record
     const workspace = material && ctx.get('workspaceRegistry')?.get(workspaceId)
-    const [{ publicReviewOutcome, armoryHandoffOutcome, ...rounds }, materialState] = await Promise.all([
+    const [{ publicReviewOutcome, armoryHandoffOutcome, personalWorkflowPair, ...rounds }, materialState] = await Promise.all([
       readComparisonArms(comparisons, record, signal),
       material && (workspace?.path === record.cwd ? workspaceMaterialState(record, signal) : 'unavailable'),
     ])
@@ -7753,6 +7847,7 @@ export async function apply(ctx) {
       ...(record.reviewChallengeArm && { reviewChallengeArm: record.reviewChallengeArm }),
       ...(ownPair && { ownReviewPair: ownPair }),
       ...(armoryHandoffOutcome && materialState === 'verified' && { armoryHandoffOutcome }),
+      ...(personalWorkflowPair && materialState === 'verified' && { personalWorkflowPair }),
       ...(canRepeatLighthouseReview && { canRepeatLighthouseReview: true }),
       ...(directRematchArm && !ownPair && { directRematchArm }),
       ...(reviewChoiceComparison && { reviewChoiceComparison }),
@@ -8023,7 +8118,10 @@ export async function apply(ctx) {
       let saved = await comparisons.readArm(id, arm)
       if (requiredPresetId && saved && saved.presetId !== requiredPresetId) throw new Error(challengeChanged)
       if (heroDelivery && saved && saved.token !== heroReplay.token) throw new Error(heroDeliveryChanged)
-      if (saved?.opened) return heroTrial ? { ...response, workspaceId: saved.workspaceId } : response
+      if (saved?.opened) {
+        if (comparison.baseline?.personalWorkflowReplay) await checkStoredRematch(comparison, signal)
+        return heroTrial ? { ...response, workspaceId: saved.workspaceId } : response
+      }
       const pinned = comparison.plans?.[arm]
       let workspace = comparison.workspaceId && registry.get(comparison.workspaceId)
       let verify
@@ -9081,7 +9179,7 @@ export async function apply(ctx) {
         value.rematchComparison = { ...rematch, heroName: loadout.heroName, ...(lesson && { lesson }),
           ...(reviewResult && { reviewInvitation: reviewResult.played }),
           ...(reviewResult?.played === 'review' && { canTryDirectDelivery: true }),
-          ...evidenceReplayView(baseline) }
+          ...(baseline?.personalWorkflowReplay && { personalWorkflowReplay: true }), ...evidenceReplayView(baseline) }
       }
       const heroMember = heroTrials.member(sessionId)
       if (heroMember && (await heroTrials.readArm(heroMember.id, heroMember.arm))?.opened) {
