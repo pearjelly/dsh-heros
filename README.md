@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.215.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.216.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -37,7 +37,7 @@ Choose **Invite a friend to the same practice** from a verified public run and c
 
 After both of you finish, open **Exchange practice reports** from your own result to copy your report. When your friend sends theirs, paste the whole message in **Join a practice challenge** in the lobby. Check their result and pick a verified local run of the same task and language, with either loadout. You can also paste the message from your own result. The cards show each loadout, recorded choice, and whether a file was delivered. Your side is verified from your local run. Your friend’s side is what they shared. The report contains no file names, files, or conversation history.
 
-If no local run matches, choose **Try the same task** from the friend’s report. Review the original task language and choose an available loadout. Open the new draft and send it yourself. When you finish, paste the report again to compare your new result.
+If no local run matches, choose **Try the same task** from the friend’s report. Review the original task language and choose an available loadout. Open the new draft and send it yourself. Once your run verifies, choose **Compare received report** in its result to open the exact report you entered with. You can also copy your result to send back.
 
 In the original conversation, choose **View replays** to continue an unsent replay from its existing draft, or pick a completed replay to compare its actual result against the original. Each completed row shows its recorded choice and deliveries. You can still start another replay to try a different decision.
 

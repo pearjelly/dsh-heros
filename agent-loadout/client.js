@@ -2024,9 +2024,12 @@ window.__ModuleLoader__.load({
       const canReplay = complete && armName && view.sampleLanguage
       const canReviewReplays = view?.canReviewReplays === true
       const canShare = complete && view.verified === true
+      const hasReceivedReport = canShare && view.hasReceivedReport === true
       const comparison = complete && view.verified ? view.comparison : null
       const startReplay = canReplay && h('button', { type: 'button', ref: replayTrigger, className: 'moba-settlement-button',
         'aria-haspopup': 'dialog', onClick: () => setReplayOpen(true) }, t('换另一套出装再试'))
+      const compareRuns = comparison && h('button', { type: 'button', ref: comparisonTrigger, className: 'moba-settlement-button moba-web-pilot-compare',
+        'aria-haspopup': 'dialog', onClick: () => setComparisonOpen(true) }, t('对照两局'))
       function closeComparison() {
         setComparisonOpen(false)
         requestAnimationFrame(() => comparisonTrigger.current?.focus())
@@ -2045,14 +2048,15 @@ window.__ModuleLoader__.load({
       return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-result', tabIndex: 0, 'aria-label': t(webPilotTitle) },
         h('div', null, h('strong', null, t(webPilotTitle)), armName && h('span', null, t(armName))),
         (comparison || canReviewReplays || canShare) && h('div', { className: 'moba-web-pilot-primary-actions' },
-          comparison && h('button', { type: 'button', ref: comparisonTrigger, className: 'moba-settlement-button moba-web-pilot-compare',
-            'aria-haspopup': 'dialog', onClick: () => setComparisonOpen(true) }, t('对照两局')),
+          hasReceivedReport && h('button', { type: 'button', className: 'moba-settlement-button moba-web-pilot-received',
+            'aria-haspopup': 'dialog', onClick: event => openExchange('received', event) }, t(webPilotReceivedReportTitle)),
+          !hasReceivedReport && compareRuns,
           canReviewReplays && h('button', { type: 'button', ref: replayListTrigger,
-            className: 'moba-settlement-button moba-web-pilot-review', 'data-primary': !comparison || undefined,
+            className: 'moba-settlement-button moba-web-pilot-review', 'data-primary': !comparison && !hasReceivedReport || undefined,
             'aria-haspopup': 'dialog', onClick: () => setReplayListOpen(true) }, t(webPilotReplaysLabel)),
           canShare && h('button', { type: 'button', className: 'moba-settlement-button',
             'aria-haspopup': 'dialog', onClick: event => openExchange('invite', event) }, t(webPilotInviteTitle)),
-          canReviewReplays && !comparison && startReplay,
+          !hasReceivedReport && canReviewReplays && !comparison && startReplay,
           canShare && h('button', { type: 'button', className: 'moba-settlement-button',
             'aria-haspopup': 'dialog', onClick: event => openExchange('report', event) }, t(webPilotReportTitle))),
         current?.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
@@ -2069,11 +2073,12 @@ window.__ModuleLoader__.load({
             t('查看发布方清单') + ' · v' + view.version + ' · DSH ' + view.hostVersion),
           h('button', { type: 'button', className: 'moba-settlement-button', onClick: onReport,
             'aria-controls': reportId, 'aria-expanded': reporting }, t('查看对局战报')),
-          (!canReviewReplays || comparison) && startReplay),
+          hasReceivedReport && compareRuns,
+          (hasReceivedReport || !canReviewReplays || comparison) && startReplay),
         canShare && exchangeView === 'invite' && h(LighthouseChallengeShare, {
           webPilotSessionId: sessionId, request, dialogRef: exchangeDialog, onBack: closeExchange }),
-        canShare && exchangeView === 'report' && h(WebPilotHandoffReport, {
-          sessionId, request, dialogRef: exchangeDialog, onBack: closeExchange }),
+        canShare && (exchangeView === 'report' || hasReceivedReport && exchangeView === 'received') && h(WebPilotHandoffReport, {
+          sessionId, request, received: exchangeView === 'received', dialogRef: exchangeDialog, onBack: closeExchange }),
         canReviewReplays && replayListOpen && h(WebPilotReplayList, { sessionId, request, workspaces, onCancel: () => {
           returnFromReplayList.current = true
           setReplayListOpen(false)
@@ -2226,6 +2231,7 @@ window.__ModuleLoader__.load({
     const challengeJoinTitle = '加入试玩挑战'
     const webPilotInviteTitle = '邀请好友同题试玩'
     const webPilotReportTitle = '交换试玩战报'
+    const webPilotReceivedReportTitle = '对照收到的战报'
 
     function LighthouseChallengeShare({ comparisonId, request, onBack, heroTrial = false, playedHero, reviewSource,
       webPilotSessionId, dialogRef }) {
@@ -2381,6 +2387,7 @@ window.__ModuleLoader__.load({
       const trimmed = input.trim()
       const returnedReport = trimmed.length <= lighthouseHandoffReportCodeLimit && reviewHandoffReportCode.test(trimmed)
       const code = reportTrial?.code ?? invitationCode
+      const receivedReportCode = reportTrial ? activeWebReport : undefined
       const preview = reportTrial?.preview ?? (code && checked?.code === code && checked.language === language ? checked.value : undefined)
       const showFinder = Boolean(activeWebReport && !reportTrial)
       const heroTrial = preview?.kind === 'hero-trial'
@@ -2405,7 +2412,7 @@ window.__ModuleLoader__.load({
         if (!webTrial || !webArm) return
         const abort = new AbortController()
         const action = 'lighthouse-challenge-preview'
-        request(action, { action, code, arm: webArm }, abort.signal, language)
+        request(action, { action, code, arm: webArm, ...(receivedReportCode && { reportCode: receivedReportCode }) }, abort.signal, language)
           .then(value => {
             if (abort.signal.aborted) return
             if (value.kind !== 'web-pilot' || (value.token && value.arm !== webArm)) throw new Error(t('试玩出装已变化，请重新核对。'))
@@ -2413,7 +2420,7 @@ window.__ModuleLoader__.load({
           })
           .catch(reason => { if (!abort.signal.aborted) setWebCheck({ code, language, arm: webArm, error: reason.message }) })
         return () => abort.abort()
-      }, [request, code, language, webTrial, webArm, webAttempt])
+      }, [request, code, language, webTrial, webArm, webAttempt, receivedReportCode])
 
       function chooseWebArm(arm) {
         setWebArm(arm)
@@ -2488,6 +2495,7 @@ window.__ModuleLoader__.load({
           if (!launchIds.current.has(key)) launchIds.current.set(key, Array.from(crypto.getRandomValues(new Uint8Array(16)),
             byte => byte.toString(16).padStart(2, '0')).join(''))
           const result = await request(action, { action, code, token, launchId: launchIds.current.get(key),
+            ...(receivedReportCode && { reportCode: receivedReportCode }),
             ...(hasRoutes ? { arm } : { ...(localLoadout && { useLocal: true }), ...(openingChoice && { openingChoice }) }) }, abort.signal, language)
           if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
         } catch (reason) {
@@ -3042,7 +3050,7 @@ window.__ModuleLoader__.load({
             onClick: () => { setCompareError(''); setQuery(value => ({ ...value })) } }, t('重新核对'))))
     }
 
-    function WebPilotHandoffReport({ sessionId, request, dialogRef, onBack }) {
+    function WebPilotHandoffReport({ sessionId, request, received, dialogRef, onBack }) {
       const language = useLanguage()
       const [result, setResult] = useState(null)
       const [input, setInput] = useState('')
@@ -3054,6 +3062,7 @@ window.__ModuleLoader__.load({
       const field = useRef(null)
       const reportField = useRef(null)
       const heading = useRef(null)
+      const errorMessage = useRef(null)
       const pending = useRef(null)
       const report = result?.code && t('这是我的深度荣耀网页试玩战报。打开大厅，点「加入试玩挑战」，粘贴这整段，再选你的对局对照。') + '\n\n' + result.code
 
@@ -3064,7 +3073,7 @@ window.__ModuleLoader__.load({
         setBusy(false)
         setNotice('')
         setManualCopy(false)
-        const action = 'web-pilot-handoff-report'
+        const action = received ? 'web-pilot-handoff-received' : 'web-pilot-handoff-report'
         request(action, { action, sessionId }, abort.signal, language)
           .then(value => { if (!abort.signal.aborted) setResult(value) })
           .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
@@ -3072,11 +3081,15 @@ window.__ModuleLoader__.load({
           abort.abort()
           pending.current?.abort()
         }
-      }, [request, sessionId, language, attempt])
+      }, [request, sessionId, language, attempt, received])
 
       useLayoutEffect(() => {
         if (result?.friend) heading.current?.focus()
       }, [result?.friend])
+
+      useLayoutEffect(() => {
+        if (received && error) errorMessage.current?.focus()
+      }, [received, error])
 
       useLayoutEffect(() => {
         if (!manualCopy) return
@@ -3129,10 +3142,11 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h(InstallDialog, { title: t(webPilotReportTitle), className: 'moba-starter-dialog moba-web-pilot-handoff',
-        dialogRef, onCancel: onBack, initialFocus: '.moba-web-pilot-handoff-input',
+      return h(InstallDialog, { title: t(received ? webPilotReceivedReportTitle : webPilotReportTitle),
+        className: 'moba-starter-dialog moba-web-pilot-handoff',
+        dialogRef, onCancel: onBack, initialFocus: received ? '.moba-web-pilot-handoff-back' : '.moba-web-pilot-handoff-input',
         onKeyDown: event => closeDialogOnEscape(event, onBack) },
-        h('form', { onSubmit: compare },
+        h('form', { onSubmit: received ? undefined : compare },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
             result?.local && h('section', { className: 'moba-web-pilot-handoff-outcome' },
               result.friend && h('h3', { ref: heading, tabIndex: -1 }, t('同题对照')),
@@ -3145,16 +3159,16 @@ window.__ModuleLoader__.load({
               h('textarea', { className: 'moba-share-code', ref: reportField, value: report, readOnly: true, rows: 3,
                 spellCheck: false, onFocus: event => event.currentTarget.select() })),
             notice && h('p', { className: 'moba-empty', role: 'status' }, notice),
-            h('label', null, t('好友试玩战报或战报码'),
+            !received && h('label', null, t('好友试玩战报或战报码'),
               h('textarea', { className: 'moba-share-code moba-web-pilot-handoff-input', ref: field, value: input, rows: 2,
                 spellCheck: false, readOnly: busy, autoComplete: 'off', autoCapitalize: 'off', maxLength: lighthouseInvitationLimit + 1,
                 onChange: event => { setInput(event.target.value); setError(''); clearComparison() } })),
-            error && h('p', { className: 'moba-alert', role: 'alert' }, error),
+            error && h('p', { className: 'moba-alert', role: 'alert', ref: errorMessage, tabIndex: received ? -1 : undefined }, error),
             (busy || !result && !error) && h('p', { className: 'moba-empty', role: 'status' }, t('正在核对战报…'))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
-            h('button', { type: 'button', className: 'moba-roster-open', onClick: onBack }, t('返回')),
+            h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-handoff-back', onClick: onBack }, t('返回')),
             error && !result && h('button', { type: 'button', className: 'moba-roster-open', onClick: () => retry(value => value + 1) }, t('重新核对')),
-            h('button', { type: 'submit', className: 'moba-start', disabled: busy || !result?.local || !input.trim() }, t('对照好友战报')))))
+            !received && h('button', { type: 'submit', className: 'moba-start', disabled: busy || !result?.local || !input.trim() }, t('对照好友战报')))))
     }
 
     function LighthouseHandoffReport({ report, comparisonId, request, onBack, onOpenRepeat, unopenedHeroes, onTryHero, onReplayMinimal, onPersonalTask,
@@ -13849,7 +13863,7 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-result .moba-settlement-button { min-inline-size: 0; padding: 5px 8px;
         border: 1px solid #607d78; background: #162229; color: #e1eeea; font-size: 12px; overflow-wrap: anywhere; }
       .moba-web-pilot-result .moba-settlement-button:hover { border-color: #a4c7bf; }
-      .moba-web-pilot-result :is(.moba-web-pilot-compare, .moba-web-pilot-review[data-primary]) {
+      .moba-web-pilot-result :is(.moba-web-pilot-compare, .moba-web-pilot-received, .moba-web-pilot-review[data-primary]) {
         background: #392e20; border-color: #ad8c52; color: #ffe3ab;
       }
       .moba-web-pilot-result:focus-visible, .moba-web-pilot-result :is(button, a):focus-visible,

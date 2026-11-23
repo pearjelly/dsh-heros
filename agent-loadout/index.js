@@ -1425,6 +1425,7 @@ export async function apply(ctx) {
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, task,
         ...(material !== undefined && { material }), ...(target && { target }), ...(source && { source }), ...(armory && { armory }), ...(webSourcePractice && { webSourcePractice }),
         ...(kind === 'web-pilot' && input.replayOf && { webPilotReplayOf: input.replayOf }),
+        ...(kind === 'web-pilot-challenge' && input.reportCode && { webPilotReceivedReport: input.reportCode }),
         ...(checked.handoffAlternateOf && { handoffAlternateOf: checked.handoffAlternateOf }),
         ...(kind === 'alternate' && { alternateOf: input.alternateOf }) })
       updates.notify(sessionId)
@@ -1465,25 +1466,39 @@ export async function apply(ctx) {
     return { arm, task, hash, replayOf: parentSessionId, replayBinding: binding }
   }
 
-  function webPilotChallengeInput(invitation, arm) {
+  function webPilotChallengeContext({ code, reportCode }) {
+    const invitation = decodeWebPilotChallenge(code)
+    if (reportCode === undefined) return { invitation }
+    const report = decodeWebPilotReport(reportCode)
+    if (report.sampleLanguage !== invitation.sampleLanguage || report.played !== invitation.played) {
+      throw new Error(webSourceChanged)
+    }
+    return { invitation, reportCode: encodeWebPilotReport(report) }
+  }
+
+  function webPilotChallengeInput({ invitation, reportCode }, arm) {
     if (!['standard', 'evidence'].includes(arm)) throw new Error(webSourceChanged)
     const { sampleLanguage, played } = invitation
     const task = webPilotTask(sampleLanguage === 'en')
     const code = encodeWebPilotChallenge(sampleLanguage, played)
-    const hash = createHash('sha256').update(JSON.stringify(['web-pilot-challenge', code, arm, task])).digest('hex')
-    return { arm, task, hash }
+    const parts = ['web-pilot-challenge', code, arm, task]
+    if (reportCode) parts.push(reportCode)
+    const hash = createHash('sha256').update(JSON.stringify(parts)).digest('hex')
+    return { arm, task, hash, reportCode }
   }
 
-  function requestedWebPilotChallenge({ code, arm }) {
-    return webPilotChallengeInput(decodeWebPilotChallenge(code), arm)
+  function requestedWebPilotChallenge(selection) {
+    return webPilotChallengeInput(webPilotChallengeContext(selection), selection.arm)
   }
 
-  async function previewWebPilotChallenge({ code, arm }, signal) {
-    const invitation = decodeWebPilotChallenge(code)
+  async function previewWebPilotChallenge(selection, signal) {
+    const context = webPilotChallengeContext(selection)
+    const { invitation } = context
+    const { arm } = selection
     if (arm !== undefined && !['standard', 'evidence'].includes(arm)) throw new Error(webSourceChanged)
     const environment = canOpenWebPractice() && await shareEnvironment().catch(() => null)
     const available = environment ? (await Promise.all(['standard', 'evidence'].map(async option => {
-      const input = webPilotChallengeInput(invitation, option)
+      const input = webPilotChallengeInput(context, option)
       try {
         const { token } = await checkWebSourcePractice(input, signal, environment)
         return { arm: option, token }
@@ -1610,6 +1625,18 @@ export async function apply(ctx) {
       ...(status === 'complete' && { deliverables: completedPresentDelivery(outcome) ? deliverables.map(file => file.name) : [] }) }
   }
 
+  function observedWebPilotReport(launch, arm) {
+    if (launch.webPilotReceivedReport === undefined) return
+    try {
+      const invitation = decodeWebPilotReport(launch.webPilotReceivedReport)
+      const reportCode = encodeWebPilotReport(invitation)
+      const { hash, task } = webPilotChallengeInput({ invitation, reportCode }, arm)
+      if (task === launch.task && hash === launch.request) return invitation
+    } catch {
+      // Ignore a malformed optional report in an archived round.
+    }
+  }
+
   async function inspectWebSourcePractice({ sessionId }, signal, { handoff = false, handoffTask } = {}) {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return null
     const source = await observePlanTask(sessionId, signal, 'all')
@@ -1631,11 +1658,14 @@ export async function apply(ctx) {
         const receipt = observedWebSourceResult(source.events, outcome.turn, binding)
         const result = { view: webPilotResult(outcome, binding, launch.task, receipt), binding,
           task: launch.task, replayOf: launch.webPilotReplayOf }
-        if (handoff && completedCanonicalWebPilot(result)) {
-          const { choices, custom, delivered } = webPilotHandoffOutcome(source.events, outcome.windows, receipt.seq)
-          const decision = choices ? (!custom && lighthouseEvidenceDecision(choices)) || 'answered' : 'none'
-          result.handoff = { sampleLanguage: result.view.sampleLanguage, played: binding.arm, decision, delivered }
-          result.openedAt = header.createdAt
+        if (completedCanonicalWebPilot(result)) {
+          result.receivedReport = observedWebPilotReport(launch, binding.arm)
+          if (handoff) {
+            const { choices, custom, delivered } = webPilotHandoffOutcome(source.events, outcome.windows, receipt.seq)
+            const decision = choices ? (!custom && lighthouseEvidenceDecision(choices)) || 'answered' : 'none'
+            result.handoff = { sampleLanguage: result.view.sampleLanguage, played: binding.arm, decision, delivered }
+            result.openedAt = header.createdAt
+          }
         }
         return result
       }
@@ -1691,6 +1721,12 @@ export async function apply(ctx) {
     const report = await shareWebPilotReport({ sessionId }, signal)
     if (friend.sampleLanguage !== report.local.sampleLanguage) throw new Error('这份试玩战报的原题语言和本局不同。')
     return { ...report, friend }
+  }
+
+  async function compareReceivedWebPilotReport({ sessionId }, signal) {
+    const result = await inspectWebSourcePractice({ sessionId }, signal, { handoff: true })
+    if (!result?.handoff || !result.receivedReport) throw new Error('这局没有可对照的好友战报。')
+    return { code: encodeWebPilotReport(result.handoff), local: result.handoff, friend: result.receivedReport }
   }
 
   function matchesWebPilotReplay(original, task, binding) {
@@ -1829,6 +1865,7 @@ export async function apply(ctx) {
     if (!result?.binding?.arm) return null
     const pair = await verifiedWebPilotPair(sessionId, result, signal)
     return { ...result.view, ...(completedWebPilot(result) && { canReviewReplays: true }),
+      ...(result.receivedReport && { hasReceivedReport: true }),
       ...(pair && { comparison: webPilotComparison(pair) }) }
   }
 
@@ -7981,6 +8018,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-pilot-challenge-share') value = await shareWebPilotChallenge(selection, request.signal)
         else if (selection?.action === 'web-pilot-handoff-report') value = await shareWebPilotReport(selection, request.signal)
         else if (selection?.action === 'web-pilot-handoff-compare') value = await compareWebPilotReport(selection, request.signal)
+        else if (selection?.action === 'web-pilot-handoff-received') value = await compareReceivedWebPilotReport(selection, request.signal)
         else if (selection?.action === 'web-pilot-handoff-find') value = await findWebPilotReports(selection, request.signal)
         else if (selection?.action === 'web-pilot-handoff-trial-preview') value = await previewWebPilotReportTrial(selection, request.signal)
         else if (selection?.action === 'web-pilot-replays') value = await webPilotReplays(selection, request.signal)
