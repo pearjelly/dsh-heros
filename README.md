@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.225.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.226.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -31,7 +31,7 @@ In the Armory, use **Choose a loadout** to jump to **Hero roster**. Select a her
 
 Open **Web Research practice** at the top of the lobby. **Stock Standard** reads the publisher's checklist and gives an assessment. **Standard + Evidence Check** also lets you handle the missing local test on the native question card. Before trying either loadout, you can record what you would do: gather more evidence, qualify the recommendation, or pause. Review the loadout, open the draft, and send it yourself. The verified result shows your opening choice, if you made one, alongside the recorded decision and delivered files. After Evidence Check, see the observed follow-up read, whether a file was delivered, or the missing local test record you need before resuming.
 
-In a verified Evidence Check result with a recorded decision, choose **Try a different decision** to replay the same task with the same loadout. Review the original question and previous decision, open the new draft, then send it yourself. On the new verified result, **Compare the two decisions** shows what each round actually read or delivered. Use **View replays** to resume an existing draft. From the same-loadout comparison, choose **Use this loadout on my task** to open a blank draft in a workspace you select. Add your own link and question before sending it yourself. In newly opened personal tasks, **My task result** shows the first task’s actual reads, recorded native choice and delivered files. **View tested source** opens the original rehearsal comparison.
+In a verified Evidence Check result with a recorded decision, choose **Try a different decision** to replay the same task with the same loadout. Review the original question and previous decision, open the new draft, then send it yourself. On the new verified result, **Compare the two decisions** shows what each round actually read or delivered. Use **View replays** to resume an existing draft. From the same-loadout comparison, choose **Use this loadout on my task** to open a blank draft in a workspace you select. Add your own link and question before sending it yourself. In newly opened personal tasks, **My task result** shows the first task’s actual reads, recorded native choice and delivered files. **View tested source** opens the original rehearsal comparison. When the actual read and active loadout can be verified, choose **Save as a plan** and note when to use it. Select that plan in **Loadout plans** to open a new blank web task. You can also revisit the original personal task.
 
 From a verified result, choose **Try again with the other loadout** and open its draft. After both runs verify the same manifest, the replay lets you compare their recorded choices and delivered files and return to either conversation.
 

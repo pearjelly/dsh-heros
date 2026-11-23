@@ -135,13 +135,19 @@ test('Web Research only reports a bound read started after the actual evidence a
 })
 
 test('saving a web pilot arm deduplicates concurrent requests and retains its source until the recipe changes', async t => {
-  for (const received of [false, true]) {
+  const trialSession = 'session-a076' + '0'.repeat(28)
+  const personalSession = 'session-a077' + '0'.repeat(28)
+  const origins = [
+    { sessionId: trialSession, arm: 'evidence' },
+    { sessionId: trialSession, arm: 'evidence', received: true },
+    { sessionId: personalSession, arm: 'evidence', personal: true },
+  ]
+  for (const origin of origins) {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-web-pilot-plans-'))
     t.after(() => rm(directory, { recursive: true, force: true }))
     const saveEntry = (directory, id, record) => writeFile(join(directory, id + '.json'), JSON.stringify(record))
     const warnings = []
     const fields = { name: 'Check compatibility', note: 'Verify before recommending a trial' }
-    const origin = { sessionId: 'session-a076' + '0'.repeat(28), arm: 'evidence', ...(received && { received: true }) }
     const request = { key: 'a'.repeat(64), digest: 'b'.repeat(64) }
     const makeSaveRequest = () => request
     const stock = { presetId: 'standard', heroId: 'standard', heroName: 'Standard' }

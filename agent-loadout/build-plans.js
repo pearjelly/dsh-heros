@@ -39,8 +39,16 @@ function handoffOrigin(value) {
 }
 
 function webPilotOrigin(value) {
+  if (value?.personal === true) {
+    if (typeof value.sessionId === 'string' && /^session-a077[a-f0-9]{28}$/.test(value.sessionId) &&
+      value.arm === 'evidence' && value.received === undefined) {
+      return { sessionId: value.sessionId, arm: value.arm, personal: true }
+    }
+    return
+  }
   if (typeof value?.sessionId === 'string' && planTaskSessionId.test(value.sessionId) &&
-    (value.arm === 'standard' || value.arm === 'evidence') && (value.received === undefined || value.received === true)) {
+    value.personal === undefined && (value.arm === 'standard' || value.arm === 'evidence') &&
+    (value.received === undefined || value.received === true)) {
     return { sessionId: value.sessionId, arm: value.arm, ...(value.received && { received: true }) }
   }
 }

@@ -1811,7 +1811,7 @@ window.__ModuleLoader__.load({
           h('p', null, t('本局没有交付文件。')))
     }
 
-    function WebPilotPlanSave({ sessionId, run, receivedOutcome, request, dialogRef, onCancel }) {
+    function WebPilotPlanSave({ sessionId, run, receivedOutcome, personal, request, dialogRef, onCancel }) {
       const language = useLanguage()
       const [name, setName] = useState('')
       const [note, setNote] = useState('')
@@ -1840,7 +1840,7 @@ window.__ModuleLoader__.load({
         }
         try {
           const action = 'web-pilot-plan-save'
-          const scope = receivedOutcome ? { received: true } : { arm: run.arm }
+          const scope = personal ? { personal: true } : receivedOutcome ? { received: true } : { arm: run.arm }
           const plan = await request(action, { action, sessionId, ...scope, name: planName, note: planNote,
             saveId: saveIds.current.get(key) }, abort.signal, language)
           if (!abort.signal.aborted) setSavedName(plan.name)
@@ -2296,15 +2296,20 @@ window.__ModuleLoader__.load({
       const [state, setState] = useState(null)
       const [attempt, retry] = useState(0)
       const [comparison, setComparison] = useState(null)
+      const [planSave, setPlanSave] = useState(null)
       const [sourcePending, setSourcePending] = useState(false)
       const [sourceError, setSourceError] = useState('')
       const pending = useRef(null)
       const trigger = useRef(null)
       const dialog = useRef(null)
-      const returnFocus = useRef(false)
+      const saveTrigger = useRef(null)
+      const saveDialog = useRef(null)
+      const returnFocus = useRef(null)
       const current = state?.language === language && state.attempt === attempt ? state : null
       const view = current?.view
       const complete = view?.status === 'complete'
+      const canSavePlan = complete && view.canSavePlan === true
+      const choice = view?.choice || t(view?.choiceRecorded ? '已记录回复' : '未记录选择')
       const statusText = { waiting: '等待发送任务', running: '进行中', 'waiting-choice': '请在会话中的提问卡上作出选择。',
         unavailable: '目前无法核对这次任务的结果。' }
 
@@ -2327,10 +2332,11 @@ window.__ModuleLoader__.load({
       }, [request, sessionId, language, attempt, running, receiptId])
       useEffect(() => () => pending.current?.abort(), [])
       useLayoutEffect(() => {
-        if (comparison || !returnFocus.current) return
-        returnFocus.current = false
-        trigger.current?.focus()
-      }, [comparison])
+        if (comparison || planSave || !returnFocus.current) return
+        const target = returnFocus.current
+        returnFocus.current = null
+        (target.isConnected ? target : trigger.current)?.focus()
+      }, [comparison, planSave])
 
       async function viewSource() {
         if (pending.current) return
@@ -2353,15 +2359,28 @@ window.__ModuleLoader__.load({
 
       function closeSource() {
         dialog.current?.close()
-        returnFocus.current = true
+        returnFocus.current = trigger.current
         setComparison(null)
       }
 
+      function openPlanSave() {
+        if (pending.current) return
+        setPlanSave({ arm: 'evidence', choice, deliverables: view.deliverables })
+      }
+
+      function closePlanSave() {
+        saveDialog.current?.close()
+        returnFocus.current = saveTrigger.current ?? trigger.current
+        setPlanSave(null)
+      }
+
       return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-personal-result', 'aria-label': t(webPilotPersonalTitle) },
-        h('div', { className: 'moba-web-pilot-personal-result-head' },
+        h('div', { className: 'moba-web-pilot-personal-result-head', 'data-save-plan': canSavePlan || undefined },
           h('strong', null, t(webPilotPersonalTitle)),
           h('button', { type: 'button', ref: trigger, className: 'moba-settlement-button', 'aria-haspopup': 'dialog',
-            'aria-disabled': sourcePending, onClick: viewSource }, t('查看实测来源'))),
+            'aria-disabled': sourcePending, onClick: viewSource }, t('查看实测来源')),
+          canSavePlan && h('button', { type: 'button', ref: saveTrigger, className: 'moba-settlement-button moba-web-pilot-personal-plan-save',
+            'aria-haspopup': 'dialog', 'aria-disabled': sourcePending, onClick: openPlanSave }, t('保存为方案'))),
         h('div', { className: 'moba-web-pilot-personal-result-body' },
           !current && h('p', { role: 'status' }, t('正在读取任务结果…')),
           view && !complete && h('p', { role: 'status' }, t(statusText[view.status] ?? statusText.unavailable)),
@@ -2371,8 +2390,7 @@ window.__ModuleLoader__.load({
           sourceError && h('p', { className: 'moba-alert', role: 'alert' }, sourceError),
           view?.sourceChanged && h('p', null, t('这次任务的网页来源与实测时不同。')),
           complete && h(Fragment, null,
-            h('p', null, h('strong', null, t('实际选择')), ' · ',
-              view.choice || t(view.choiceRecorded ? '已记录回复' : '未记录选择')),
+            h('p', null, h('strong', null, t('实际选择')), ' · ', choice),
             view.deliverables?.length > 0 && h('ul', { className: 'moba-web-pilot-files', 'aria-label': t('交付文件') },
               view.deliverables.map((name, index) => h('li', { key: index }, name))),
             view.deliverables?.length === 0 && h('p', null, t('本局没有交付文件。')),
@@ -2391,7 +2409,8 @@ window.__ModuleLoader__.load({
             dialog.current?.close()
             setComparison(null)
             onOpen(targetId)
-          } }))
+          } }),
+        planSave && h(WebPilotPlanSave, { sessionId, run: planSave, personal: true, request, dialogRef: saveDialog, onCancel: closePlanSave }))
     }
 
     function LighthouseReviewStart({ request, onCancel, onOpen }) {
@@ -8280,15 +8299,15 @@ window.__ModuleLoader__.load({
       const [state, setState] = useState(null)
       const trigger = useRef(null)
       const pending = useRef(null)
-      const receivedDialog = useRef(null)
-      const restoreReceivedFocus = useRef(false)
+      const singleRunDialog = useRef(null)
+      const restoreSingleRunFocus = useRef(false)
       const webPilot = plan.hasWebPilotOrigin === true
       const handoff = plan.hasHandoffOrigin === true
 
       useEffect(() => () => pending.current?.abort(), [])
       useLayoutEffect(() => {
-        if (state || !restoreReceivedFocus.current) return
-        restoreReceivedFocus.current = false
+        if (state || !restoreSingleRunFocus.current) return
+        restoreSingleRunFocus.current = false
         trigger.current?.focus()
       }, [state])
 
@@ -8301,7 +8320,7 @@ window.__ModuleLoader__.load({
           const source = await request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
           if (abort.signal.aborted) return
           const valid = webPilot
-            ? source?.status === 'ready' && (source.received === true
+            ? source?.status === 'ready' && ((source.received === true || source.personal === true)
               ? typeof source.sessionId === 'string' && source.sessionId && Object.hasOwn(webPilotArms, source.arm)
               : source.comparison?.runs?.some(run => run.arm === source.arm))
             : source?.sessionId && (handoff ? Object.hasOwn(handoffStyleLabels, source.style)
@@ -8318,16 +8337,16 @@ window.__ModuleLoader__.load({
       }
 
       function back() {
-        if (received) {
-          receivedDialog.current?.close()
-          restoreReceivedFocus.current = true
+        if (singleRun) {
+          singleRunDialog.current?.close()
+          restoreSingleRunFocus.current = true
         }
         setState(null)
-        if (!received) requestAnimationFrame(() => trigger.current?.focus())
+        if (!singleRun) requestAnimationFrame(() => trigger.current?.focus())
       }
 
       const source = state?.source
-      const received = webPilot && source?.received === true
+      const singleRun = webPilot && (source?.received === true || source?.personal === true)
       const visit = sessionId => onVisit(sessionId, webPilot || sessionId === source.sessionId
         ? { id: plan.id, revision: plan.revision, name: plan.name } : undefined)
       return h(Fragment, null,
@@ -8335,7 +8354,7 @@ window.__ModuleLoader__.load({
           ref: trigger, disabled: Boolean(state?.loading), 'aria-haspopup': 'dialog', onClick: open }, t('查看实战来源')),
         state?.loading && h('p', { className: 'moba-plan-note', role: 'status' }, t('正在核对实战来源…')),
         state?.error && h('p', { className: 'moba-alert', role: 'alert' }, state.error),
-        source && (received ? h(InstallDialog, { title: t('此方案保存自这局'), dialogRef: receivedDialog,
+        source && (singleRun ? h(InstallDialog, { title: t('此方案保存自这局'), dialogRef: singleRunDialog,
           className: 'moba-starter-dialog moba-web-pilot-handoff moba-web-pilot-received-origin',
           onCancel: back, initialFocus: '.moba-web-pilot-received-origin-back',
           onKeyDown: event => closeDialogOnEscape(event, back) },
@@ -8344,9 +8363,9 @@ window.__ModuleLoader__.load({
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-received-origin-back', onClick: back }, t('返回方案库')),
             h('button', { type: 'button', className: 'moba-start', onClick: () => {
-              receivedDialog.current?.close()
+              singleRunDialog.current?.close()
               visit(source.sessionId)
-            } }, t('打开原局会话'))))
+            } }, t(source.personal ? '查看原会话' : '打开原局会话'))))
           : webPilot ? h(WebPilotComparison, { comparison: source.comparison, savedPlan: { name: plan.name, arm: source.arm }, onCancel: back, onVisit: visit })
           : handoff ? h(HandoffSourceDialog, { source, planName: plan.name, onBack: back, onVisit: visit })
             : h(RunComparison, { kind: 'rematch', comparisonId: source.comparisonId, testedSourceArm: source.arm, evidenceReplayHint: true,
@@ -14415,6 +14434,8 @@ window.__ModuleLoader__.load({
         grid-template-rows: auto minmax(0, 1fr); align-items: start; }
       .moba-web-pilot-personal-result > .moba-web-pilot-personal-result-head { display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(0, max-content); align-items: center; }
+      .moba-web-pilot-personal-result-head[data-save-plan] {
+        grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(0, max-content); }
       .moba-web-pilot-personal-result > .moba-web-pilot-personal-result-body { display: grid; gap: 3px;
         align-content: start; min-block-size: 0; overflow: auto; scroll-padding-block: 4px; }
       .moba-web-pilot-personal-result-body p { margin: 0; color: #ccdcd8; font-size: 11px; }
@@ -14431,6 +14452,7 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-result :is(.moba-web-pilot-compare, .moba-web-pilot-received, .moba-web-pilot-replay-primary, .moba-web-pilot-review[data-primary]) {
         background: #392e20; border-color: #ad8c52; color: #ffe3ab;
       }
+      .moba-web-pilot-personal-result .moba-web-pilot-personal-plan-save { background: #392e20; border-color: #ad8c52; color: #ffe3ab; }
       .moba-web-pilot-result:focus-visible, .moba-web-pilot-result :is(button, a):focus-visible,
       .moba-web-pilot-comparison :is(button, a):focus-visible,
       .moba-web-pilot-replay-list button:focus-visible,
@@ -14528,6 +14550,7 @@ window.__ModuleLoader__.load({
       }
       @media (max-width: 600px) {
         .moba-web-pilot-personal-result { max-block-size: max(84px, calc(100dvh - 450px)); }
+        .moba-web-pilot-personal-result-head[data-save-plan] { grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr) minmax(0, 1fr); }
         .moba-web-pilot-result { box-sizing: border-box; align-content: start;
           max-block-size: max(88px, calc(100dvh - 444px)); overflow: auto; scroll-padding-block: 8px; }
         .moba-web-pilot-result:has(> .moba-web-pilot-consequence) { max-block-size: max(88px, calc(100dvh - 416px)); }
