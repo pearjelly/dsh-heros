@@ -246,6 +246,41 @@ export function decodeLighthouseReviewChallenge(value) {
   throw new Error(invalidChallenge)
 }
 
+const webPilotChallengePrefix = 'DSHC4.'
+const webPilotChallengeSamples = { en: 'web-pilot-1-en', zh: 'web-pilot-1-zh' }
+const invalidWebPilotChallenge = '网页试玩邀请码无效或版本不受支持。'
+
+export function isWebPilotChallenge(value) {
+  return typeof value === 'string' && value.trim().startsWith(webPilotChallengePrefix)
+}
+
+export function encodeWebPilotChallenge(sampleLanguage, played) {
+  if (typeof sampleLanguage !== 'string' || !Object.hasOwn(webPilotChallengeSamples, sampleLanguage) ||
+    !['standard', 'evidence'].includes(played)) {
+    throw new Error(invalidWebPilotChallenge)
+  }
+  const sample = webPilotChallengeSamples[sampleLanguage]
+  return webPilotChallengePrefix + Buffer.from(JSON.stringify({ sample, played })).toString('base64url')
+}
+
+export function decodeWebPilotChallenge(value) {
+  if (!isWebPilotChallenge(value) || value.length > 128) throw new Error(invalidWebPilotChallenge)
+  const code = value.trim()
+  const payload = code.slice(webPilotChallengePrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidWebPilotChallenge)
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (shape(data, ['sample', 'played'])) {
+      const { sample, played } = data
+      const sampleLanguage = Object.keys(webPilotChallengeSamples).find(key => webPilotChallengeSamples[key] === sample)
+      if (sampleLanguage && encodeWebPilotChallenge(sampleLanguage, played) === code) return { sampleLanguage, played }
+    }
+  } catch {
+    // Invited tasks use only the exact bundled sample.
+  }
+  throw new Error(invalidWebPilotChallenge)
+}
+
 const reviewReportPrefix = 'DSHR3.'
 const invalidReviewReport = '灯塔交接战报码无效或版本不受支持。'
 

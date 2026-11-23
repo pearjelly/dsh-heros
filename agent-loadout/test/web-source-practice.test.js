@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { openBuildPlans } from '../build-plans.js'
+import { decodeWebPilotChallenge, encodeWebPilotChallenge } from '../build-sharing.js'
 import { matchReport, toolSourceRecord, webRecoveryFingerprint } from '../match-report.js'
 import { englishText } from '../localization.js'
 import { observedWebSource, observedWebSourceResult, webSourceUrl } from '../web-source-practice.js'
@@ -27,6 +28,25 @@ test('Web Research accepts the complete pinned native manifest', () => {
   const events = evidence()
   assert.equal(observedWebSource(events, 1, binding), true)
   assert.equal(observedWebSourceResult(events, 1, binding), events[2])
+})
+
+test('Web practice invitations disclose only the fixed public sample and inviter loadout', () => {
+  const encode = value => 'DSHC4.' + Buffer.from(JSON.stringify(value)).toString('base64url')
+  for (const sampleLanguage of ['en', 'zh']) {
+    for (const played of ['standard', 'evidence']) {
+      const code = encodeWebPilotChallenge(sampleLanguage, played)
+      assert.equal(code, encode({ sample: 'web-pilot-1-' + sampleLanguage, played }))
+      assert.deepEqual(decodeWebPilotChallenge(' ' + code + '\n'), { sampleLanguage, played })
+    }
+  }
+  const valid = { sample: 'web-pilot-1-en', played: 'standard' }
+  for (const altered of [
+    { ...valid, sessionId: 'private' },
+    { ...valid, task: 'Read a different source' },
+    { ...valid, sample: 'web-pilot-2-en' },
+    { ...valid, played: 'minimal' },
+    { played: valid.played, sample: valid.sample },
+  ]) assert.throws(() => decodeWebPilotChallenge(encode(altered)))
 })
 
 test('saving a web pilot arm deduplicates concurrent requests and retains its source until the recipe changes', async t => {

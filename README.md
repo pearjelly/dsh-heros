@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.211.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.212.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -32,6 +32,8 @@ In the Armory, use **Choose a loadout** to jump to **Hero roster**. Select a her
 Open **Web Research practice** at the top of the lobby and choose **Stock Standard** or **Standard + Evidence Check** when those loadouts are available. Both read the same publisher statement. Would you recommend a trial without a local test? Review and send the draft. With Evidence Check equipped, the native question card lets you choose how to handle missing evidence. Use the report to check the actual source, choice, and any delivered draft.
 
 From a verified result, choose **Try again with the other loadout** and open its draft. After both runs verify the same manifest, the replay lets you compare their recorded choices and delivered files and return to either conversation.
+
+Choose **Invite a friend to the same practice** from a verified public run and copy the invitation. Your friend can paste the whole message in **Join a practice challenge**, see your loadout and the original task language, and pick an available loadout. They open a new draft and send it themselves. The invitation carries the fixed public sample and your loadout. Choices, files, and conversation history stay in your profile.
 
 In the original conversation, choose **View replays** to continue an unsent replay from its existing draft, or pick a completed replay to compare its actual result against the original. Each completed row shows its recorded choice and deliveries. You can still start another replay to try a different decision.
 
@@ -66,7 +68,7 @@ After a different source returns an untruncated response, open both addresses fr
 ### Share the hero trial
 
 1. After one stock hero finishes a verified round, choose **Share hero trial**. **Copy challenge invitation** lets you ask a friend which hero they would pick for the same supply card. You can also copy the code alone. The code identifies the public sample version and task language and carries the handoff need. Your replies, files, and workspaces stay in your profile.
-2. In the Armory's Lighthouse section, choose **Join a Lighthouse challenge** and paste the whole message or a raw code into **Challenge invitation or code**. The plugin extracts one distinct supported code locally. If your paste contains different codes, keep the one you want to check. Choose **Check challenge code**, read the original task, handoff need, and what each hero can deliver, then choose your first hero and manually send the task in DSH. The same entry accepts shared Lighthouse evidence challenges.
+2. In the Armory's Lighthouse section, choose **Join a practice challenge** and paste the whole message or a raw code into **Challenge invitation or code**. The plugin extracts one distinct supported code locally. If your paste contains different codes, keep the one you want to check. Choose **Check challenge code**, read the original task, handoff need, and what each hero can deliver, then choose your first hero and manually send the task in DSH. The same entry accepts shared Lighthouse evidence challenges.
 
 ### Compare a friend's trial report
 
@@ -126,7 +128,7 @@ After the alternate session finishes, its task result can show both personal run
 ## Share a Lighthouse challenge
 
 1. Complete the public **Missing key evidence** exercise and open **View evidence run**. Choose **Share a Lighthouse challenge** and **Copy invitation** to share the problem with a friend. The invitation includes the installation guide and a code for the packaged sample and standard loadout.
-2. To play a shared challenge, choose **Join a Lighthouse challenge** in the Armory's Lighthouse section. You can also reach it from **Lighthouse Supply Run**. Paste the code yourself and choose **Check challenge code**. After checking the sample and equipment sources, you can record your own optional opening choice and open a fresh session. Manually send the task and decide on the native DSH question card.
+2. To play a shared challenge, choose **Join a practice challenge** in the Armory's Lighthouse section. You can also reach it from **Lighthouse Supply Run**. Paste the code yourself and choose **Check challenge code**. After checking the sample and equipment sources, you can record your own optional opening choice and open a fresh session. Manually send the task and decide on the native DSH question card.
 3. If the sample and stock loadout match and only the source package versions differ, choose **Review the local Standard loadout**. Check the original DSH version alongside the gear and sources this session will actually use. You can then record an opening choice and manually send the task in a new DSH session. A missing stock source or a different loadout blocks this option, while exact matches continue to open from the original check.
 4. After your decision is verified, choose **Copy my decision for a friend** in the same DSH conversation and send the code to your friend yourself. When you have their code, open **View evidence run** and choose **Compare a friend's decision**. The code carries only the public sample version, the recorded choice, and whether a file was delivered. The board labels your own verified result and your friend's shared result.
 5. Choose **Play again with the same loadout** from the comparison to try another choice on the same sample. Open the new draft and manually send the same task, then make a fresh decision on the native question card.
@@ -164,11 +166,11 @@ The chooser shows the shared loadout of **Standard** and **Deliverable Preview**
 
 After a verified review, choose **Try direct delivery** in the original conversation or its lesson results. Check that only Delivery Review is removed, then open a new draft with the same public sample and task. Send it yourself, then compare your review choice and the new run's actual attachment. You can bring either tested loadout to your own task.
 
-You can also choose **Invite a friend to the same handoff** after the round is verified. Your friend pastes the invitation into **Join a Lighthouse challenge** and checks the code. The verified invitation shows the shared loadout and the extra Delivery Review gear before they pick a route. **Edit invitation** reopens the pasted text for a new check. Both use the same public card and task language. The invitation contains the public sample and your route.
+You can also choose **Invite a friend to the same handoff** after the round is verified. Your friend pastes the invitation into **Join a practice challenge** and checks the code. The verified invitation shows the shared loadout and the extra Delivery Review gear before they pick a route. **Edit invitation** reopens the pasted text for a new check. Both use the same public card and task language. The invitation contains the public sample and your route.
 
 After your handoff is verified, choose **Copy report for a friend** in the practice conversation and send them the code. When they send theirs, choose **Compare a friend's report** and paste it to compare routes, recorded review decisions, and whether each handoff included the original card. Your files and session stay in your Profile.
 
-If the reply arrives later, choose **Find my handoff reports** in the lobby. Pick your round by route, choice, attachment and time. You can compare the reply from that card or reopen the exact practice conversation. Pasting a report code into **Join a Lighthouse challenge** shows the report’s task language and offers verified rounds in that language. Choose a round yourself, or select **Edit report code** to change the pasted code.
+If the reply arrives later, choose **Find my handoff reports** in the lobby. Pick your round by route, choice, attachment and time. You can compare the reply from that card or reopen the exact practice conversation. Pasting a report code into **Join a practice challenge** shows the report’s task language and offers verified rounds in that language. Choose a round yourself, or select **Edit report code** to change the pasted code.
 
 If you delivered directly, choose **Add Delivery Review and replay** after checking a friend's report. The second draft keeps the same task and original reading and delivery tools. After you manually send it and make a verified choice, **Compare my two handoffs** shows both of your results and opens either original conversation.
 
