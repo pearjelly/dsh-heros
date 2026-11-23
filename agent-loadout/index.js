@@ -82,6 +82,11 @@ const stockTransferChanged = '原装英雄的工具或来源已变化，请重�
 const workflowPlugin = 'dsh-agent-loadout/workflow'
 const teamToolsModule = '@deepseek-ai/dsh-tool-agent-team'
 const equipmentById = new Map(equipment.map(item => [item.id, item]))
+const webPilotTools = [
+  ['web_fetch', webSourceModule],
+  ['ask_user_question', equipmentById.get('evidence').requires],
+  ['present', equipmentById.get('present').module],
+]
 const presetLabels = new Map(Object.entries(presetCopy))
 
 function flatten(rows) {
@@ -866,11 +871,13 @@ export async function apply(ctx) {
     const lastHeroTrial = heroTrials.latest()
     const hasLighthouseHandoffs = Boolean(workspaceComparisons.latest(lighthouseReviewLanguage) ||
       rematchComparisons.latest(lighthouseReviewLanguage))
+    const [heroTrialReady, webPractice] = await Promise.all([heroTrialAvailable(ecosystem), webPracticeAvailability(ecosystem)])
     return {
       roles,
       standingClaims,
       lighthouseWorkspaceId: sampleWorkspace?.id,
-      heroTrialAvailable: await heroTrialAvailable(ecosystem),
+      heroTrialAvailable: heroTrialReady,
+      webPractice,
       ...(lastHeroTrial && { lastHeroTrial: { id: lastHeroTrial.id, need: lastHeroTrial.need } }),
       ...(hasLighthouseHandoffs && { hasLighthouseHandoffs }),
       ...((lastHeroTrial || workspaceComparisons.latest(record => record.lesson === evidenceLesson || record.reviewChallengeArm)) &&
@@ -1457,22 +1464,33 @@ export async function apply(ctx) {
 
   function pilotWebTool(scope) {
     const origins = ctx.get('agentLoadoutToolOrigins')
-    const tools = [
-      ['web_fetch', webSourceModule],
-      ['ask_user_question', equipmentById.get('evidence').requires],
-      ['present', equipmentById.get('present').module],
-    ]
-    if (tools.every(([name, module]) => {
+    if (webPilotTools.every(([name, module]) => {
       const tool = ctx.tools.get(name, scope)
       return tool && origins?.get(tool, scope)?.moduleName === module
     })) return ctx.tools.get('web_fetch', scope)
   }
 
-  async function plannedWebSourceLoadout(signal, arm) {
-    if (!toolRuntime || !ctx.get('sessionController')?.resolveAgent || !ctx.get('workspaceRegistry')?.create) {
+  function canOpenWebPractice() {
+    const controller = ctx.get('sessionController')
+    return toolRuntime && controller?.create && controller.resolveAgent && ctx.get('sessionQuery') &&
+      ctx.get('workspaceRegistry')?.create
+  }
+
+  async function webPracticeAvailability(ecosystem) {
+    if (!canOpenWebPractice()) return { source: false, pilot: false }
+    const environment = await shareEnvironment(ecosystem).catch(() => null)
+    if (!environment) return { source: false, pilot: false }
+    const [source, standard, evidence] = await Promise.all([undefined, 'standard', 'evidence']
+      .map(arm => plannedWebSourceLoadout(undefined, arm, environment).catch(() => null)))
+    return { source: Boolean(source), pilot: Boolean(standard && evidence &&
+      standard.webToolId === evidence.webToolId && standard.webToolSource === evidence.webToolSource) }
+  }
+
+  async function plannedWebSourceLoadout(signal, arm, environment) {
+    if (!canOpenWebPractice()) {
       throw new Error(webSourceUnavailable)
     }
-    const { ecosystem, sources } = await shareEnvironment()
+    const { ecosystem, sources } = environment ?? await shareEnvironment()
     const presetId = arm ? 'standard' : 'minimal'
     const preset = ecosystem.presets.find(item => item.id === presetId)
     if (!preset || preset.broken || sources.hero(presetId)?.owner.package !== '@deepseek-ai/dsh-web-app') {
@@ -1483,15 +1501,22 @@ export async function apply(ctx) {
     const baseline = [...summarizeCapabilities(ecosystem, presetId, {}).values()]
       .filter(item => item.kind === 'tool')
     const standing = item => !item.timing || (arm && item.timing === 'condition')
-    const hasTool = name => baseline.some(item => item.name === name && (arm ? standing(item) : true))
-    if (arm ? !['web_fetch', 'ask_user_question', 'present'].every(hasTool) : !hasTool('bash') || hasTool('web_fetch')) {
+    const hasTool = name => baseline.some(item => item.name === name)
+    const units = ecosystem.unitsByPreset.get(presetId) ?? []
+    const nativeSource = (source, module) => units.some(unit => unit.active && unit.id === source && unit.modules.includes(module))
+    const hasNativeTool = ([name, module]) => baseline.some(item =>
+      item.name === name && standing(item) && nativeSource(item.sourceId, module))
+    if (arm ? !webPilotTools.every(hasNativeTool) : !hasTool('bash') || hasTool('web_fetch')) {
       throw new Error(webSourceUnavailable)
     }
-    const { candidate, choices } = await plannedGrowth(draft, { ecosystem })
+    const candidate = await plan(draft, ecosystem)
+    const choices = [...plannedGear(ecosystem, presetId, candidate, []).values()]
     const fetches = choices.filter(item => item.kind === 'tool' && item.name === 'web_fetch' && standing(item))
     if (fetches.length !== 1) throw new Error(webSourceUnavailable)
     const [{ id: webToolId, sourceId }] = fetches
-    if (arm && (!sourceId || !baseline.some(item => item.id === webToolId && item.sourceId === sourceId))) throw new Error(webSourceUnavailable)
+    if (arm && (!nativeSource(sourceId, webSourceModule) || !baseline.some(item => item.id === webToolId && item.sourceId === sourceId))) {
+      throw new Error(webSourceUnavailable)
+    }
     signal?.throwIfAborted()
     return { draft, candidate, webToolId, webToolSource: arm ? sourceId : undefined }
   }

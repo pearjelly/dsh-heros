@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.209.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.210.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -27,11 +27,9 @@ Open **DSH-Heros** from the sidebar, or choose **Open DSH-Heros** above the comp
 
 In the Armory, use **Choose a loadout** to jump to **Hero roster**. Select a hero, then equip tools or plugins from the gear list. Choose **Use this loadout on a task** beside the gear list. Pick your own material, write the task, and review the gear and any new decisions. Confirm to open a new DSH draft, then send it yourself. After Standard has handed off the verified original, choose **Try Delivery Review** in that conversation. Add just that gear and send the same task in the new draft. The top of the verified report shows both outcomes, including the real choice, files and links to both conversations. Review the loadout you want to keep. Once you save it as a named plan, choose **Start a task with this loadout** from the save confirmation to pick a new file and write a new task.
 
-## Which version of the rule applies?
+## Try two loadouts on the same claim
 
-Open **Web Research practice** near the top of the lobby, or choose **Which version of the rule applies?** on the **Web Research** gear card. The old setup sheet lists RC builds. Can your preview build use this loadout? The practice equips Minimal with native web reading and opens a separate draft for you to send. Once the tool retrieves the full pinned publisher source, you can **Use the current manifest**. Choose **Keep unverified** if you want to hold off.
-
-In the same practice menu, choose **Is a compatibility claim enough to recommend a trial?** Pick **Stock Standard** or **Standard + Evidence Check**, then review and send the draft. Both loadouts read the same publisher manifest. The task asks whether to recommend a trial with no local test result. Make your decision if the native question card appears, then use the report to check the actual source, choice, and any delivered draft.
+Open **Web Research practice** at the top of the lobby and choose **Stock Standard** or **Standard + Evidence Check** when those loadouts are available. Both read the same publisher statement. Would you recommend a trial without a local test? Review and send the draft. With Evidence Check equipped, the native question card lets you choose how to handle missing evidence. Use the report to check the actual source, choice, and any delivered draft.
 
 From a verified result, choose **Try again with the other loadout** and open its draft. After both runs verify the same manifest, the replay lets you compare their recorded choices and delivered files and return to either conversation.
 
@@ -40,6 +38,8 @@ In **Compare the runs**, choose **Use this loadout on my task** on either side. 
 To keep a tested loadout, choose **Save as a plan** on its side of the comparison. You can see that run's decision and files while naming the plan and adding an optional note about when to use it. In **Loadout plans**, choose **View tested source** to revisit both runs and see which one you saved, or **Apply loadout** to use the saved kit in the Armory. The share code carries the loadout recipe. Decisions, delivery filenames, and original conversations stay in your profile.
 
 From a saved Web Research plan, choose **Start a web task with this loadout**. If you saved the other side of the same comparison, its name and note appear alongside the current plan. Choose the loadout that fits your new question, select your workspace, then **Open blank draft**. Paste your new link, write the question, and send it yourself.
+
+On the **Web Research** gear card, choose **Which version of the rule applies?** for the Minimal practice. The lobby opens this exercise directly if only Minimal is ready. Compare an old setup sheet with the publisher's current manifest. After the tool retrieves the full source, choose **Use the current manifest** or **Keep unverified**.
 
 When the source is missing or the result is marked unverified, **Try the same question again** opens a new draft with the original question. Any recorded choice remains in the original conversation.
 

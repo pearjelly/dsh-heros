@@ -1021,7 +1021,7 @@ window.__ModuleLoader__.load({
     function ItemDetail({ item, status, equipped, heroNames, presets, roles, request, onShowHero, onPreviewPairing, onFit, onPrepareTrial, onToggle, onManage, onEnable, onOpenSource, onConfigureSource,
       onAppearance, onActions, onCollection, onConfigureModule, sourceOptions, sourceChoice, onSource, builtIn, onBuiltIn, replacement,
       disabled, appearanceDisabled, toolLinks, providerLinks, moduleLinks, linkedSource, onInspectRelated,
-      onPracticeEvidence, onEvidenceHistory, onPracticeWeb, revision }) {
+      onPracticeEvidence, onEvidenceHistory, onPracticeWebSource, onPracticeWebPilot, revision }) {
       if (!item) return h('p', { className: 'moba-empty' }, t('没有找到符合条件的装备。'))
       if (status?.state === 'configure') return h('div', { className: 'moba-detail', id: 'moba-item-detail', 'aria-live': 'polite' },
         h('div', { className: 'moba-detail-head' },
@@ -1097,8 +1097,11 @@ window.__ModuleLoader__.load({
         item.id === 'evidence' && (onPracticeEvidence || onEvidenceHistory) && h(EvidenceDetailActions, {
           request, revision, onPractice: onPracticeEvidence, onHistory: onEvidenceHistory, disabled,
         }),
-        item.id === 'web' && onPracticeWeb && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
-          disabled, onClick: event => onPracticeWeb(event.currentTarget) }, t('哪一版规则有效？')),
+        item.id === 'web' && (onPracticeWebSource || onPracticeWebPilot) && h('div', { className: 'moba-web-detail-practice' },
+          onPracticeWebSource && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+            disabled, onClick: event => onPracticeWebSource(event.currentTarget) }, t('哪一版规则有效？')),
+          onPracticeWebPilot && h('button', { type: 'button', className: 'moba-roster-open', 'aria-haspopup': 'dialog',
+            disabled, onClick: event => onPracticeWebPilot(event.currentTarget) }, t(webPilotTitle))),
         item.modules?.length > 1 && h('p', { className: 'moba-condition' }, t('成套装配 ') + item.modules.join(' · ')),
         toolLinks.length ? h(EquipmentLinks, { title: t('提供的工具'), action: t('查看工具'), links: toolLinks, onOpen: onInspectRelated })
           : item.provides?.length > 0 && h('p', { className: 'moba-condition' }, t('提供工具 ') + item.provides.join(' · ')),
@@ -1304,9 +1307,10 @@ window.__ModuleLoader__.load({
     }
 
     const webPilotTitle = '兼容声明够不够推荐试用？'
+    const webPilotPrompt = '没有本机试跑记录，你会推荐试用吗？'
     const webPilotArms = {
-      standard: { name: '原装标准模式', detail: '原装工具', icon: 'crest' },
-      evidence: { name: '标准模式 + 证据核验', detail: '只加装证据核验', icon: 'plus' },
+      standard: { name: '原装标准模式', detail: '原装工具', firstUseDetail: '按原装流程整理资料，给出试用判断。', icon: 'crest' },
+      evidence: { name: '标准模式 + 证据核验', detail: '只加装证据核验', firstUseDetail: '证据不足时，可以选择补证、降级推荐或暂缓。', icon: 'plus' },
     }
 
     function WebPilotPractice({ request, initialArm = '', sampleLanguage, parentSessionId, onCancel, onOpen }) {
@@ -1322,13 +1326,18 @@ window.__ModuleLoader__.load({
       const current = state?.arm === arm && state.language === language && state.attempt === attempt ? state : null
       const preview = current?.preview
       const parentForArm = arm === initialArm ? parentSessionId : undefined
+      const firstUse = !initialArm
 
       useEffect(() => {
         if (!arm) return
         const abort = new AbortController()
         const action = 'web-pilot-preview'
         request(action, { action, arm, sampleLanguage, parentSessionId: parentForArm }, abort.signal, language)
-          .then(value => { if (!abort.signal.aborted) setState({ preview: value, arm, language, attempt }) })
+          .then(value => {
+            if (abort.signal.aborted) return
+            if (!value?.token) throw new Error(t('试玩出装已变化，请重新核对。'))
+            setState({ preview: value, arm, language, attempt })
+          })
           .catch(reason => { if (!abort.signal.aborted) setState({ error: reason.message, arm, language, attempt }) })
         return () => abort.abort()
       }, [request, arm, attempt, language, sampleLanguage, parentForArm])
@@ -1357,10 +1366,12 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h(InstallDialog, { title: t(webPilotTitle), className: 'moba-starter-dialog moba-web-source-dialog moba-web-pilot-dialog',
+      return h(InstallDialog, { title: t(firstUse ? webPilotPrompt : webPilotTitle),
+        className: 'moba-starter-dialog moba-web-source-dialog moba-web-pilot-dialog',
         initialFocus: initialArm ? 'input:checked' : 'input[type="radio"]', busy, onCancel,
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening.current) onCancel() }) },
-        h('p', null, t('两套出装读同一份发布方清单。题目只提供兼容声明，缺少本机试跑记录。')),
+        h('p', null, t(firstUse ? '两套出装读同一份公开声明，判断是否建议试用。'
+          : '两套出装读同一份发布方清单。题目只提供兼容声明，缺少本机试跑记录。')),
         h('form', { onSubmit: open },
           h('fieldset', { className: 'moba-starter-routes', disabled: busy },
             h('legend', null, t('选择本局出装')),
@@ -1370,7 +1381,8 @@ window.__ModuleLoader__.load({
                 setState(null)
                 setOpenError('')
               } }),
-              h('span', null, h('strong', null, h(Glyph, { kind: option.icon, size: 16 }), t(option.name)), h('small', null, t(option.detail)))))),
+              h('span', null, h('strong', null, h(Glyph, { kind: option.icon, size: 16 }), t(option.name)),
+                h('small', null, t(firstUse ? option.firstUseDetail : option.detail)))))),
           preview && h(InstallFacts, { facts: [[t('准备试用'), 'v' + preview.version], [t('测试机'), 'DSH ' + preview.hostVersion]] }),
           h('p', { className: 'moba-starter-note' }, t('练习自带示例材料，无需保存方案。每一局都由你在会话中手动发送。')),
           arm && !current && h('p', { role: 'status' }, t('正在核对试用推荐出装…')),
@@ -1383,16 +1395,14 @@ window.__ModuleLoader__.load({
               t(busy ? '正在准备对局…' : '打开试玩草稿'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
-    function WebSourcePractice({ request, sampleLanguage, canPracticePilot, onCancel, onOpen }) {
+    function WebSourcePractice({ request, sampleLanguage, onCancel, onOpen }) {
       const language = useLanguage()
       const [attempt, retry] = useState(0)
       const [state, setState] = useState(null)
       const [busy, setBusy] = useState(false)
       const [openError, setOpenError] = useState('')
-      const [pilotOpen, setPilotOpen] = useState(false)
       const launch = useRef(null)
       const opening = useRef(null)
-      const pilotTrigger = useRef(null)
       const current = state?.language === language && state.attempt === attempt ? state : null
       const preview = current?.preview
 
@@ -1428,30 +1438,22 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h(Fragment, null,
-        h(InstallDialog, { title: t('哪一版规则有效？'), className: 'moba-starter-dialog moba-web-source-dialog',
-          initialFocus: '.moba-web-source-back', busy, onCancel },
-          h('p', null, t('用极简模式加装网页检索，对照旧安装表与发布方原文。')),
-          canPracticePilot && h('button', { type: 'button', ref: pilotTrigger, className: 'moba-roster-open moba-web-pilot-entry',
-            disabled: busy, 'aria-haspopup': 'dialog', onClick: () => setPilotOpen(true) },
-            h('span', null, t(webPilotTitle)), h(Glyph, { kind: 'arrow', size: 14 })),
-          preview && h(InstallFacts, { facts: [[t('旧安装表'), 'v' + preview.oldVersion + ' · ' + t('只列 RC 版')], [t('准备试用'), 'v' + preview.version],
-            [t('测试机'), 'DSH ' + preview.hostVersion]] }),
-          h('p', { className: 'moba-starter-note' }, t(sampleLanguage
-            ? '新局使用同一题，原局选择保留。打开草稿后手动发送。'
-            : '打开独立草稿，手动发送。看完原文后，由你决定采用新版或标为待核实。')),
-          !current && h('p', { role: 'status' }, t('正在核对网页检索出装…')),
-          (openError || current?.error) && h('p', { className: 'moba-alert', role: 'alert' }, openError || current.error),
-          h('div', { className: 'moba-market-actions moba-starter-actions' },
-            h('button', { type: 'button', className: 'moba-roster-open moba-web-source-back', onClick: onCancel, disabled: busy }, t('返回')),
-            (openError || current?.error) && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
-              onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
-            preview?.token && h('button', { type: 'button', className: 'moba-start', disabled: busy, onClick: open },
-              t(busy ? '正在准备对局…' : '打开试玩草稿'), h(Glyph, { kind: 'arrow', size: 16 })))),
-        pilotOpen && h(WebPilotPractice, { request, onOpen, onCancel: () => {
-          setPilotOpen(false)
-          requestAnimationFrame(() => pilotTrigger.current?.focus())
-        } }))
+      return h(InstallDialog, { title: t('哪一版规则有效？'), className: 'moba-starter-dialog moba-web-source-dialog',
+        initialFocus: '.moba-web-source-back', busy, onCancel },
+        h('p', null, t('用极简模式加装网页检索，对照旧安装表与发布方原文。')),
+        preview && h(InstallFacts, { facts: [[t('旧安装表'), 'v' + preview.oldVersion + ' · ' + t('只列 RC 版')], [t('准备试用'), 'v' + preview.version],
+          [t('测试机'), 'DSH ' + preview.hostVersion]] }),
+        h('p', { className: 'moba-starter-note' }, t(sampleLanguage
+          ? '新局使用同一题，原局选择保留。打开草稿后手动发送。'
+          : '打开独立草稿，手动发送。看完原文后，由你决定采用新版或标为待核实。')),
+        !current && h('p', { role: 'status' }, t('正在核对网页检索出装…')),
+        (openError || current?.error) && h('p', { className: 'moba-alert', role: 'alert' }, openError || current.error),
+        h('div', { className: 'moba-market-actions moba-starter-actions' },
+          h('button', { type: 'button', className: 'moba-roster-open moba-web-source-back', onClick: onCancel, disabled: busy }, t('返回')),
+          (openError || current?.error) && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
+            onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
+          preview?.token && h('button', { type: 'button', className: 'moba-start', disabled: busy, onClick: open },
+            t(busy ? '正在准备对局…' : '打开试玩草稿'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
     function WebPersonalWorkspaceFields({ available, workspace, busy, onChange, onAdded }) {
@@ -5700,7 +5702,7 @@ window.__ModuleLoader__.load({
     function Shop({ items, roles, activeId, statuses, selected, heroNames, presets, onShowHero, onPreviewPairing, onFit, onPrepareTrial, onInspect, onToggle, onManage, onEnable, onRefresh,
       onOpenSource, onEditSaved, onAppearance, onActions, onCollection, equipmentSources, onSource,
       builtIn, removed, removalRoots, onBuiltIn, standingClaims, request, revision, disabled, saved, profileError, requestedItem,
-      onPracticeEvidence, onEvidenceHistory, onPracticeWeb, taskAction }) {
+      onPracticeEvidence, onEvidenceHistory, onPracticeWebSource, onPracticeWebPilot, taskAction }) {
       const [category, setCategory] = useState('featured')
       const [role, setRole] = useState('')
       const [query, setQuery] = useState('')
@@ -5927,7 +5929,8 @@ window.__ModuleLoader__.load({
           status: inspectedStatus, equipped: active && isEquipped(active), replacement,
           heroNames, presets, roles, request, onShowHero, onPreviewPairing, onFit: !saved && onFit, onPrepareTrial, onToggle, onManage, onEnable, onOpenSource, disabled: disabled || saved,
           builtIn: activeBuiltIn, onBuiltIn, onPracticeEvidence: !saved && onPracticeEvidence,
-          onEvidenceHistory: !saved && onEvidenceHistory, onPracticeWeb: !saved && onPracticeWeb, revision,
+          onEvidenceHistory: !saved && onEvidenceHistory, onPracticeWebSource: !saved && onPracticeWebSource,
+          onPracticeWebPilot: !saved && onPracticeWebPilot, revision,
           onAppearance, onActions, onCollection, sourceOptions, sourceChoice, onSource: changeSource, appearanceDisabled: disabled,
           toolLinks, providerLinks, moduleLinks, linkedSource, onInspectRelated: inspectRelated,
           onConfigureModule: initialModule => setDialog({ kind: 'custom', initialModule }),
@@ -8318,7 +8321,7 @@ window.__ModuleLoader__.load({
       const challengeButton = useRef(null)
       const [reviewStartOpen, setReviewStartOpen] = useState(false)
       const reviewStartButton = useRef(null)
-      const [webPracticeTrigger, setWebPracticeTrigger] = useState(null)
+      const [webPractice, setWebPractice] = useState(null)
       const starterChallengeButton = useRef(null)
       const [lighthouseRunsView, setLighthouseRunsView] = useState(null)
       const pendingLighthouseButton = useRef(null)
@@ -8478,10 +8481,10 @@ window.__ModuleLoader__.load({
       }, [request, loadAttempt, language])
 
       const presets = data?.presets ?? empty
-      const canPracticeWebSource = presets.some(hero => hero.id === 'minimal' && !hero.broken)
-      const canPracticeWebPilot = presets.some(hero => hero.id === 'standard' && !hero.broken)
+      const canPracticeWebSource = data?.webPractice?.source === true
+      const canPracticeWebPilot = data?.webPractice?.pilot === true
       const canPracticeWeb = canPracticeWebSource || canPracticeWebPilot
-      const WebPracticeDialog = canPracticeWebSource ? WebSourcePractice : WebPilotPractice
+      const WebPracticeDialog = webPractice?.kind === 'pilot' ? WebPilotPractice : WebSourcePractice
       const roles = data?.roles ?? emptyMap
       const savedBuilds = labelSavedBuilds(data?.saved ?? empty)
       const plans = data?.plans ?? empty
@@ -9031,10 +9034,12 @@ window.__ModuleLoader__.load({
                 'aria-pressed': fullscreen, title: fullscreen ? t('退出全屏') : t('全屏备战') }, h(Glyph, { kind: 'fullscreen' })))),
           data && h('div', { className: 'moba-lobby-entry-actions' },
             canPracticeWeb && h('button', { type: 'button', className: 'moba-starter-entry moba-web-practice-entry',
-              disabled: pending, 'aria-haspopup': 'dialog', onClick: event => setWebPracticeTrigger(event.currentTarget) },
+              disabled: pending, 'aria-haspopup': 'dialog', onClick: event => setWebPractice({
+                kind: canPracticeWebPilot ? 'pilot' : 'source', trigger: event.currentTarget,
+              }) },
               h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'search', size: 20 })),
               h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t('网页检索试玩')),
-                h('span', null, t(canPracticeWebSource ? '旧表只列 RC，预览版能用吗？' : webPilotTitle))),
+                h('span', null, t(canPracticeWebPilot ? webPilotPrompt : '旧表只列 RC，预览版能用吗？'))),
               h(Glyph, { kind: 'arrow', size: 18 })),
             h('button', { type: 'button', className: 'moba-roster-open moba-choose-loadout', disabled: pending, onClick: chooseLoadout },
               h(Glyph, { kind: 'team', size: 17 }), t('去配装'))),
@@ -9108,11 +9113,11 @@ window.__ModuleLoader__.load({
             setStarterOpen(false)
             openDraftSession(sessionId, task)
           } }),
-          webPracticeTrigger && h(WebPracticeDialog, { request, canPracticePilot: canPracticeWebPilot, onCancel: () => {
-            setWebPracticeTrigger(null)
-            requestAnimationFrame(() => webPracticeTrigger.focus())
+          webPractice && h(WebPracticeDialog, { request, onCancel: () => {
+            setWebPractice(null)
+            requestAnimationFrame(() => webPractice.trigger.focus())
           }, onOpen: (sessionId, task) => {
-            setWebPracticeTrigger(null)
+            setWebPractice(null)
             openDraftSession(sessionId, task)
           } }),
           reviewStartOpen && h(LighthouseReviewStart, { request, onCancel: () => {
@@ -9294,7 +9299,8 @@ window.__ModuleLoader__.load({
               onPracticeEvidence: presets.some(hero => hero.id === 'standard' && !hero.broken)
                 ? trigger => setLessonOpen({ lesson: lighthouseEvidenceLesson, trigger }) : undefined,
               onEvidenceHistory: trigger => showRunHistory(evidenceReplayScope, trigger),
-              onPracticeWeb: canPracticeWeb ? setWebPracticeTrigger : undefined,
+              onPracticeWebSource: canPracticeWebSource ? trigger => setWebPractice({ kind: 'source', trigger }) : undefined,
+              onPracticeWebPilot: canPracticeWebPilot ? trigger => setWebPractice({ kind: 'pilot', trigger }) : undefined,
               heroNames: new Map(presets.map(hero => [hero.id, hero.name])),
               selected, onInspect: setInspected, onToggle: toggle, onManage: manage, onEnable: enableProfileItem,
               onOpenSource: openSource, onAppearance: editAppearance, onActions: editActions, onCollection: updateCollection,
@@ -13188,8 +13194,9 @@ window.__ModuleLoader__.load({
         min-block-size: 44px; white-space: normal;
       }
       .moba-web-personal-dialog, .moba-web-pilot-dialog, .moba-web-pilot-comparison, .moba-web-pilot-save { box-sizing: border-box; }
-      .moba-web-pilot-entry { min-block-size: 44px; max-inline-size: 100%; text-align: start; white-space: normal; }
-      .moba-web-pilot-entry svg { flex: none; }
+      .moba-web-detail-practice { display: flex; flex-wrap: wrap; gap: 6px; }
+      .moba-web-detail-practice button { min-block-size: 44px; max-inline-size: 100%; text-align: start;
+        white-space: normal; overflow-wrap: anywhere; }
       .moba-web-personal-form, .moba-web-personal-form label { display: grid; gap: 6px; min-inline-size: 0; }
       .moba-web-personal-form select { width: 100%; min-inline-size: 0; min-block-size: 44px; padding: 6px;
         color: var(--ink); background: #141c2a; border: 1px solid var(--line); }
