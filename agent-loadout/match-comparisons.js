@@ -149,6 +149,8 @@ export function validRematchComparison(record) {
   const baselineEvidenceArm = baseline?.kind === 'workspace' && baseline.arm === 'evidence'
   const evidenceRemoval = () => baseline.heroId === 'standard' && loadout.heroId === 'standard' &&
     edit.removeId === 'evidence' && edit.addId === undefined && edit.sourceId === undefined
+  const evidenceAddition = () => baseline.heroId === 'standard' && loadout.heroId === 'standard' &&
+    edit.addId === 'evidence' && edit.removeId === undefined && edit.sourceId === undefined
   return validWorkspaceComparison(record) && pinned(baseline) && pinned(loadout) &&
     validRematchReference(baseline) && (baseline.kind !== 'rematch' || baseline.comparisonId !== record.id) &&
     (baseline.kind !== 'personal' || baseline.sessionId === 'session-' + baseline.comparisonId) &&
@@ -156,7 +158,8 @@ export function validRematchComparison(record) {
     edit && change && (edit.addId !== undefined || edit.removeId !== undefined) &&
     (baseline.evidenceReplay === undefined || (baseline.evidenceReplay === true && baseline.kind === 'personal' && evidenceRemoval())) &&
     (baseline.personalWorkflowReplay === undefined || (baseline.personalWorkflowReplay === true && baseline.kind === 'personal' &&
-      baseline.evidenceReplay === undefined && baseline.publicEvidenceReplay === undefined && record.lesson === undefined && evidenceRemoval())) &&
+      baseline.evidenceReplay === undefined && baseline.publicEvidenceReplay === undefined && record.lesson === undefined &&
+      (evidenceRemoval() || evidenceAddition()))) &&
     (baselineEvidenceArm ? baseline.publicEvidenceReplay === true && evidenceRemoval() : baseline.publicEvidenceReplay === undefined) &&
     (edit.removeId === undefined ? change.removed === undefined : label(change.removed) && change.removed.id === edit.removeId) &&
     (edit.addId === undefined ? change.added === undefined : label(change.added) && change.added.id === edit.addId)

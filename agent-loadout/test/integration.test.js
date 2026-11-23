@@ -2216,7 +2216,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     ])
     assert.deepEqual(sharedResult.deliverables.map(file => file.name), ['qualified-handoff.md'])
     assert.equal(sharedResult.lighthouseScenarioPair, undefined)
-    assert.deepEqual(sharedResult.personalWorkflowReceipt, { outcomeIds: { evidence: ['qualify'], review: ['confirm'] } })
+    assert.deepEqual(sharedResult.personalWorkflowReceipt, { mode: 'evidence-review', outcomeIds: { evidence: ['qualify'], review: ['confirm'] } })
     assert.equal(sharedResult.canReview, true)
     await host.request(turnEndpoint, { sessionId: sharedOpening.sessionId, text: '读取预设工作目录' })
     const afterUnrelated = await result(sharedOpening.sessionId)
@@ -2233,7 +2233,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     })
     await pauseTurn
     const privatePauseResult = await result(pausedPersonal.sessionId)
-    assert.deepEqual(privatePauseResult.personalWorkflowReceipt, { outcomeIds: { evidence: ['pause'] } })
+    assert.deepEqual(privatePauseResult.personalWorkflowReceipt, { mode: 'evidence-review', outcomeIds: { evidence: ['pause'] } })
     assert.deepEqual(privatePauseResult.workflowDecisions, [{ gearId: 'evidence', choices: ['暂缓提交'] }])
     assert.deepEqual(privatePauseResult.deliverables, [])
     assert.equal(privatePauseResult.canReview, true)
@@ -2312,7 +2312,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
   }
 })
 
-test('private personal workflow removes only Evidence Check and compares the exact native runs', { timeout: 150_000 }, async () => {
+test('private personal workflow changes only Evidence Check and compares the exact native runs', { timeout: 150_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-private-workflow-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')
@@ -2362,7 +2362,7 @@ test('private personal workflow removes only Evidence Check and compares the exa
     await firstTurn
     const primaryResult = await result(primary.sessionId)
     const primaryNative = await native(primary.sessionId)
-    assert.deepEqual(primaryResult.personalWorkflowRematch, request)
+    assert.deepEqual(primaryResult.personalWorkflowRematch, { ...request, change: { removeId: 'evidence' } })
     assert.equal(primaryResult.rematchSource, undefined)
     const primaryFile = await readFile(join(directory, 'qualified-handoff.md'), 'utf8')
     await call('rematch-comparison-options', { ...request, personalWorkflowReplay: undefined }, 422)
@@ -2372,6 +2372,7 @@ test('private personal workflow removes only Evidence Check and compares the exa
     await previewReplay({ comparisonId: privateWorkspace.sessionId.slice('session-'.length) }, 422)
     const options = await call('rematch-comparison-options', request)
     assert.equal(options.personalWorkflowReplay, true)
+    assert.deepEqual(options.personalSuggestedChange, { removeId: 'evidence' })
     assert.deepEqual(options.available, [])
     assert.equal(options.evidenceReplay, undefined)
     const checked = await previewReplay({ workspaceId: 'other', task: 'Wrong brief', material: 'other.md' })
@@ -2422,11 +2423,12 @@ test('private personal workflow removes only Evidence Check and compares the exa
     assert.equal(compared.publicReviewOutcome, undefined)
     assert.equal(compared.handoffOutcome, undefined)
     assert.deepEqual(compared.personalWorkflowPair.previous, {
-      sessionId: primary.sessionId, workflowDecisions: primaryResult.workflowDecisions,
+      sessionId: primary.sessionId, mode: 'evidence-review', workflowDecisions: primaryResult.workflowDecisions,
       outcomeIds: { evidence: ['qualify'], review: ['confirm'] }, deliverables: primaryResult.deliverables,
     })
     const childResult = compared.personalWorkflowPair.current
     assert.equal(childResult.sessionId, opened.sessionId)
+    assert.equal(childResult.mode, 'review')
     assert.deepEqual(childResult.outcomeIds, { review: ['confirm'] })
     assert.deepEqual(childResult.workflowDecisions, [{ gearId: 'review', choices: ['Confirm handoff'] }])
     assert.deepEqual(childResult.deliverables.map(file => file.name), ['direct-handoff.md'])
@@ -2514,9 +2516,89 @@ test('private personal workflow removes only Evidence Check and compares the exa
     assert.equal(basename(delivery.data.files[0].path), nextMaterial)
     assert.equal(await readFile(join(nextDirectory, nextMaterial), 'utf8'), nextBytes)
 
+    const inverseDirectory = join(directory, 'inverse-workspace')
+    const inverseFile = join(inverseDirectory, material)
+    await mkdir(dirname(inverseFile), { recursive: true })
+    await writeFile(inverseFile, originalBytes)
+    const inverseWorkspace = await host.request('/api/loadout-fixture-session', { presetId: 'standard', workspacePath: inverseDirectory })
+    const { workspaceId: inverseWorkspaceId } = await native(inverseWorkspace.sessionId)
+    const inverseFields = { ...fields, workspaceId: inverseWorkspaceId, draft: (await call('field-playbook-preview', { id: 'review' })).draft }
+    const inversePreview = await call('armory-task-preview', inverseFields)
+    const inverse = await call('armory-task-open', { ...inverseFields, token: inversePreview.token, launchId: '7'.repeat(32) })
+    const addRef = { kind: 'personal', comparisonId: inverse.sessionId.slice('session-'.length), arm: 'task', personalWorkflowReplay: true }
+    const adding = { ...addRef, change: { addId: 'evidence' } }
+    await call('rematch-comparison-preview', adding, 422)
+    const inverseRun = host.request(turnEndpoint, { sessionId: inverse.sessionId, text: inverse.task })
+    inverseRun.catch(() => {})
+    await choose(inverse.sessionId, 'fixture-delivery-review', 'Confirm handoff')
+    await inverseRun
+    const inverseResult = await result(inverse.sessionId)
+    const inverseNative = await native(inverse.sessionId)
+    assert.deepEqual(inverseNative.events.filter(event => event.type === 'tool/call').map(event => event.data.name),
+      ['read', 'write', 'ask_user_question', 'present'])
+    assert.deepEqual(inverseResult.personalWorkflowReceipt, { mode: 'review', outcomeIds: { review: ['confirm'] } })
+    assert.deepEqual(inverseResult.personalWorkflowRematch, adding)
+    const inverseAttachment = inverseNative.events.find(event => event.type === 'deliverables/presented')
+    const inverseOutput = inverseAttachment.data.files[0].path
+    assert.equal(inverseOutput, join(await realpath(inverseDirectory), 'direct-handoff.md'))
+    const inverseOutputBytes = await readFile(inverseOutput, 'utf8')
+    assert.deepEqual(inverseResult.deliverables, [{ name: 'direct-handoff.md', turn: inverseAttachment.data.turn, seq: inverseAttachment.seq, index: 0 }])
+    const addOptions = await call('rematch-comparison-options', addRef)
+    assert.deepEqual(addOptions.personalSuggestedChange, { addId: 'evidence' })
+    assert.equal(addOptions.baseline.mode, 'review')
+    for (const change of [{ removeId: 'evidence' }, { addId: 'review' }, { addId: 'evidence', removeId: 'present' },
+      { addId: 'evidence', sourceId: 'evidence' }]) {
+      await call('rematch-comparison-preview', { ...addRef, change }, 422)
+    }
+    await call('rematch-comparison-preview', { ...request, change: adding.change }, 422)
+    const addPreview = await call('rematch-comparison-preview', { ...adding, workspaceId, material: nextMaterial, task: 'Wrong brief' })
+    assert.equal(addPreview.workspaceId, inverseWorkspaceId)
+    assert.equal(addPreview.material, material)
+    assert.equal(addPreview.task, inverse.task)
+    assert.equal(addPreview.baseline.sessionId, inverse.sessionId)
+    assert.deepEqual(Object.keys(addPreview.change), ['added'])
+    assert.equal(addPreview.change.added.id, 'evidence')
+    const addOpening = { ...adding, token: addPreview.token, launchId: '8'.repeat(32) }
+    await call('rematch-comparison-open', { ...addOpening, personalWorkflowReplay: undefined }, 422)
+    await call('rematch-comparison-open', { ...addOpening, token: checked.token }, 422)
+    try {
+      await appendFile(inverseFile, '\nChanged after the add preview.\n')
+      await call('rematch-comparison-open', addOpening, 422)
+    } finally {
+      await writeFile(inverseFile, originalBytes)
+    }
+    const added = await call('rematch-comparison-open', addOpening)
+    assert.deepEqual(await call('rematch-comparison-open', addOpening), added)
+    assert.notEqual(added.sessionId, inverse.sessionId)
+    assert.equal(added.task, inverse.task)
+    const addedDraft = await native(added.sessionId)
+    assert.equal(addedDraft.workspaceId, inverseWorkspaceId)
+    assert.ok(!addedDraft.events.some(event => ['turn/start', 'user/message', 'tool/call'].includes(event.type)))
+    assert.equal((await readReplay(added.id)).personalWorkflowPair, undefined)
+    const addedRun = host.request(turnEndpoint, { sessionId: added.sessionId, text: added.task })
+    addedRun.catch(() => {})
+    await choose(added.sessionId, 'fixture-lighthouse-evidence', '暂缓提交')
+    await addedRun
+    const completedAdd = await readReplay(added.id)
+    assert.deepEqual(completedAdd.personalWorkflowPair, {
+      previous: { sessionId: inverse.sessionId, mode: 'review', workflowDecisions: [{ gearId: 'review', choices: ['Confirm handoff'] }],
+        outcomeIds: { review: ['confirm'] }, deliverables: inverseResult.deliverables },
+      current: { sessionId: added.sessionId, mode: 'evidence-review', workflowDecisions: [{ gearId: 'evidence', choices: ['暂缓提交'] }],
+        outcomeIds: { evidence: ['pause'] }, deliverables: [] },
+    })
+    assert.deepEqual((await native(added.sessionId)).events.filter(event => event.type === 'tool/call').map(event => event.data.name),
+      ['read', 'ask_user_question'])
+    assert.deepEqual(await native(inverse.sessionId), inverseNative)
+    assert.equal(await readFile(inverseFile, 'utf8'), originalBytes)
+    assert.equal(await readFile(inverseOutput, 'utf8'), inverseOutputBytes)
+    const keptAdded = await saveWorkflow(added.id, 'rematch', 'Check evidence before handoff', '')
+    assert.equal(keptAdded.hasPersonalWorkflowOrigin, true)
+
     await host.stop()
     host = await startHost(env, patch)
     assert.deepEqual((await readReplay(opened.id)).personalWorkflowPair, compared.personalWorkflowPair)
+    assert.deepEqual((await readReplay(added.id)).personalWorkflowPair, completedAdd.personalWorkflowPair)
+    assert.deepEqual(await savedSource(keptAdded), { comparisonId: added.id, arm: 'rematch', sessionId: added.sessionId })
     await assertSaved()
     const cards = (await host.request(endpoint)).value.plans
     assert.ok(kept.every(([plan]) => cards.find(card => card.id === plan.id)?.hasPersonalWorkflowOrigin === true))

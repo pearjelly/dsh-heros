@@ -6369,11 +6369,11 @@ export async function apply(ctx) {
       ...(evidenceReplay && { evidenceReplay }), ...(workflow && { personalWorkflowReplay: true }) }
     const { title: workspaceTitle } = workspace
     const view = { workspaceId, workspaceTitle, material, task, baseline: { sessionId, heroName: hero.name,
-      ...(workflow && personalWorkflowComparisonSide(sessionId, observed)) } }
+      ...(workflow && personalWorkflowComparisonSide(sessionId, observed, workflow.mode)) } }
     const brief = task.split('\n').slice(2, -1).join('\n').trim()
     signal?.throwIfAborted()
     return { ecosystem, preset, draft, candidate, baseline, view, observed, stockStandardTask, presentBinding,
-      fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
+      ...(workflow && { workflowMode: workflow.mode }), fields: { workspaceId, workspaceTitle, cwd, digest, material, task, brief } }
   }
 
   function validatePersonalWorkflowReplay({ kind, personalWorkflowReplay }) {
@@ -6500,8 +6500,9 @@ export async function apply(ctx) {
     const { removed, equipped } = rematchGear(checked)
     const evidenceReplay = evidenceReplayView(checked.baseline)
     if (checked.baseline.personalWorkflowReplay) {
-      await checkRematch(requestedRematch({ ...selection, change: { removeId: 'evidence' } }), signal, checked)
-      return { ...view, equipped, available: [], personalWorkflowReplay: true }
+      const change = personalWorkflowChange(checked.workflowMode)
+      await checkRematch(requestedRematch({ ...selection, change }), signal, checked)
+      return { ...view, equipped, available: [], personalWorkflowReplay: true, personalSuggestedChange: change }
     }
     if (evidenceReplay) {
       await checkRematch(requestedRematch({ ...selection, change: { removeId: 'evidence' } }), signal, checked)
@@ -6539,8 +6540,9 @@ export async function apply(ctx) {
     validatePersonalWorkflowReplay(selection)
     const { kind, comparisonId, arm, personalWorkflowReplay } = selection
     const { removeId, addId, sourceId } = selection.change ?? {}
-    if (personalWorkflowReplay && (removeId !== 'evidence' || addId !== undefined || sourceId !== undefined)) {
-      throw new Error('这次对照只能卸下证据核验。')
+    if (personalWorkflowReplay && (sourceId !== undefined || !(removeId === 'evidence' && addId === undefined ||
+      addId === 'evidence' && removeId === undefined))) {
+      throw new Error('请选择一项装备变更。')
     }
     if ((removeId === undefined && addId === undefined) || (removeId !== undefined && !validEquipmentIds([removeId])) ||
       (addId !== undefined && !validEquipmentIds([addId])) ||
@@ -6560,6 +6562,9 @@ export async function apply(ctx) {
     const evidenceReplay = evidenceReplayView(baseline)
     if (evidenceReplay && (removeId !== 'evidence' || addId !== undefined)) {
       throw new Error('这次对照只能卸下证据核验。')
+    }
+    if (baseline.personalWorkflowReplay && !isDeepStrictEqual(input.change, personalWorkflowChange(checked.workflowMode))) {
+      throw new Error('请选择一项装备变更。')
     }
     const { removed, equipped } = rematchGear(checked)
     const removedGear = equipped.find(item => item.id === removeId)
@@ -6603,11 +6608,12 @@ export async function apply(ctx) {
     }
     let personalBindings
     if (baseline.personalWorkflowReplay) {
+      const replayMode = checked.workflowMode === 'review' ? 'evidence-review' : 'review'
       const askModule = equipmentById.get('review').requires
       const read = retainedRematchTool(checked, candidate, 'read')
       const present = retainedRematchTool(checked, candidate)
       const review = retainedRematchTool(checked, candidate, 'ask_user_question', askModule)
-      if (!canonicalWorkflowDraft(assembled, ecosystem, 'review') || !read?.sourceId || !present || !review?.sourceId) {
+      if (!canonicalWorkflowDraft(assembled, ecosystem, replayMode) || !read?.sourceId || !present || !review?.sourceId) {
         throw new Error('原局的读取、复核或交付工具来源已变化，请重新核对。')
       }
       // The built-in featured Present tool may have no source in the catalog. Its
@@ -6627,7 +6633,7 @@ export async function apply(ctx) {
       ...(baseline.personalWorkflowReplay && { personalWorkflowReplay: true }) },
       record: { ...fields, baseline, loadout, change, edit: input.change, inputHash, token },
       draft, before, candidate, ecosystem, againstDraft: checked.draft,
-      observed: checked.observed,
+      observed: checked.observed, ...(checked.workflowMode && { workflowMode: checked.workflowMode }),
       ...(stockReview && { stockReviewBindings: [retainedReader, retainedDelivery] }),
       ...(personalBindings && { stockReviewBindings: personalBindings }) }
   }
@@ -6917,8 +6923,8 @@ export async function apply(ctx) {
     }) }
   }
 
-  function personalWorkflowComparisonSide(sessionId, { workflowDecisions = [], deliverables = [] }) {
-    return { sessionId, workflowDecisions, deliverables, outcomeIds: workflowOutcomeIds(workflowDecisions) }
+  function personalWorkflowComparisonSide(sessionId, { workflowDecisions = [], deliverables = [] }, mode) {
+    return { sessionId, mode, workflowDecisions, deliverables, outcomeIds: workflowOutcomeIds(workflowDecisions) }
   }
 
   async function readPersonalWorkflowComparison(record, signal, checked) {
@@ -6941,8 +6947,8 @@ export async function apply(ctx) {
     const { entries, workflowDecisions } = observedComparisonWorkflows(replay.entries, checked.candidate.id, checked.ecosystem)
     const current = { ...replay, ...(replay.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }) }
     const pair = verifiedEvidenceArm(baseline) && verifiedEvidenceArm(current) && {
-      previous: personalWorkflowComparisonSide(baseline.sessionId, baseline),
-      current: personalWorkflowComparisonSide(current.sessionId, current),
+      previous: personalWorkflowComparisonSide(baseline.sessionId, baseline, checked.workflowMode),
+      current: personalWorkflowComparisonSide(current.sessionId, current, checked.workflowMode === 'review' ? 'evidence-review' : 'review'),
     }
     return { personalWorkflowReplay: true, arms: [baseline, current], ...(pair && { personalWorkflowPair: pair }) }
   }
@@ -7334,9 +7340,8 @@ export async function apply(ctx) {
       if (!isPersonalWorkflowResult(original)) return
       const ecosystem = await discover()
       const { entries, workflowDecisions } = observedComparisonWorkflows(evidence.entries, presetId, ecosystem)
-      if (!workflowDecisions.some(item => item.gearId === 'evidence')) return
       const workflow = await checkedPersonalWorkflowTask(sessionId, original, workflowDecisions, ecosystem, signal)
-      if (!workflow) return
+      if (!workflow || !recordedPersonalWorkflowChoice(workflow.mode, workflowDecisions)) return
       return { sessionId, target, hero, observed: { ...evidence, entries, workflowDecisions }, canReuse: true, workflow }
     }
     if (launch.armory === true) {
@@ -7496,7 +7501,17 @@ export async function apply(ctx) {
 
   function isPersonalWorkflowResult({ launch, target, evidence, presetId }) {
     return launch.armory === true && target && !target.lighthouseCombined && evidence.status === 'complete' &&
-      evidence.materialState === 'verified' && !evidence.continuationReason && records.get(presetId)?.equipmentIds?.length === 3
+      evidence.materialState === 'verified' && !evidence.continuationReason && [2, 3].includes(records.get(presetId)?.equipmentIds?.length)
+  }
+
+  function recordedPersonalWorkflowChoice(mode, workflowDecisions) {
+    if (mode === 'review') return workflowDecisions.some(({ gearId, choices }) => gearId === 'review' &&
+      choices.some(choice => ['confirm', 'revise'].includes(lighthouseReviewDecision(choice))))
+    return workflowDecisions.some(({ gearId }) => gearId === 'evidence')
+  }
+
+  function personalWorkflowChange(mode) {
+    return mode === 'review' ? { addId: 'evidence' } : { removeId: 'evidence' }
   }
 
   async function checkedPersonalWorkflowTask(sessionId, result, workflowDecisions, ecosystem, signal) {
@@ -7508,7 +7523,8 @@ export async function apply(ctx) {
     try {
       const environment = ecosystem ?? await discover()
       const checked = await checkedArmoryTaskLoadout(presetId, target, environment)
-      if (canonicalWorkflowDraft(checked.draft, environment, 'evidence-review')) return checked
+      const mode = checked.draft.equipmentIds.length === 2 ? 'review' : 'evidence-review'
+      if (canonicalWorkflowDraft(checked.draft, environment, mode)) return { ...checked, mode }
     } catch {
       signal?.throwIfAborted()
     }
@@ -7598,9 +7614,10 @@ export async function apply(ctx) {
     const lighthouseScenarioPair = lighthouseRound?.scenario === 'confirmed' && await combinedLighthouseScenarioPair(lighthouseRound, signal)
     const personalWorkflow = review !== true && await checkedPersonalWorkflowTask(
       sessionId, resultView, workflowDecisions, workflowEnvironment, signal)
-    const personalWorkflowReceipt = personalWorkflow && { outcomeIds: workflowOutcomeIds(workflowDecisions) }
-    const personalWorkflowRematch = personalWorkflow && workflowDecisions.some(item => item.gearId === 'evidence') &&
-      { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task', personalWorkflowReplay: true }
+    const personalWorkflowReceipt = personalWorkflow && { mode: personalWorkflow.mode, outcomeIds: workflowOutcomeIds(workflowDecisions) }
+    const personalWorkflowRematch = personalWorkflow && recordedPersonalWorkflowChoice(personalWorkflow.mode, workflowDecisions) &&
+      { kind: 'personal', comparisonId: sessionId.slice('session-'.length), arm: 'task', personalWorkflowReplay: true,
+        change: personalWorkflowChange(personalWorkflow.mode) }
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
       ...(evidence.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }),
