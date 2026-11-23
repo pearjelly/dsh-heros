@@ -515,7 +515,7 @@ function answeredComparisonTurns(events, after, asks, live, presetId, verifyMate
 export async function comparisonEvidence(source, { cwd, presetId, task, material, verifyMaterialDelivery,
   verifyMaterialProof = true, exactMessages = !verifyMaterialProof, linkedChoicesOnly = false,
   includeQuestions = Boolean(material), includeToolCoordinates, includeWindows, includeFileCoordinates, allowOwnInput = false,
-  includeTaskFingerprint = false }, receipts) {
+  includeTaskFingerprint = false, includeTaskText = false }, receipts) {
   const unavailable = reason => ({ status: 'unavailable', reason })
   if (source.header.cwd !== cwd || source.header.isSeeded || source.inheritedEventCount !== 0) {
     return unavailable('session-unavailable')
@@ -608,11 +608,13 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     }
   }
   const materialDelivered = verifyMaterialDelivery && [...files.keys()].some(file => resolve(cwd, file) === resolve(cwd, material))
-  const taskText = content.length === 1 && content[0].type === 'text' ? content[0].text : undefined
-  const taskFingerprint = includeTaskFingerprint && status === 'complete' && typeof taskText === 'string' && taskText.trim()
+  const text = content.length === 1 && content[0].type === 'text' ? content[0].text : undefined
+  const taskText = status === 'complete' && typeof text === 'string' && text.trim() ? text : undefined
+  const taskFingerprint = includeTaskFingerprint && taskText
     ? createHash('sha256').update(JSON.stringify(taskText)).digest('hex') : undefined
   return { status, turn, entries, deliverables: [...files.values()], ...(models.size && { models: [...models] }),
     ...(taskFingerprint && { taskFingerprint }),
+    ...(includeTaskText && taskText && { taskText }),
     ...(verifyMaterialDelivery && { materialDelivered }),
     ...(materialState && { materialState }), ...(pendingQuestions.length && { pendingQuestions }),
     ...(followUps.continuationReason && { continuationReason: followUps.continuationReason }), ...(includeWindows && { windows }) }

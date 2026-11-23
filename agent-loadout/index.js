@@ -60,6 +60,7 @@ const webPilotReplayChanged = '无法核对原局的题目或网页来源，请�
 const webPilotReplayUnavailable = '这局复赛已变化，请重新核对。'
 const webPilotPersonalUnavailable = '请从已核对的两局对照里选择一套出装。'
 const webPilotPersonalPairUnavailable = '还没有核对通过的同题个人对局。'
+const webPilotPersonalReplayUnavailable = '目前无法用另一套出装复赛本题。'
 const receivedWebPilotPersonalUnavailable = '请从本局已核对的好友战报对照使用本机出装。'
 const lighthouseLesson = 'lighthouse-rematch'
 const evidenceLesson = 'lighthouse-evidence'
@@ -2405,7 +2406,7 @@ export async function apply(ctx) {
     }
   }
 
-  async function observedWebPilotPersonalTask(sessionId, signal) {
+  async function observedWebPilotPersonalTask(sessionId, signal, { includeTaskText = false } = {}) {
     const source = await observeWebPilotPersonal(sessionId, signal, 'all')
     if (!source) return null
     try {
@@ -2416,6 +2417,7 @@ export async function apply(ctx) {
         cwd: source.header.cwd, presetId: binding.presetId, allowOwnInput: true, exactMessages: true,
         verifyMaterialProof: false, includeQuestions: true, linkedChoicesOnly: true, includeWindows: true,
         includeTaskFingerprint: personal.opposite,
+        includeTaskText: includeTaskText && personal.opposite,
       }, receipts)
       if (outcome.presetChanged || outcome.continuationReason === 'changed-loadout') {
         return { personal, view: { status: 'unavailable' } }
@@ -2425,7 +2427,7 @@ export async function apply(ctx) {
       const view = { status: 'complete', ...observedPersonalWebReads(source.events, outcome.windows, binding),
         ...(choices?.length && { choice: choices.join(' / ') }), ...((custom || choices?.length) && { choiceRecorded: true }),
         deliverables: files }
-      return { personal, view, taskFingerprint: outcome.taskFingerprint }
+      return { personal, view, taskFingerprint: outcome.taskFingerprint, ...(outcome.taskText && { taskText: outcome.taskText }) }
     } finally {
       source[Symbol.dispose]()
     }
@@ -2461,31 +2463,36 @@ export async function apply(ctx) {
       left.replaySessionId === right.replaySessionId && left.binding.workspaceId === right.binding.workspaceId
   }
 
-  async function findWebPilotPersonalOpponent(sessionId, observed, signal) {
+  async function verifiedWebPilotPersonalMatch(observed, signal) {
     const { personal, taskFingerprint, view } = observed ?? {}
     if (!personal?.opposite || !taskFingerprint || view.sourceChanged || !view.reads.some(read => read.status !== 'unknown')) return
     const workspace = await checkedPersonalWorkspace(ctx.get('workspaceRegistry')?.get(personal.binding.workspaceId),
       await personalTaskPathFilter())
     if (!workspace) return
     const otherArm = personal.binding.arm === 'standard' ? 'evidence' : 'standard'
+    const { pair } = await verifiedWebPilotPersonalRehearsal(personal, signal)
+    return { workspace, binding: pair.find(run => run.binding.arm === otherArm).binding }
+  }
+
+  async function findWebPilotPersonalOpponent(sessionId, observed, match, signal) {
+    if (!match) return
+    const { workspace, binding } = match
+    const { personal, taskFingerprint } = observed
     const candidates = []
     for (const id of workspace.sessionIds) {
       signal?.throwIfAborted()
       if (id === sessionId || !webPilotPersonalSessionId.test(id)) continue
       const other = await webPilotPersonalSession(id, signal).catch(() => signal?.throwIfAborted())
-      if (sameWebPilotPersonalLineage(personal, other) && other.binding.arm === otherArm) {
+      if (sameWebPilotPersonalLineage(personal, other) && other.binding.arm === binding.arm) {
         candidates.push({ id, createdAt: other.createdAt })
       }
     }
-    if (!candidates.length) return
-    const { pair } = await verifiedWebPilotPersonalRehearsal(personal, signal)
-    const expected = pair.find(run => run.binding.arm === otherArm).binding
     candidates.sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id))
     for (const { id } of candidates) {
       signal?.throwIfAborted()
       const other = await observedWebPilotPersonalTask(id, signal).catch(() => signal?.throwIfAborted())
       if (other?.taskFingerprint === taskFingerprint && sameWebPilotPersonalLineage(personal, other.personal) &&
-        sameWebPilotPersonalBinding(expected, other.personal.binding) &&
+        sameWebPilotPersonalBinding(binding, other.personal.binding) &&
         !other.view.sourceChanged && other.view.reads.some(read => read.status !== 'unknown')) {
         return { sessionId: id, observed: other }
       }
@@ -2495,17 +2502,20 @@ export async function apply(ctx) {
   async function webPilotPersonalResult({ sessionId }, signal) {
     const observed = await observedWebPilotPersonalTask(sessionId, signal)
     if (!observed) return null
-    const [canSavePlan, opponent] = await Promise.all([
+    const match = await verifiedWebPilotPersonalMatch(observed, signal).catch(() => signal?.throwIfAborted())
+    const [canSavePlan, opponent, replayReady] = await Promise.all([
       canSaveWebPilotPersonalPlan(observed, signal),
-      findWebPilotPersonalOpponent(sessionId, observed, signal).catch(() => signal?.throwIfAborted()),
+      findWebPilotPersonalOpponent(sessionId, observed, match, signal).catch(() => signal?.throwIfAborted()),
+      match && verifiedWebPilotBinding(match.binding, signal).catch(() => signal?.throwIfAborted()),
     ])
     return { ...observed.view, arm: observed.personal.binding.arm,
-      ...(canSavePlan && { canSavePlan: true }), ...(opponent && { comparisonReady: true }) }
+      ...(canSavePlan && { canSavePlan: true }), ...(opponent && { comparisonReady: true }), ...(replayReady && { replayReady: true }) }
   }
 
   async function webPilotPersonalPair({ sessionId }, signal) {
     const observed = await observedWebPilotPersonalTask(sessionId, signal)
-    const opponent = await findWebPilotPersonalOpponent(sessionId, observed, signal).catch(() => signal?.throwIfAborted())
+    const match = await verifiedWebPilotPersonalMatch(observed, signal).catch(() => signal?.throwIfAborted())
+    const opponent = await findWebPilotPersonalOpponent(sessionId, observed, match, signal).catch(() => signal?.throwIfAborted())
     if (!opponent) throw new Error(webPilotPersonalPairUnavailable)
     const current = { sessionId, observed }
     const pair = observed.personal.binding.arm === 'standard' ? [current, opponent] : [opponent, current]
@@ -2516,6 +2526,52 @@ export async function apply(ctx) {
         ...(canSavePlan && { canSavePlan: true }) }
     }))
     return { runs }
+  }
+
+  async function checkedWebPilotPersonalReplay(sessionId, signal) {
+    const observed = await observedWebPilotPersonalTask(sessionId, signal, { includeTaskText: true })
+    const match = await verifiedWebPilotPersonalMatch(observed, signal)
+    if (!match || !observed.taskText) throw new Error(webPilotPersonalReplayUnavailable)
+    const { workspace, binding } = match
+    const { binding: originBinding, ...personalOrigin } = observed.personal
+    const loadout = await verifiedWebPilotBinding(binding, signal)
+    const token = createHash('sha256').update(JSON.stringify([
+      'web-pilot-personal-replay', planTaskOwner, sessionId, observed.taskFingerprint, workspace.id, workspace.path,
+      personalOrigin, originBinding, binding,
+    ])).digest('hex')
+    return { loadout, personalOrigin, workspaceId: workspace.id, view: {
+      fromArm: originBinding.arm, arm: binding.arm,
+      workspaceTitle: workspace.title === 'default-workspace' ? '默认工作区' : workspace.title,
+      task: observed.taskText, token,
+    } }
+  }
+
+  async function previewWebPilotPersonalReplay({ sessionId }, signal) {
+    const checked = await checkedWebPilotPersonalReplay(sessionId, signal)
+    return checked.view
+  }
+
+  async function openWebPilotPersonalReplay({ sessionId, token, launchId }, signal) {
+    if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+      throw new Error(webPilotPersonalReplayUnavailable)
+    }
+    const read = async () => {
+      const checked = await checkedWebPilotPersonalReplay(sessionId, signal)
+      if (token !== checked.view.token) throw new Error(webPilotReplayChanged)
+      return checked
+    }
+    const checked = await read()
+    const opened = await openPersonalWebDraft({ workspaceId: checked.workspaceId, launchId }, signal,
+      ['web-pilot-personal-replay', sessionId, token], () => checked.loadout, async () => (await read()).loadout.binding,
+      checked.personalOrigin)
+    const source = await observeWebPilotPersonal(opened.sessionId, signal, 'none')
+    if (!source) throw new Error(webPilotPersonalReplayUnavailable)
+    try {
+      if (!webPilotPersonalOrigin(source)) throw new Error(webPilotPersonalReplayUnavailable)
+      return { sessionId: opened.sessionId, ...(!planTaskDetails(source).started && { task: checked.view.task }) }
+    } finally {
+      source[Symbol.dispose]()
+    }
   }
 
   async function verifiedWebPilotPersonalRehearsal(personal, signal) {
@@ -8517,6 +8573,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-pilot-personal-result') value = await webPilotPersonalResult(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-comparison') value = await webPilotPersonalComparison(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-pair') value = await webPilotPersonalPair(selection, request.signal)
+        else if (selection?.action === 'web-pilot-personal-replay-preview') value = await previewWebPilotPersonalReplay(selection, request.signal)
+        else if (selection?.action === 'web-pilot-personal-replay-open') value = await openWebPilotPersonalReplay(selection, request.signal)
         else if (selection?.action === 'web-pilot-plan-save') {
           value = publicBuildPlan(await saveWebPilotPlan(selection, request.signal))
           updates.notify()

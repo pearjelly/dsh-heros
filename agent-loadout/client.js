@@ -2294,6 +2294,8 @@ window.__ModuleLoader__.load({
     const webPilotPersonalTitle = '我的任务结果'
     const webPilotPersonalPairTitle = '对照我的两次实测'
     const webPilotPersonalPairUnavailable = '还没有核对通过的同题个人对局。'
+    const webPilotPersonalReplayTitle = '换套出装再试本题'
+    const webPilotPersonalReplayUnavailable = '目前无法用另一套出装复赛本题。'
 
     function webPilotPersonalChoice(view) {
       return view?.choice || t(view?.choiceRecorded ? '已记录回复' : '未记录选择')
@@ -2358,17 +2360,94 @@ window.__ModuleLoader__.load({
           run: { ...save.run, choice: webPilotPersonalChoice(save.run) }, personal: true, request, dialogRef: saveDialog, onCancel: closePlan }))
     }
 
-    function WebPilotPersonalResult({ sessionId, running, receiptId, request, onOpen }) {
+    function WebPilotPersonalReplay({ sessionId, fromArm, request, dialogRef, onCancel, onOpen }) {
+      const language = useLanguage()
+      const [attempt, retry] = useState(0)
+      const [checked, setChecked] = useState(null)
+      const [opening, setOpening] = useState(false)
+      const [openError, setOpenError] = useState('')
+      const pending = useRef(null)
+      const launchId = useRef(null)
+      const current = checked?.attempt === attempt && checked.language === language && checked.fromArm === fromArm ? checked : null
+      const preview = current?.preview
+      const issue = openError || current?.error
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'web-pilot-personal-replay-preview'
+        request(action, { action, sessionId }, abort.signal, language).then(value => {
+          if (abort.signal.aborted) return
+          if (!value?.token || value.fromArm !== fromArm || !Object.hasOwn(webPilotArms, value.arm) || value.arm === fromArm ||
+            typeof value.task !== 'string' || !value.task || typeof value.workspaceTitle !== 'string' || !value.workspaceTitle) {
+            throw new Error(t(webPilotPersonalReplayUnavailable))
+          }
+          setChecked({ attempt, language, fromArm, preview: value })
+        }).catch(reason => {
+          if (!abort.signal.aborted) setChecked({ attempt, language, fromArm, error: reason.message })
+        })
+        return () => abort.abort()
+      }, [request, sessionId, language, fromArm, attempt])
+      useEffect(() => () => pending.current?.abort(), [])
+
+      async function open(event) {
+        event.preventDefault()
+        if (pending.current || !preview?.token || issue) return
+        const abort = pending.current = new AbortController()
+        setOpening(true)
+        launchId.current ??= Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+        const action = 'web-pilot-personal-replay-open'
+        try {
+          const value = await request(action, { action, sessionId, token: preview.token, launchId: launchId.current }, abort.signal, language)
+          if (abort.signal.aborted) return
+          if (!value?.sessionId || value.sessionId === sessionId || (value.task !== undefined && value.task !== preview.task)) {
+            throw new Error(t('无法核对原局的题目或网页来源，请返回原局。'))
+          }
+          onOpen(value.sessionId, value.task)
+        } catch (reason) {
+          if (!abort.signal.aborted) setOpenError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setOpening(false)
+        }
+      }
+
+      return h(InstallDialog, { title: t(webPilotPersonalReplayTitle),
+        className: 'moba-starter-dialog moba-web-source-dialog moba-web-pilot-dialog moba-web-pilot-plan-replay',
+        dialogRef, busy: opening, onCancel, initialFocus: '.moba-web-pilot-personal-replay-back',
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onCancel() }) },
+        h('form', { onSubmit: open },
+          h('div', { className: 'moba-web-pilot-practice-fields' },
+            !current && h('p', { role: 'status' }, t('正在核对换装…')),
+            preview && h(Fragment, null,
+              h(InstallFacts, { facts: [[t('工作区'), preview.workspaceTitle],
+                [t('已验证的原出装'), t(webPilotArms[preview.fromArm].name)], [t('复赛出装'), t(webPilotArms[preview.arm].name)]] }),
+              h('p', { className: 'moba-starter-note' }, t(preview.arm === 'evidence' ? '只加装证据核验' : '只卸下证据核验')),
+              h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
+                h('textarea', { rows: 5, value: preview.task, readOnly: true, spellCheck: false })),
+              h('p', { className: 'moba-starter-note' }, t('打开会话后，请手动发送任务。'))),
+            issue && h('p', { className: 'moba-alert', role: 'alert' }, issue)),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-personal-replay-back',
+              disabled: opening, onClick: onCancel }, t('返回')),
+            issue && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
+              onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
+            h('button', { type: 'submit', className: 'moba-start', disabled: opening || !preview || Boolean(issue) },
+              t(opening ? '正在准备对局…' : '打开草稿'), h(Glyph, { kind: 'arrow', size: 16 })))))
+    }
+
+    function WebPilotPersonalResult({ sessionId, running, receiptId, request, onOpen, consumeDraft, focusDraft }) {
       const language = useLanguage()
       const [state, setState] = useState(null)
       const [attempt, retry] = useState(0)
       const [comparison, setComparison] = useState(null)
       const [planSave, setPlanSave] = useState(null)
+      const [replayOpen, setReplayOpen] = useState(false)
       const [sourcePending, setSourcePending] = useState(false)
       const [sourceError, setSourceError] = useState('')
       const pending = useRef(null)
       const trigger = useRef(null)
       const pairTrigger = useRef(null)
+      const replayTrigger = useRef(null)
       const dialog = useRef(null)
       const saveTrigger = useRef(null)
       const saveDialog = useRef(null)
@@ -2379,9 +2458,16 @@ window.__ModuleLoader__.load({
       const loadout = webPilotArms[view?.arm]?.name
       const canSavePlan = complete && loadout && view.canSavePlan === true
       const pairReady = complete && view.comparisonReady === true
+      const replayReady = complete && loadout && view.replayReady === true
       const statusText = { waiting: '等待发送任务', running: '进行中', 'waiting-choice': '请在会话中的提问卡上作出选择。',
         unavailable: '目前无法核对这次任务的结果。' }
 
+      useEffect(() => {
+        if (consumeDraft(sessionId) === 'applied') {
+          const frame = requestAnimationFrame(() => focusDraft(sessionId))
+          return () => cancelAnimationFrame(frame)
+        }
+      }, [sessionId, consumeDraft, focusDraft])
       useEffect(() => {
         const abort = new AbortController()
         let timer
@@ -2401,12 +2487,12 @@ window.__ModuleLoader__.load({
       }, [request, sessionId, language, attempt, running, receiptId])
       useEffect(() => () => pending.current?.abort(), [])
       useLayoutEffect(() => {
-        if (comparison || planSave || !returnFocus.current) return
+        if (comparison || planSave || replayOpen || !returnFocus.current) return
         const target = returnFocus.current
         const focusTarget = target.isConnected ? target : trigger.current
         returnFocus.current = null
         focusTarget?.focus()
-      }, [comparison, planSave])
+      }, [comparison, planSave, replayOpen])
 
       async function viewComparison(personal) {
         if (pending.current) return
@@ -2457,16 +2543,25 @@ window.__ModuleLoader__.load({
         setPlanSave(null)
       }
 
+      function closeReplay() {
+        dialog.current?.close()
+        returnFocus.current = replayTrigger.current ?? trigger.current
+        setReplayOpen(false)
+      }
+
       return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-personal-result', 'aria-label': t(webPilotPersonalTitle) },
         h('div', { className: 'moba-web-pilot-personal-result-head', 'data-save-plan': canSavePlan || undefined,
-          'data-pair-ready': pairReady || undefined },
+          'data-pair-ready': pairReady || undefined, 'data-replay-ready': replayReady || undefined },
           h('strong', null, t(webPilotPersonalTitle)),
           h('button', { type: 'button', ref: trigger, className: 'moba-settlement-button', 'aria-haspopup': 'dialog',
             'aria-disabled': sourcePending, onClick: () => viewComparison(false) }, t('查看实测来源')),
           canSavePlan && h('button', { type: 'button', ref: saveTrigger, className: 'moba-settlement-button moba-web-pilot-personal-plan-save',
             'aria-haspopup': 'dialog', 'aria-disabled': sourcePending, onClick: openPlanSave }, t('保存为方案')),
           pairReady && h('button', { type: 'button', ref: pairTrigger, className: 'moba-settlement-button moba-web-pilot-personal-compare',
-            'aria-haspopup': 'dialog', 'aria-disabled': sourcePending, onClick: () => viewComparison(true) }, t(webPilotPersonalPairTitle))),
+            'aria-haspopup': 'dialog', 'aria-disabled': sourcePending, onClick: () => viewComparison(true) }, t(webPilotPersonalPairTitle)),
+          replayReady && h('button', { type: 'button', ref: replayTrigger, className: 'moba-settlement-button moba-web-pilot-personal-replay',
+            'aria-haspopup': 'dialog', 'aria-disabled': sourcePending, onClick: () => { if (!pending.current) setReplayOpen(true) } },
+          t(webPilotPersonalReplayTitle))),
         h('div', { className: 'moba-web-pilot-personal-result-body' },
           !current && h('p', { role: 'status' }, t('正在读取任务结果…')),
           view && !complete && h('p', { role: 'status' }, t(statusText[view.status] ?? statusText.unavailable)),
@@ -2482,7 +2577,13 @@ window.__ModuleLoader__.load({
             onCancel: closeComparison, onVisit: openConversation })
           : h(WebPilotComparison, { sessionId, comparison: comparison.value, decisionsOnly: comparison.value.opposite !== true,
             sourceOnly: true, dialogRef: dialog, onCancel: closeComparison, onVisit: openConversation })),
-        planSave && h(WebPilotPlanSave, { sessionId, run: planSave, personal: true, request, dialogRef: saveDialog, onCancel: closePlanSave }))
+        planSave && h(WebPilotPlanSave, { sessionId, run: planSave, personal: true, request, dialogRef: saveDialog, onCancel: closePlanSave }),
+        replayOpen && h(WebPilotPersonalReplay, { sessionId, fromArm: view?.arm, request, dialogRef: dialog, onCancel: closeReplay,
+          onOpen: (id, task) => {
+            dialog.current?.close()
+            setReplayOpen(false)
+            onOpen(id, task)
+          } }))
     }
 
     function LighthouseReviewStart({ request, onCancel, onOpen }) {
@@ -13008,7 +13109,7 @@ window.__ModuleLoader__.load({
           onOpen: openDraftSession, reportId: id, reporting: open && reporting,
           onReport: event => show(event, { kind: 'report', item: { name: t('对局战报') } }) }),
         snapshot?.webPilotPersonal === true && h(WebPilotPersonalResult, { key: sessionId, sessionId, request, onOpen: openDraftSession,
-          running: snapshot.running, receiptId: receipt?.id }),
+          consumeDraft: consumeTaskDraft, focusDraft: focusTaskDraft, running: snapshot.running, receiptId: receipt?.id }),
         snapshot?.heroTrial && h(HeroTrialAnchor, { key: sessionId, member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
           onReturnTask: openTaskResult, consumeDraft: consumeTaskDraft, putTask: putTaskDraft, draftStore,
           hasTurn: Boolean(snapshot.running || receipt), workspaces }),
@@ -14508,13 +14609,16 @@ window.__ModuleLoader__.load({
         grid-template-columns: minmax(0, 1fr) minmax(0, max-content); align-items: center; }
       .moba-web-pilot-personal-result-head[data-save-plan] {
         grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(0, max-content); }
-      .moba-web-pilot-personal-result-head[data-pair-ready] {
+      .moba-web-pilot-personal-result-head:is([data-pair-ready], [data-replay-ready]) {
         grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, max-content)); align-items: stretch; }
-      .moba-web-pilot-personal-result-head[data-pair-ready][data-save-plan] {
+      .moba-web-pilot-personal-result-head:is([data-pair-ready], [data-replay-ready])[data-save-plan],
+      .moba-web-pilot-personal-result-head[data-pair-ready][data-replay-ready] {
         grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, max-content)); }
-      .moba-web-pilot-personal-result-head[data-pair-ready] > strong { align-self: center; }
+      .moba-web-pilot-personal-result-head[data-pair-ready][data-replay-ready][data-save-plan] {
+        grid-template-columns: minmax(0, 1fr) repeat(4, minmax(0, max-content)); }
+      .moba-web-pilot-personal-result-head:is([data-pair-ready], [data-replay-ready]) > strong { align-self: center; }
       .moba-web-pilot-personal-result > .moba-web-pilot-personal-result-body { display: grid; gap: 3px;
-        align-content: start; min-block-size: 0; overflow: auto; scroll-padding-block: 4px; }
+        align-self: stretch; align-content: start; min-block-size: 0; overflow: auto; scroll-padding-block: 4px; }
       .moba-web-pilot-personal-result-body p { margin: 0; color: #ccdcd8; font-size: 11px; }
       .moba-web-pilot-personal-result-head button { min-block-size: 44px; max-inline-size: 14em; white-space: normal; }
       .moba-web-pilot-personal-result :is(button, a):focus-visible { outline: 2px solid #9ed4ec; outline-offset: -2px; }
@@ -14529,7 +14633,8 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-result :is(.moba-web-pilot-compare, .moba-web-pilot-received, .moba-web-pilot-replay-primary, .moba-web-pilot-review[data-primary]) {
         background: #392e20; border-color: #ad8c52; color: #ffe3ab;
       }
-      .moba-web-pilot-personal-result-head:not([data-pair-ready]) .moba-web-pilot-personal-plan-save,
+      .moba-web-pilot-personal-result-head:not([data-pair-ready], [data-replay-ready]) .moba-web-pilot-personal-plan-save,
+      .moba-web-pilot-personal-result-head:not([data-pair-ready]) .moba-web-pilot-personal-replay,
       .moba-web-pilot-personal-result .moba-web-pilot-personal-compare { background: #392e20; border-color: #ad8c52; color: #ffe3ab; }
       .moba-web-pilot-result:focus-visible, .moba-web-pilot-result :is(button, a):focus-visible,
       :is(.moba-web-pilot-comparison, .moba-web-pilot-personal-pair) :is(button, a):focus-visible,
@@ -14633,11 +14738,22 @@ window.__ModuleLoader__.load({
       }
       @media (max-width: 600px) {
         .moba-web-pilot-personal-result { max-block-size: max(84px, calc(100dvh - 450px)); }
-        .moba-web-pilot-personal-result:has(.moba-web-pilot-personal-result-head[data-pair-ready]) { max-block-size: max(84px, calc(100dvh - 438px)); }
+        .moba-web-pilot-personal-result:has(.moba-web-pilot-personal-result-head:is([data-pair-ready], [data-replay-ready])) {
+          max-block-size: max(84px, calc(100dvh - 438px)); }
+        .moba-web-pilot-personal-result:has(.moba-web-pilot-personal-result-head[data-pair-ready][data-replay-ready]) {
+          max-block-size: max(112px, calc(100dvh - 428px)); }
         .moba-web-pilot-personal-result-head[data-save-plan] { grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr) minmax(0, 1fr); }
-        .moba-web-pilot-personal-result-head[data-pair-ready] { grid-template-columns: minmax(0, .9fr) minmax(0, 1fr) minmax(0, 1.2fr); }
-        .moba-web-pilot-personal-result-head[data-pair-ready][data-save-plan] {
+        .moba-web-pilot-personal-result-head:is([data-pair-ready], [data-replay-ready]) {
+          grid-template-columns: minmax(0, .9fr) minmax(0, 1fr) minmax(0, 1.2fr); }
+        .moba-web-pilot-personal-result-head:is([data-pair-ready], [data-replay-ready])[data-save-plan] {
           grid-template-columns: minmax(0, .8fr) minmax(0, 1fr) minmax(0, .9fr) minmax(0, 1.15fr); }
+        .moba-web-pilot-personal-result-head[data-pair-ready][data-replay-ready],
+        .moba-web-pilot-personal-result-head[data-pair-ready][data-replay-ready][data-save-plan] {
+          grid-template-columns: repeat(6, minmax(0, 1fr)); }
+        .moba-web-pilot-personal-result-head[data-pair-ready][data-replay-ready] > * { grid-column: span 2; }
+        .moba-web-pilot-personal-result-head[data-pair-ready][data-replay-ready]:not([data-save-plan]) > *,
+        .moba-web-pilot-personal-result-head[data-pair-ready][data-replay-ready] > :is(.moba-web-pilot-personal-compare, .moba-web-pilot-personal-replay) {
+          grid-column: span 3; }
         .moba-web-pilot-result { box-sizing: border-box; align-content: start;
           max-block-size: max(88px, calc(100dvh - 444px)); overflow: auto; scroll-padding-block: 8px; }
         .moba-web-pilot-result:has(> .moba-web-pilot-consequence) { max-block-size: max(88px, calc(100dvh - 416px)); }

@@ -17,12 +17,12 @@ test('personal web comparison keys only the exact completed native first plain-t
   const presetId = 'standard'
   const text = `Check ${webSourceUrl}\n核对许可证。`
   const part = { type: 'text', text }
-  function read(content, { surfaceOp = 'append', kind = 'user', includeTaskFingerprint = true } = {}) {
+  function read(content, { surfaceOp = 'append', kind = 'user', includeTaskFingerprint = true, includeTaskText = false } = {}) {
     return comparisonEvidence({ header: { cwd, agentPreset: presetId }, inheritedEventCount: 0, source: 'archive', events: [
       { type: 'turn/start', seq: 0, data: { turn: 1 } },
       { type: 'user/message', seq: 1, surfaceOp, data: { source: { kind }, content } },
       { type: 'turn/end', seq: 2, data: { turn: 1, reason: { kind: 'completed' } } },
-    ] }, { cwd, presetId, allowOwnInput: true, exactMessages: true, includeTaskFingerprint })
+    ] }, { cwd, presetId, allowOwnInput: true, exactMessages: true, includeTaskFingerprint, includeTaskText })
   }
   const observed = await read([part])
   assert.equal(observed.status, 'complete')
@@ -34,6 +34,10 @@ test('personal web comparison keys only the exact completed native first plain-t
   assert.equal((await read([part], { kind: 'agent-message' })).taskFingerprint, undefined)
   assert.equal((await read([part], { includeTaskFingerprint: false })).taskFingerprint, undefined)
   assert.ok(!JSON.stringify(observed).includes(text))
+  assert.equal(observed.taskText, undefined)
+  assert.equal((await read([part], { includeTaskText: true })).taskText, text)
+  assert.equal((await read([part, part], { includeTaskText: true })).taskText, undefined)
+  assert.equal((await read([part], { surfaceOp: 'replace', includeTaskText: true })).taskText, undefined)
 })
 
 function evidence() {
