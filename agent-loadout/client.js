@@ -2950,6 +2950,7 @@ window.__ModuleLoader__.load({
     const lighthousePendingUnavailable = '找不到这页灯塔试玩记录。'
     const lighthousePendingChanged = '这局灯塔试玩已变化，请重新核对。'
     const lighthouseHistoryTitle = '灯塔战报'
+    const lighthouseRunLabels = { original: '原局', replay: '复赛', revision: '修订局' }
     const lighthousePendingActions = {
       waiting: ['等待发送任务', '继续草稿'],
       'waiting-choice': ['等待你的选择', '回到提问'],
@@ -2969,7 +2970,7 @@ window.__ModuleLoader__.load({
         request(action, { action, ...(before && { before }) }, abort.signal, language).then(value => {
           if (abort.signal.aborted) return
           if (!Array.isArray(value?.runs) || value.runs.some(run => typeof run?.sessionId !== 'string' || !run.sessionId ||
-            !['original', 'replay'].includes(run.kind) || !['en', 'zh'].includes(run.sampleLanguage) ||
+            !Object.hasOwn(lighthouseRunLabels, run.kind) || !['en', 'zh'].includes(run.sampleLanguage) ||
             !['number', 'string'].includes(typeof run.openedAt) || !Number.isFinite(new Date(run.openedAt).getTime()) ||
             (history ? !Object.hasOwn(lighthouseReplayModeLabels, run.mode) || !Number.isSafeInteger(run.deliveredCount) || run.deliveredCount < 0
               : !Object.hasOwn(lighthousePendingActions, run.status) || run.mode !== undefined && run.mode !== 'review' ||
@@ -3012,7 +3013,7 @@ window.__ModuleLoader__.load({
           const [status, action] = lighthousePendingActions[run.status]
           return h('li', { className: 'moba-history-entry', key: run.sessionId, 'data-lighthouse-pending-status': run.status },
             h('header', { id: description },
-              h('h3', null, t(run.kind === 'replay' ? '复赛' : '原局')),
+              h('h3', null, t(lighthouseRunLabels[run.kind])),
               h('time', { dateTime: openedAt.toISOString() }, clock.format(openedAt)),
               run.sampleLanguage !== language && h('small', null, t(run.sampleLanguage === 'en' ? '英文' : '中文')),
               run.mode === 'review' && h('small', null, t(lighthouseReplayModeLabels.review)),
@@ -3101,7 +3102,7 @@ window.__ModuleLoader__.load({
             const detailsId = heading + '-' + index
             return h('li', { className: 'moba-history-entry', key: run.sessionId },
               h('header', { id: detailsId },
-                h('h3', null, t(run.kind === 'replay' ? '复赛' : '原局')),
+                h('h3', null, t(lighthouseRunLabels[run.kind])),
                 h('time', { dateTime: opened.toISOString() }, clock.format(opened)),
                 h('small', null, t(lighthouseCarryModeLabels[run.mode])),
                 run.sampleLanguage !== language && h('small', null, t(run.sampleLanguage === 'en' ? '英文' : '中文')),
@@ -13427,7 +13428,8 @@ window.__ModuleLoader__.load({
               files: run.deliverables, sessionId: run.sessionId, headingTag: 'h6',
             }))
         }))
-      return h('section', { className: 'moba-lighthouse-replay-pair', 'aria-labelledby': heading, 'data-compact-gear-pair': compactGearPair || undefined },
+      return h('section', { className: 'moba-lighthouse-replay-pair', 'aria-labelledby': heading,
+        'data-compact-gear-pair': compactGearPair || undefined, 'data-lighthouse-revision-pair': revisionPair || undefined },
         h('h4', { id: heading, 'data-personal-workflow-pair': personalPair || undefined, tabIndex: personalPair ? -1 : undefined },
           t(revisionPair ? '修订前后对照' : '对照两局')),
         (scenarioPair || revisionPair) && h('p', { className: 'moba-match-action-note' }, t('两局沿用同一份补给卡和出装。')),
@@ -15473,6 +15475,8 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-replay-pair > button { justify-self: start; }
       .moba-lighthouse-replay-pair[data-compact-gear-pair] :is(th, td) { padding: 3px 4px; }
       .moba-lighthouse-replay-pair[data-compact-gear-pair] tr > :first-child { width: 29%; }
+      .moba-lighthouse-replay-pair[data-lighthouse-revision-pair] :is(th, td) { padding: 3px 4px; }
+      .moba-lighthouse-replay-pair[data-lighthouse-revision-pair] tr > :first-child { width: 32%; }
       .moba-lighthouse-replay-pair[data-compact-gear-pair] > .moba-lesson-result-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .moba-lighthouse-replay-pair[data-compact-gear-pair] .moba-lighthouse-carry-side { padding-inline: 6px; }
       .moba-lighthouse-replay-pair[data-compact-gear-pair] .moba-proven-files h6 { margin: 0 0 5px; color: var(--gold); font-size: 13px; }

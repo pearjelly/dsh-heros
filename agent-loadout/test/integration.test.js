@@ -2313,12 +2313,15 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await revision('open', { ...openRevision, sourceSessionId: revisionSourceIds[1] }, 422)
     await revision('open', { ...openRevision, token: addEvidence.token }, 422)
     await replay('open', { sessionId: openRevision.sourceSessionId, token: openRevision.token, launchId: openRevision.launchId }, 422)
-    try {
-      await appendFile(firstReviewSample, '\nChanged after reviewing the revision draft.\n')
-      await revision('open', openRevision, 422)
-    } finally {
-      await writeFile(firstReviewSample, reviewSample)
+    async function withChangedRevisionSource(check) {
+      try {
+        await appendFile(firstReviewSample, '\nChanged after reviewing the revision draft.\n')
+        await check()
+      } finally {
+        await writeFile(firstReviewSample, reviewSample)
+      }
     }
+    await withChangedRevisionSource(() => revision('open', openRevision, 422))
     assert.deepEqual((await practiceDirectories()).sort(), beforeRevisionDirectories)
     assert.deepEqual(await native(reviewOpening.sessionId), firstReviewNative)
     assert.deepEqual(await native(dualOrigin.sessionId), dualNative)
@@ -2359,11 +2362,38 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       const card = join(draft.workspacePath, combinedPractice.material)
       assert.equal(await readFile(card, 'utf8'), sample)
       assert.equal((await result(opened.sessionId))?.lighthouseRevisionPair, undefined)
+      const sampleLanguage = mode === 'review' ? 'zh' : 'en'
+      async function pendingRevision(status) {
+        const run = (await pendingLighthouse()).runs.find(row => row.sessionId === opened.sessionId)
+        assert.ok(run, 'The exact revision must appear in pending Lighthouse runs.')
+        assert.deepEqual(run, { sessionId: opened.sessionId, kind: 'revision', status, sampleLanguage,
+          openedAt: run.openedAt, resumeToken: run.resumeToken, ...(mode === 'review' && { mode }) })
+        assert.ok(Number.isFinite(new Date(run.openedAt).getTime()))
+        assert.match(run.resumeToken, /^[a-f0-9]{64}$/)
+        return run
+      }
+      const waitingDraft = await pendingRevision('waiting')
+      await openLighthouseHistory(opened.sessionId, 422)
+      if (mode === 'review') await withChangedRevisionSource(async () => {
+        assert.ok(!(await pendingLighthouse()).runs.some(row => row.sessionId === opened.sessionId))
+        await resumeLighthouse(waitingDraft, 422)
+      })
+      assert.deepEqual(await resumeLighthouse(waitingDraft), { sessionId: opened.sessionId })
+      assert.deepEqual(await native(opened.sessionId), draft)
 
       const revisedTurn = host.request(turnEndpoint, { sessionId: opened.sessionId, text: opened.task })
       revisedTurn.catch(() => {})
-      await choose(opened.sessionId, 'fixture-delivery-review', choice)
+      let waitingReview
+      await choose(opened.sessionId, 'fixture-delivery-review', choice, async () => {
+        await resumeLighthouse(waitingDraft, 422)
+        waitingReview = await pendingRevision('waiting-choice')
+        assert.notEqual(waitingReview.resumeToken, waitingDraft.resumeToken)
+        assert.deepEqual(await resumeLighthouse(waitingReview), { sessionId: opened.sessionId })
+        await openLighthouseHistory(opened.sessionId, 422)
+      })
       await revisedTurn
+      await resumeLighthouse(waitingReview, 422)
+      assert.ok(!(await pendingLighthouse()).runs.some(row => row.sessionId === opened.sessionId))
       const revisionNative = await native(opened.sessionId)
       const calls = revisionNative.events.filter(event => event.type === 'tool/call')
       const confirm = out === 'confirm'
@@ -2391,12 +2421,24 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       assert.equal(revised.lighthousePair, undefined)
       assert.equal(revised.lighthouseScenarioPair, undefined)
       assert.notEqual(revised.lighthouseRevisionAvailable, true)
+      const completed = (await lighthouseHistory()).runs.find(row => row.sessionId === opened.sessionId)
+      assert.ok(completed, 'The completed revision must appear in the Lighthouse history.')
+      assert.deepEqual(completed, { sessionId: opened.sessionId, kind: 'revision', mode, sampleLanguage,
+        openedAt: completed.openedAt, deliveredCount: files.length })
+      assert.ok(Number.isFinite(new Date(completed.openedAt).getTime()))
+      assert.deepEqual(await openLighthouseHistory(opened.sessionId), { sessionId: opened.sessionId })
+      if (mode === 'review') await withChangedRevisionSource(async () => {
+        assert.ok(!(await lighthouseHistory()).runs.some(row => row.sessionId === opened.sessionId))
+        await openLighthouseHistory(opened.sessionId, 422)
+        assert.equal((await result(opened.sessionId))?.lighthouseRevisionPair, undefined)
+      })
       await revision('preview', { sourceSessionId: opened.sessionId }, 422)
       await shareChallenge(opened.sessionId, 422)
       await readChallengeReport(opened.sessionId, { code: pausedReport.code }, 422)
       assert.equal(await readFile(card, 'utf8'), sample)
       assert.equal(await readFile(join(before.workspacePath, combinedPractice.material), 'utf8'), sample)
       assert.deepEqual(await native(source.sessionId), before)
+      assert.deepEqual(await native(opened.sessionId), revisionNative)
       revisions.push({ sessionId: opened.sessionId, pair: revised.lighthouseRevisionPair })
     }
     assert.deepEqual(await shareChallenge(reviewOpening.sessionId), invitation)
@@ -2406,6 +2448,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await host.stop()
     host = await startHost(env, patch)
     for (const { sessionId, pair } of revisions) {
+      assert.deepEqual(await openLighthouseHistory(sessionId), { sessionId })
       assert.deepEqual((await result(sessionId)).lighthouseRevisionPair, pair)
       assert.deepEqual(await openLighthouseHistory(pair.previous.sessionId), { sessionId: pair.previous.sessionId })
     }

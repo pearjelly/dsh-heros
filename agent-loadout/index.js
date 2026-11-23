@@ -3754,13 +3754,16 @@ export async function apply(ctx) {
       const target = personalTaskTarget(launch, header)
       if (header.parentSession || target?.lighthouseCombined !== true || !isLighthouseEvidenceWorkspace(root, header.cwd)) return
       const scenario = combinedLighthouseScenario(target)
-      if (!scenario || scenario === 'revision') return
+      if (!scenario) return
       const workspace = registry.get(target.workspaceId)
       const sampleLanguage = combinedLighthouseLanguage(target.task, scenario)
       if (workspace?.path !== header.cwd || !workspace.sessionIds.includes(sessionId) || !sampleLanguage ||
         await personalTaskMaterialState(target, signal) !== 'verified') return
       const confirmed = scenario === 'confirmed'
       if (confirmed && !await combinedLighthouseScenarioSource({ target, language: sampleLanguage }, signal)) return
+      const mode = target.lighthouseReviewOnly === true ? 'review' : 'evidence-review'
+      const revisionSource = scenario === 'revision' && await combinedLighthouseRevisionSource({ target, language: sampleLanguage, mode }, signal)
+      if (scenario === 'revision' && !revisionSource) return
       const openedAt = header.createdAt
       if (!Number.isFinite(new Date(openedAt).getTime())) return
       let status = presetChanged ? 'loadout-changed' : 'waiting'
@@ -3785,9 +3788,12 @@ export async function apply(ctx) {
         if (!callIds.length) return
         status = 'waiting-choice'
       }
-      const run = { sessionId, kind: target.lighthouseReplayOf || confirmed ? 'replay' : 'original', status, openedAt, sampleLanguage,
+      const kind = revisionSource ? 'revision' : target.lighthouseReplayOf || confirmed ? 'replay' : 'original'
+      const run = { sessionId, kind, status, openedAt, sampleLanguage,
         ...(target.lighthouseReviewOnly && { mode: 'review' }), ...(confirmed && { scenario }) }
-      const resumeToken = createHash('sha256').update(JSON.stringify([run, target.identity, target.digest, callIds])).digest('hex')
+      const resumeToken = createHash('sha256').update(JSON.stringify([
+        run, target.identity, target.digest, callIds, ...(revisionSource ? [revisionSource.sessionId, revisionSource.workflowDecisions] : []),
+      ])).digest('hex')
       return { ...run, resumeToken }
     } finally {
       source[Symbol.dispose]()
@@ -3815,6 +3821,12 @@ export async function apply(ctx) {
     return planTaskRunPage([...candidates.values()], previous, signal, id => pendingCombinedLighthouseRun(id, registry, root, signal))
   }
 
+  async function readCombinedLighthouseHistoryRound(sessionId, signal, getEcosystem) {
+    const round = await readCombinedLighthouseRound(sessionId, signal, ['gap', 'revision'], getEcosystem)
+    if (round?.scenario === 'revision' && !await combinedLighthouseRevisionSource(round, signal, getEcosystem)) return
+    return round
+  }
+
   async function combinedLighthouseHistory({ before }, signal) {
     const previous = planTaskPageBoundary(before, '找不到这页灯塔试玩记录。')
     const registry = ctx.get('workspaceRegistry')
@@ -3824,11 +3836,11 @@ export async function apply(ctx) {
     let ecosystem
     const getEcosystem = () => (ecosystem ??= discover())
     return planTaskRunPage([...candidates.values()], previous, signal, async sessionId => {
-      const round = await readCombinedLighthouseRound(sessionId, signal, 'gap', getEcosystem)
+      const round = await readCombinedLighthouseHistoryRound(sessionId, signal, getEcosystem)
       if (!round) return
+      const kind = round.scenario === 'revision' ? 'revision' : round.target.lighthouseReplayOf ? 'replay' : 'original'
       return { sessionId, openedAt: new Date(candidates.get(sessionId).createdAt).toISOString(), mode: round.mode,
-        sampleLanguage: round.language, kind: round.target.lighthouseReplayOf ? 'replay' : 'original',
-        deliveredCount: round.deliverables.length }
+        sampleLanguage: round.language, kind, deliveredCount: round.deliverables.length }
     })
   }
 
@@ -3837,7 +3849,7 @@ export async function apply(ctx) {
     const registry = ctx.get('workspaceRegistry')
     const root = await combinedLighthousePracticeRoot()
     if (!registry || !root || !combinedLighthouseCandidates(registry, root).has(sessionId) ||
-      !await readCombinedLighthouseRound(sessionId, signal)) throw new Error(combinedLighthousePendingChanged)
+      !await readCombinedLighthouseHistoryRound(sessionId, signal)) throw new Error(combinedLighthousePendingChanged)
     signal?.throwIfAborted()
     return { sessionId }
   }
@@ -7257,7 +7269,9 @@ export async function apply(ctx) {
   async function readCombinedLighthouseRound(sessionId, signal, scenario = 'gap', getEcosystem = discover) {
     if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) return
     const result = await observeLessonTask(sessionId, signal, true)
-    if (result?.target?.lighthouseCombined !== true || combinedLighthouseScenario(result.target) !== scenario ||
+    const actual = combinedLighthouseScenario(result?.target)
+    const matches = Array.isArray(scenario) ? scenario.includes(actual) : scenario === actual
+    if (result?.target?.lighthouseCombined !== true || !matches ||
       !result.evidence.entries?.some(entry => entry.workflowCandidate)) return
     const ecosystem = await getEcosystem()
     const { workflowDecisions } = observedComparisonWorkflows(result.evidence.entries, result.presetId, ecosystem)
@@ -7314,14 +7328,19 @@ export async function apply(ctx) {
     return { previous: side(previous), current: side(current) }
   }
 
-  async function combinedLighthouseRevisionPair(current, signal) {
-    const { target, language, mode } = current
-    const previous = await readCombinedLighthouseRound(target.lighthouseRevisionOf, signal)
+  async function combinedLighthouseRevisionSource({ target, language, mode }, signal, getEcosystem) {
+    const previous = await readCombinedLighthouseRound(target.lighthouseRevisionOf, signal, 'gap', getEcosystem)
     if (!eligibleCombinedLighthouseRevision(previous) || previous.language !== language || previous.mode !== mode ||
       previous.target.workspaceId === target.workspaceId || previous.target.digest !== target.digest ||
       previous.target.identity !== target.identity) return
+    return previous
+  }
+
+  async function combinedLighthouseRevisionPair(current, signal) {
+    const previous = await combinedLighthouseRevisionSource(current, signal)
+    if (!previous) return
     return { previous: personalWorkflowComparisonSide(previous.sessionId, previous, previous.mode),
-      current: personalWorkflowComparisonSide(current.sessionId, current, mode) }
+      current: personalWorkflowComparisonSide(current.sessionId, current, current.mode) }
   }
 
   function observedLighthouseCard(events, turn, cwd) {
