@@ -1634,10 +1634,12 @@ export async function apply(ctx) {
     if (!['standard', 'evidence'].includes(arm)) throw new Error(webPilotPersonalUnavailable)
     const result = await inspectWebSourcePractice({ sessionId }, signal)
     const pair = await verifiedWebPilotPair(sessionId, result, signal)
-    const picked = pair?.find(run => run.binding.arm === arm)
-    if (!picked) throw new Error(webPilotPersonalUnavailable)
-    const { binding } = picked
-    const planned = await plannedWebSourceLoadout(signal, arm)
+    return verifiedWebPilotBinding(pair?.find(run => run.binding.arm === arm)?.binding, signal)
+  }
+
+  async function verifiedWebPilotBinding(binding, signal) {
+    if (!binding) throw new Error(webPilotPersonalUnavailable)
+    const planned = await plannedWebSourceLoadout(signal, binding.arm)
     if (planned.candidate.id !== binding.presetId || planned.webToolId !== binding.id || planned.webToolSource !== binding.sourceId) {
       throw new Error(webSourceChanged)
     }
@@ -1679,8 +1681,68 @@ export async function apply(ctx) {
     return { status: 'ready', arm, comparison: webPilotComparison(pair) }
   }
 
-  async function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm }, signal, kind = 'web-source-personal') {
-    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId) || !validOpeningId(launchId)) {
+  function oppositeWebPilotPlan(source, candidate) {
+    return Boolean(source.webPilotOrigin && candidate.webPilotOrigin?.sessionId === source.webPilotOrigin.sessionId &&
+      candidate.webPilotOrigin.arm !== source.webPilotOrigin.arm)
+  }
+
+  async function verifiedWebPilotPlanPair(plan, signal) {
+    if (!plan.webPilotOrigin) throw new Error(webPilotPersonalUnavailable)
+    const { sessionId, arm } = plan.webPilotOrigin
+    const result = await inspectWebSourcePractice({ sessionId }, signal)
+    const pair = await verifiedWebPilotPair(sessionId, result, signal)
+    if (!pair?.some(run => run.binding.arm === arm && run.binding.presetId === plan.presetId)) {
+      throw new Error(webPilotPersonalUnavailable)
+    }
+    return pair
+  }
+
+  async function webPilotPlanOptions({ id, revision }, signal) {
+    const source = buildPlans.read(id, revision)
+    const pair = await verifiedWebPilotPlanPair(source, signal)
+    const { arm } = source.webPilotOrigin
+    await verifiedWebPilotBinding(pair.find(run => run.binding.arm === arm).binding, signal)
+    const opposite = pair.find(run => run.binding.arm !== arm).binding
+    const isPeer = plan => oppositeWebPilotPlan(source, plan) && plan.presetId === opposite.presetId
+    const workspaceIds = await personalWorkspaceIds(signal)
+    const checkedPeer = buildPlans.list().some(isPeer) && await verifiedWebPilotBinding(opposite, signal).catch(() => {
+      signal?.throwIfAborted()
+      return null
+    })
+    buildPlans.read(id, revision)
+    const peers = checkedPeer ? buildPlans.list().filter(isPeer) : []
+    const plans = [source, ...peers].map(({ id, revision, name, note, webPilotOrigin }) =>
+      ({ id, revision, planName: name, note, arm: webPilotOrigin.arm }))
+    return { selectedId: id, plans, workspaceIds }
+  }
+
+  function openWebPilotPlan({ id, revision, sourceId, sourceRevision, workspaceId, launchId }, signal) {
+    const source = buildPlans.read(sourceId, sourceRevision)
+    const selected = buildPlans.read(id, revision)
+    if (!source.webPilotOrigin || (source !== selected && !oppositeWebPilotPlan(source, selected))) {
+      throw new Error(webPilotPersonalUnavailable)
+    }
+    return openPersonalWebDraft({ workspaceId, launchId }, signal,
+      ['plan-web-pilot', sourceId, sourceRevision, id, revision],
+      async () => {
+        const pair = await verifiedWebPilotPlanPair(source, signal)
+        const picked = pair.find(run => run.binding.arm === selected.webPilotOrigin.arm && run.binding.presetId === selected.presetId)
+        return verifiedWebPilotBinding(picked?.binding, signal)
+      }, () => {
+        buildPlans.read(sourceId, sourceRevision)
+        buildPlans.read(id, revision)
+      })
+  }
+
+  function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm }, signal, kind = 'web-source-personal') {
+    if (typeof sessionId !== 'string' || !heroAlternateSessionId.test(sessionId)) throw new Error('开局请求无效，请重试。')
+    const pilot = kind === 'web-pilot-personal'
+    return openPersonalWebDraft({ workspaceId, launchId }, signal, [kind, sessionId, ...(pilot ? [arm] : [])],
+      () => pilot ? verifiedWebPilotLoadout({ sessionId, arm }, signal) : verifiedWebSourceLoadout(sessionId, signal))
+  }
+
+  async function openPersonalWebDraft({ workspaceId, launchId }, signal, identity, loadout, checkCurrent) {
+    if (!validOpeningId(launchId)) {
       throw new Error('开局请求无效，请重试。')
     }
     if (typeof workspaceId !== 'string' || !workspaceId || workspaceId.length > 512) {
@@ -1691,15 +1753,12 @@ export async function apply(ctx) {
     if (!controller?.create || !controller.resolveAgent || !registry || !ctx.get('sessionQuery')) {
       throw new Error(webSourceUnavailable)
     }
-    const pilot = kind === 'web-pilot-personal'
-    if (pilot && !['standard', 'evidence'].includes(arm)) throw new Error(webPilotPersonalUnavailable)
-    const key = JSON.stringify([planTaskOwner, kind, sessionId, ...(pilot ? [arm] : []), workspaceId, launchId])
+    const key = JSON.stringify([planTaskOwner, ...identity, workspaceId, launchId])
     const next = 'session-' + createHash('sha256').update(key).digest('hex').slice(0, 32)
     if (openingMatches.has(next)) return openingMatches.get(next)
 
     const open = async () => {
-      const { draft, candidate, binding } = pilot ? await verifiedWebPilotLoadout({ sessionId, arm }, signal)
-        : await verifiedWebSourceLoadout(sessionId, signal)
+      const { draft, candidate, binding } = await loadout()
       const { presetId, verifyLive: verify } = await prepare(draft, candidate)
       const includesPath = await personalTaskPathFilter()
       const workspace = await checkedPersonalWorkspace(registry.get(workspaceId), includesPath)
@@ -1718,6 +1777,7 @@ export async function apply(ctx) {
       }
       signal?.throwIfAborted()
       if (closed) throw new Error('配装服务正在关闭，请重试。')
+      checkCurrent?.()
       if (!existing) {
         const created = await controller.create({ sessionId: next, workspaceId, agentPreset: presetId })
         if (created.sessionId !== next) throw new Error('新对局的会话标识已变化，请重新开局。')
@@ -7850,6 +7910,10 @@ export async function apply(ctx) {
           value = await readPlanHandoffOrigin(selection, request.signal)
         } else if (selection?.action === 'plan-web-pilot-origin') {
           value = await readPlanWebPilotOrigin(selection, request.signal)
+        } else if (selection?.action === 'plan-web-pilot-options') {
+          value = await webPilotPlanOptions(selection, request.signal)
+        } else if (selection?.action === 'plan-web-pilot-open') {
+          value = await openWebPilotPlan(selection, request.signal)
         } else if (selection?.action === 'evidence-retest-options') {
           value = await evidenceRetestOptions(selection, request.signal)
         } else if (selection?.action === 'evidence-retest-note') {

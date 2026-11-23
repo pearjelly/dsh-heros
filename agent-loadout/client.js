@@ -1454,9 +1454,20 @@ window.__ModuleLoader__.load({
         } }))
     }
 
+    function WebPersonalWorkspaceFields({ available, workspace, busy, onChange, onAdded }) {
+      const workspaceSetup = useContext(WorkspaceSetupContext)
+      const setup = workspaceSetup?.add && (workspaceSetup.pick || workspaceSetup.list) ? workspaceSetup : null
+      return h(Fragment, null,
+        h('label', null, t('工作区'),
+          h('select', { value: workspace?.workspaceId ?? '', disabled: busy || !available.length, required: true,
+            onChange: event => onChange(event.target.value) },
+            h('option', { value: '' }, t(available.length ? '选择自己的工作区' : '请先添加工作区')),
+            available.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceFileLabel(item, available))))),
+        setup && h(AddMaterialsFolder, { setup, disabled: busy, label: '添加工作区', onAdded }))
+    }
+
     function WebSourcePersonalDraft({ sessionId, arm, request, workspaces, onCancel, onOpen }) {
       const language = useLanguage()
-      const workspaceSetup = useContext(WorkspaceSetupContext)
       const { items } = useSyncExternalStore(workspaces.subscribe.bind(workspaces), workspaces.getSnapshot.bind(workspaces))
       const [checked, setChecked] = useState(null)
       const [attempt, retry] = useState(0)
@@ -1471,7 +1482,6 @@ window.__ModuleLoader__.load({
       const current = checked?.attempt === attempt && checked.language === language && checked.membership === membership ? checked : null
       const available = current?.options ? items.filter(item => current.options.workspaceIds.includes(item.workspaceId)) : empty
       const workspace = available.find(item => item.workspaceId === workspaceId)
-      const setup = workspaceSetup?.add && (workspaceSetup.pick || workspaceSetup.list) ? workspaceSetup : null
 
       useEffect(() => {
         const abort = new AbortController()
@@ -1514,18 +1524,104 @@ window.__ModuleLoader__.load({
         !current && h('p', { role: 'status' }, t('正在核对可用工作区…')),
         (openError || current?.error) && h('p', { className: 'moba-alert', role: 'alert' }, openError || current.error),
         h('form', { className: 'moba-web-personal-form', onSubmit: open },
-          current?.options && h('label', null, t('工作区'),
-            h('select', { value: workspace?.workspaceId ?? '', disabled: busy || !available.length, required: true,
-              onChange: event => { setWorkspace(event.target.value); setOpenError('') } },
-              h('option', { value: '' }, t(available.length ? '选择自己的工作区' : '请先添加工作区')),
-              available.map(item => h('option', { key: item.workspaceId, value: item.workspaceId }, workspaceFileLabel(item, available))))),
-          current?.options && setup && h(AddMaterialsFolder, { setup, disabled: busy, label: '添加工作区',
+          current?.options && h(WebPersonalWorkspaceFields, { available, workspace, busy,
+            onChange: id => { setWorkspace(id); setOpenError('') },
             onAdded: () => retry(value => value + 1) }),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
             h('button', { type: 'button', className: 'moba-roster-open moba-web-source-back', onClick: onCancel, disabled: busy }, t('返回')),
             (openError || current?.error) && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
               onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
             h('button', { type: 'submit', className: 'moba-start', disabled: busy || !workspace },
+              t(busy ? '正在准备对局…' : '打开空白草稿'), h(Glyph, { kind: 'arrow', size: 16 })))))
+    }
+
+    const webPlanTaskLabel = '用这套出装开网页任务'
+
+    function WebPilotPlanDraft({ plan, request, workspaces, onCancel, onOpen }) {
+      const language = useLanguage()
+      const group = useId()
+      const [checked, setChecked] = useState(null)
+      const [attempt, retry] = useState(0)
+      const [picked, setPicked] = useState(plan.id)
+      const [workspaceId, setWorkspace] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [openError, setOpenError] = useState('')
+      const opening = useRef(null)
+      const launchIds = useRef(new Map())
+      const membership = JSON.stringify(workspaces.map(item => item.workspaceId).sort())
+      const current = checked?.attempt === attempt && checked.language === language && checked.membership === membership ? checked : null
+      const options = current?.options
+      const selected = options?.plans.find(item => item.id === picked)
+      const available = options ? workspaces.filter(item => options.workspaceIds.includes(item.workspaceId)) : empty
+      const workspace = available.find(item => item.workspaceId === workspaceId)
+      const unavailable = '这份方案已更新或不可用。请从出装方案重新选择。'
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'plan-web-pilot-options'
+        request(action, { action, id: plan.id, revision: plan.revision }, abort.signal, language)
+          .then(options => {
+            if (abort.signal.aborted) return
+            if (options?.selectedId !== plan.id || !options.plans?.some(item => planMatchesRevision(item, plan))) {
+              throw new Error(t(unavailable))
+            }
+            setChecked({ options, attempt, language, membership })
+          }).catch(reason => {
+            if (!abort.signal.aborted) setChecked({ error: reason.message, attempt, language, membership })
+          })
+        return () => abort.abort()
+      }, [request, plan, attempt, language, membership])
+      useEffect(() => () => opening.current?.abort(), [])
+
+      async function open(event) {
+        event.preventDefault()
+        if (!selected || !workspace || opening.current) return
+        const abort = opening.current = new AbortController()
+        setBusy(true)
+        setOpenError('')
+        const key = JSON.stringify([selected.id, selected.revision, workspaceId])
+        if (!launchIds.current.has(key)) {
+          launchIds.current.set(key, Array.from(crypto.getRandomValues(new Uint8Array(16)),
+            byte => byte.toString(16).padStart(2, '0')).join(''))
+        }
+        try {
+          const action = 'plan-web-pilot-open'
+          const result = await request(action, { action, id: selected.id, revision: selected.revision, sourceId: plan.id,
+            sourceRevision: plan.revision, workspaceId, launchId: launchIds.current.get(key) }, abort.signal, language)
+          if (!abort.signal.aborted) onOpen({ sessionId: result.sessionId })
+        } catch (reason) {
+          if (!abort.signal.aborted) setOpenError(reason.message)
+        } finally {
+          opening.current = null
+          if (!abort.signal.aborted) setBusy(false)
+        }
+      }
+
+      return h(InstallDialog, { title: t(webPlanTaskLabel),
+        className: 'moba-starter-dialog moba-web-source-dialog moba-web-personal-dialog moba-web-plan-dialog',
+        initialFocus: '.moba-web-source-back', busy, onCancel,
+        onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening.current) onCancel() }) },
+        h('p', { className: 'moba-starter-note' }, t('在新草稿中粘贴要核对的链接，写下问题，再手动发送。')),
+        !current && h('p', { role: 'status' }, t('正在核对方案和工作区…')),
+        (openError || current?.error || options && !selected) && h('p', { className: 'moba-alert', role: 'alert' },
+          openError || current?.error || t(unavailable)),
+        h('form', { className: 'moba-web-personal-form', onSubmit: open },
+          options && h('fieldset', { className: 'moba-starter-routes', disabled: busy },
+            h('legend', null, t('出装方案')),
+            options.plans.map(item => h('label', { className: 'moba-starter-route', key: item.id, 'data-picked': item.id === selected?.id },
+              h('input', { type: 'radio', name: group, value: item.id, checked: item.id === selected?.id,
+                onChange: () => { setPicked(item.id); setOpenError('') } }),
+              h('span', null, h('strong', null, item.planName),
+                h('small', null, t(webPilotArms[item.arm].name)),
+                item.note && h('small', null, item.note))))),
+          options && h(WebPersonalWorkspaceFields, { available, workspace, busy,
+            onChange: id => { setWorkspace(id); setOpenError('') },
+            onAdded: () => retry(value => value + 1) }),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-web-source-back', onClick: onCancel, disabled: busy }, t('返回')),
+            (openError || current?.error) && h('button', { type: 'button', className: 'moba-roster-open', disabled: busy,
+              onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
+            h('button', { type: 'submit', className: 'moba-start', disabled: busy || !workspace || !selected },
               t(busy ? '正在准备对局…' : '打开空白草稿'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
@@ -7300,6 +7396,7 @@ window.__ModuleLoader__.load({
       const [editor, setEditor] = useState(initialMode === 'create' ? { mode: 'create' } : null)
       const [sharing, setSharing] = useState(null)
       const [taskPlan, setTaskPlan] = useState(null)
+      const [webTaskPlan, setWebTaskPlan] = useState(null)
       const [receiptError, setReceiptError] = useState('')
       const [pairPlan, setPairPlan] = useState(null)
       const [retest, setRetest] = useState(null)
@@ -7319,6 +7416,7 @@ window.__ModuleLoader__.load({
       const shareButton = useRef(null)
       const importButton = useRef(null)
       const taskButton = useRef(null)
+      const webTaskButton = useRef(null)
       const receiptBack = useRef(null)
       const pairButton = useRef(null)
       const retestButton = useRef(null)
@@ -7405,6 +7503,11 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(() => taskButton.current?.focus())
       }
 
+      function closeWebTask() {
+        setWebTaskPlan(null)
+        requestAnimationFrame(() => (webTaskButton.current ?? focus.current)?.focus())
+      }
+
       function closePair() {
         if (openingTask.current) return
         const trigger = pairPlan.evidenceRetest ? retestButton : pairButton
@@ -7455,11 +7558,14 @@ window.__ModuleLoader__.load({
         disabled: Boolean(plan.broken), onClick: () => setTaskPlan(options ? { plan, alternatives: matchingTaskPlans(plans, options) }
           : { plan, catalog: retestId ? plans : undefined }) },
         t('用这套出装开新任务'), h(Glyph, { kind: 'arrow', size: 16 }))
+      const startWebTask = plan?.hasWebPilotOrigin && h('button', { className: 'moba-start moba-plan-web-start', type: 'button',
+        ref: webTaskButton, 'aria-haspopup': 'dialog', disabled: Boolean(plan.broken), onClick: () => setWebTaskPlan(plan) },
+        t(webPlanTaskLabel), h(Glyph, { kind: 'arrow', size: 16 }))
       const sourceInHeader = plan?.hasHandoffOrigin || plan?.hasWebPilotOrigin
       const testedSource = plan && (sourceInHeader || plan.hasEvidenceOrigin) && onOpenSource &&
         h(PlanTestedSource, { key: plan.id + ':' + plan.revision, plan, request,
           onVisit: (sessionId, reference) => { close(); onOpenSource(sessionId, reference) } })
-      return h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
+      return h(Fragment, null, h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
         'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan || initialTaskReference || pairPlan), 'aria-labelledby': title,
         onCancel: event => { event.preventDefault(); if (pairPlan) closePair(); else if (taskPlan) closeTask(); else if (sharing) closeSharing(); else close() },
         onKeyDown: event => {
@@ -7531,7 +7637,8 @@ window.__ModuleLoader__.load({
                     item.broken && h('small', { className: 'moba-gallery-unavailable' }, t('不可用')))))
                   : h('p', { className: 'moba-empty', role: 'status' }, plans.length ? t('未找到匹配的方案。') : t('还没有出装方案。'))),
               plan && h('div', { className: 'moba-plan-preview' },
-                sourceInHeader && h('div', { className: 'moba-plan-source-actions' }, startTask, testedSource),
+                sourceInHeader && h('div', { className: 'moba-plan-source-actions', 'data-web-task': plan.hasWebPilotOrigin || undefined },
+                  startWebTask || startTask, testedSource),
                 h('div', { className: 'moba-plan-hero' },
                   h(HeroArt, { id: plan.heroId, art: plan.heroArt, className: 'moba-splash' }),
                   h('div', { className: 'moba-stage-shade' }),
@@ -7543,7 +7650,7 @@ window.__ModuleLoader__.load({
                   (plan.items.length || plan.removed.length || !plan.broken) &&
                     h(PlanEquipment, { items: plan.items, removed: plan.removed }),
                   h('div', { className: 'moba-plan-launches' },
-                    !sourceInHeader && startTask,
+                    (!sourceInHeader || plan.hasWebPilotOrigin) && startTask,
                     h('button', { className: 'moba-roster-open', type: 'button', ref: pairButton, disabled: Boolean(plan.broken) || !hasAlternative,
                       onClick: () => setPairPlan({ plan }) }, t('与另一份方案同题对照')),
                     canRetest && h('button', { className: 'moba-roster-open', type: 'button', ref: retestButton,
@@ -7566,7 +7673,8 @@ window.__ModuleLoader__.load({
                 h('button', { className: 'moba-start', type: 'button', disabled: Boolean(plan.broken),
                   onClick: () => { close(); onApply(plan) } }, t('采用方案'), h(Glyph, { kind: 'arrow', size: 17 })))
                 : !plans.length && h('button', { className: 'moba-start', type: 'button', disabled: !canSave,
-                  onClick: () => edit('create') }, t('保存当前出装')))))
+                  onClick: () => edit('create') }, t('保存当前出装'))))),
+        webTaskPlan && h(WebPilotPlanDraft, { plan: webTaskPlan, request, workspaces, onCancel: closeWebTask, onOpen: taskOpened }))
     }
 
     function OpeningQuestEditor({ id, draftKey, hero, initial, followUp, trialTarget, deliveryTarget, request, enabled, pending, onSave, onClear, onClose, inspectGear, onRepair }) {
@@ -12671,6 +12779,9 @@ window.__ModuleLoader__.load({
         padding: 8px 14px; border-block-end: 1px solid var(--line); }
       .moba-plan-source-actions > button { min-block-size: 44px; max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
       .moba-plan-source-actions > p { flex-basis: 100%; }
+      .moba-plan-source-actions[data-web-task] { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+      .moba-plan-source-actions[data-web-task] > p { grid-column: 1 / -1; }
+      .moba-plan-web-start svg { flex: none; }
       .moba-plan-gear { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 7px; }
       .moba-plan-gear li { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 7px 4px 4px; background: #0e141f; border: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
       .moba-plan-gear .moba-item-art { flex: none; width: 28px; }
@@ -13083,6 +13194,10 @@ window.__ModuleLoader__.load({
       .moba-web-personal-form select { width: 100%; min-inline-size: 0; min-block-size: 44px; padding: 6px;
         color: var(--ink); background: #141c2a; border: 1px solid var(--line); }
       .moba-web-personal-form > button { justify-self: start; min-block-size: 44px; }
+      .moba-web-plan-dialog .moba-starter-routes { grid-template-columns: minmax(0, 1fr); margin: 0; }
+      .moba-web-plan-dialog .moba-starter-route { min-block-size: 44px; }
+      .moba-web-plan-dialog .moba-starter-route small { white-space: pre-wrap; }
+      .moba-web-plan-dialog :is(button, select):focus-visible { outline: 2px solid #9ed4ec; outline-offset: 2px; }
       .moba-web-source-result, .moba-web-pilot-result { grid-template-columns: minmax(0, 1fr); }
       .moba-web-source-result .moba-lighthouse-anchor-actions, .moba-web-pilot-result .moba-lighthouse-anchor-actions {
         justify-content: flex-start;

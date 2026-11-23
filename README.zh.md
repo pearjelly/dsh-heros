@@ -15,7 +15,7 @@
 支持 DSH 0.2.1-rc.1 至 0.2.1-rc.5、0.2.2-rc.1 至 0.2.2-rc.5，以及 0.2.3-alpha.2 预览版。预览版需要 Node.js 24.x 系列的 24.22.3 或更新版本，或 26.13.1 及以上版本。[DSH 预览版要求](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.208.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.209.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -38,6 +38,8 @@ dsh web
 在 **对照两局** 里，任选一边点 **用这套出装做自己的任务**。选自己的工作区，打开配好装备的空白草稿，粘贴新链接、写下自己的问题，再手动发送。
 
 想留到下次用，可以在选中的一侧点 **保存为方案**。看着这局的实际选择和交付文件，给出装命名，也可以记下适用情形。下次进 **出装方案**，点 **查看实战来源** 可看两局及保存的是哪一侧，点 **采用方案** 可把配方装回备战大厅。分享码只携带出装配方，取舍记录、交付文件名和原会话留在本机。
+
+从网页实测方案点 **用这套出装开网页任务**。如果也保存了同一场对照的另一侧，开局时可看两套方案的名称和适用情形。按自己的问题选一套出装和工作区，再点 **打开空白草稿**。粘贴新链接、写下想核对的问题，由你手动发送。
 
 原文缺失或对局标为待核实时，可以点 **用同一题再试**，用原题另开草稿。已经记录的选择保留在原会话里。
 
