@@ -325,11 +325,14 @@ export async function apply(ctx) {
           }
         } else if (foundEvidence && (evidenceConfirmed || replay)) {
           if (asksFormat) sequence.push('ask_user_question')
-          sequence.push('write', 'present')
+          sequence.push('write')
+          if (review) sequence.push('ask_user_question')
+          const confirmed = review && results[2] && JSON.parse(results[2].content[0].text).answers?.[0]?.selected?.includes('Confirm handoff')
+          if (!review || confirmed) sequence.push('present')
         }
         name = sequence[results.length]
         if (name === 'read') args = { file_path: evidenceMaterial }
-        if (name === 'ask_user_question' && review && results.length === 3) {
+        if (name === 'ask_user_question' && review && results.length === (hasEvidenceCheck ? 3 : 2)) {
           args = { questions: [{
             id: 'fixture-delivery-review',
             question: 'The draft notes that spare batteries were unverified. Deliver it or request changes?',
