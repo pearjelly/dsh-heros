@@ -9380,7 +9380,7 @@ window.__ModuleLoader__.load({
             t(opening ? '正在准备对局…' : '确认并打开会话'), h(Glyph, { kind: 'arrow', size: 16 }))))
     }
 
-    function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, fixedPlanRevision, lessonSource, armoryDraft, workspaces, initialWorkspaceId,
+    function LoadoutTaskForm({ plan, testedAlternatives = empty, planCatalog, fixedPlanRevision, focusErrors, lessonSource, armoryDraft, workspaces, initialWorkspaceId,
       handoffAlternateOf, lighthousePair, lighthouseSource,
       initialMaterial = '', initialBrief = '', backLabel = '返回方案库', request, onBack, onOpened, onOpeningChange,
       workspaceSetup, addedWorkspace, onWorkspaceAdded, onWorkspaceApplied, checkingWorkspace, workspaceStatus, workspaceError, retryWorkspaces }) {
@@ -9411,7 +9411,8 @@ window.__ModuleLoader__.load({
       const materialField = useRef(null)
       const briefField = useRef(null)
       const reviewHeading = useRef(null)
-      const lighthouseError = useRef(null)
+      const errorNotice = useRef(null)
+      const revealError = lighthouseSource?.sessionId || focusErrors
       const materialBusy = Boolean(working || checkingWorkspace)
       const workspace = workspaces.find(item => item.workspaceId === chosenWorkspaceId)
       const preview = reviewed?.value
@@ -9459,8 +9460,8 @@ window.__ModuleLoader__.load({
         else (workspaceField.current?.disabled ? materialField.current : workspaceField.current)?.focus()
       }, [preview])
       useLayoutEffect(() => {
-        if (lighthouseSource?.sessionId && error) lighthouseError.current?.focus()
-      }, [lighthouseSource?.sessionId, error])
+        if (revealError && error) errorNotice.current?.focus()
+      }, [revealError, error])
 
       function editTask() {
         if (pending.current) return
@@ -9561,7 +9562,7 @@ window.__ModuleLoader__.load({
 
       const messages = h(Fragment, null,
         error && h('p', { className: 'moba-alert', role: 'alert',
-          ...(lighthouseSource && { ref: lighthouseError, tabIndex: -1 }) }, error),
+          ...(revealError && { ref: errorNotice, tabIndex: -1 }) }, error),
         working && h('p', { className: 'moba-empty', role: 'status' }, t(working === 'review' ? '正在核对材料和出装…' : '正在准备对局…')))
 
       return !preview ? h('form', { className: 'moba-plan-form moba-plan-task', onSubmit: submit },
@@ -10386,7 +10387,7 @@ window.__ModuleLoader__.load({
           initialWorkspaceId: workspaceId, request, evidenceRetest,
           onBack: closePair, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
           : taskPlan ? h(LoadoutTaskForm, { plan: taskPlan.plan, testedAlternatives: taskPlan.alternatives, planCatalog: taskPlan.catalog,
-            fixedPlanRevision: Boolean(initialTaskReference), backLabel: initialTaskReference ? '返回保存结果' : undefined,
+            fixedPlanRevision: Boolean(initialTaskReference), focusErrors: standaloneTask, backLabel: initialTaskReference ? '返回保存结果' : undefined,
             workspaces, initialWorkspaceId: workspaceId, request, onBack: closeTask, onOpeningChange: taskOpeningChanged, onOpened: taskOpened })
           : initialTaskReference ? h(Fragment, null,
             receiptError ? h('p', { className: 'moba-alert', role: 'alert' }, receiptError)
