@@ -3564,14 +3564,15 @@ window.__ModuleLoader__.load({
     function CombinedLighthouseChallengePreview({ preview, sampleLanguage, selected, arm, disabled, onChoose }) {
       const current = selected?.preview ?? preview
       return h(Fragment, null,
-        h('p', { className: 'moba-lighthouse-note' }, t('调度说有两节备用电池，补给卡能证明吗？')),
         h(InstallFacts, { facts: [[t('发起人出装'), t(lighthouseCarryModeLabels[preview.played])],
-          [t('任务语言'), t(sampleLanguage)], [t('材料文件'), preview.material]] }),
-        h('details', { className: 'moba-web-challenge-task' },
-          h('summary', null, t('查看原题')),
-          h('textarea', { 'aria-label': t('两边共用的任务'), rows: 4, value: preview.task, readOnly: true, spellCheck: false })),
+          [t('任务语言'), t(sampleLanguage)]] }),
         h(LighthouseLoadoutChoices, { heading: '选择本局出装', options: lighthouseCarryModeLabels, picked: arm,
           available: current.arms, disabled, onChoose }),
+        h('p', { className: 'moba-lighthouse-note' }, t('调度说有两节备用电池，补给卡能证明吗？')),
+        h('details', { className: 'moba-web-challenge-task' },
+          h('summary', null, t('查看原题')),
+          h(InstallFacts, { facts: [[t('材料文件'), preview.material]] }),
+          h('textarea', { 'aria-label': t('两边共用的任务'), rows: 4, value: preview.task, readOnly: true, spellCheck: false })),
         arm && !selected && h('p', { className: 'moba-starter-note', role: 'status' }, t('正在核对试玩出装…')),
         (selected?.error || current.reason) && h('p', { className: 'moba-alert', role: 'status' }, selected?.error || t(current.reason)))
     }
