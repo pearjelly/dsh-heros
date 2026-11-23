@@ -2922,9 +2922,9 @@ window.__ModuleLoader__.load({
 
     const lighthouseCombinedTitle = '一局两道选择'
 
-    function LighthouseReviewStart({ request, onCancel, onOpen }) {
+    function LighthouseReviewStart({ request, onCancel, onOpen, startCombined = false }) {
       const language = useLanguage()
-      const [combined, setCombined] = useState(false)
+      const [combined, setCombined] = useState(startCombined)
       const [checked, setChecked] = useState(null)
       const [attempt, retry] = useState(0)
       const [opening, setOpening] = useState(false)
@@ -2992,12 +2992,16 @@ window.__ModuleLoader__.load({
 
       const error = openError || state?.error || preview?.reason
       if (combined) {
-        const back = () => switchPractice(false)
+        const back = () => {
+          if (pending.current) return
+          if (startCombined) onCancel()
+          else switchPractice(false)
+        }
         return h(InstallDialog, { title: t(lighthouseCombinedTitle), className: 'moba-starter-dialog moba-lighthouse-combined-start',
           busy: opening, onCancel: back, initialFocus: '[data-review-start-intro]',
           onKeyDown: event => closeDialogOnEscape(event, back) },
           h('div', { className: 'moba-lighthouse-combined-fields' },
-            h('p', { className: 'moba-lighthouse-note', ref: combinedIntro, tabIndex: -1 },
+            h('p', { className: 'moba-lighthouse-note', ref: combinedIntro, tabIndex: -1, 'data-review-start-intro': true },
               t('调度说有两节备用电池，补给卡能证明吗？')),
             h('ul', { className: 'moba-lighthouse-results moba-lighthouse-combined-choices' },
               h('li', null, h('div', null, h('strong', null, t('证据核验')),
@@ -3013,7 +3017,7 @@ window.__ModuleLoader__.load({
             preview?.token && h('p', { className: 'moba-starter-note', role: opening ? 'status' : undefined },
               t(opening ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。'))),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
-            h('button', { type: 'button', className: 'moba-roster-open', disabled: opening, onClick: back }, t('返回交接试玩')),
+            h('button', { type: 'button', className: 'moba-roster-open', disabled: opening, onClick: back }, t(startCombined ? '返回大厅' : '返回交接试玩')),
             error && h('button', { type: 'button', className: 'moba-roster-open', disabled: opening,
               onClick: () => { setOpenError(''); retry(value => value + 1) } }, t('重新核对')),
             h('button', { type: 'button', className: 'moba-start', disabled: opening || !preview?.token || Boolean(error),
@@ -10269,8 +10273,9 @@ window.__ModuleLoader__.load({
       const starterEvidenceButton = useRef(null)
       const [challengeJoin, setChallengeJoin] = useState(null)
       const challengeButton = useRef(null)
-      const [reviewStartOpen, setReviewStartOpen] = useState(false)
+      const [reviewStartOpen, setReviewStartOpen] = useState('')
       const reviewStartButton = useRef(null)
+      const combinedStartButton = useRef(null)
       const [webPractice, setWebPractice] = useState(null)
       const starterChallengeButton = useRef(null)
       const [lighthouseRunsView, setLighthouseRunsView] = useState(null)
@@ -10998,10 +11003,17 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'moba-roster-open moba-choose-loadout', disabled: pending, onClick: chooseLoadout },
               h(Glyph, { kind: 'team', size: 17 }), t('去配装'))),
           data && h('div', { className: 'moba-lighthouse-entry' },
+            presets.some(preset => preset.id === 'standard' && !preset.broken) && h('button', { type: 'button',
+              className: 'moba-starter-entry moba-lighthouse-case-entry', disabled: pending, ref: combinedStartButton,
+              'aria-haspopup': 'dialog', onClick: () => setReviewStartOpen('combined') },
+              h('span', { className: 'moba-starter-symbol' }, h(Glyph, { kind: 'flag', size: 20 })),
+              h('span', { className: 'moba-starter-entry-copy' }, h('strong', null, t(lighthouseCombinedTitle)),
+                h('span', null, t('调度说有两节备用电池，补给卡能证明吗？'))),
+              h(Glyph, { kind: 'arrow', size: 18 })),
             h('div', { className: 'moba-handoff-entry-actions' },
               h('button', { type: 'button', className: 'moba-roster-open moba-review-start-button', disabled: pending,
                 ref: reviewStartButton, 'aria-haspopup': 'dialog', 'data-review-challenge-start': true,
-                onClick: () => setReviewStartOpen(true) },
+                onClick: () => setReviewStartOpen('routes') },
               h(Glyph, { kind: 'flag', size: 17 }), h('span', null, t('试玩灯塔交接'))),
               h('button', { type: 'button', className: 'moba-roster-open moba-lighthouse-entry-button', disabled: pending,
                 ref: challengeButton, 'aria-haspopup': 'dialog', onClick: () => setChallengeJoin({ trigger: challengeButton }) },
@@ -11076,12 +11088,13 @@ window.__ModuleLoader__.load({
             if (task === undefined) openDraftSession(sessionId)
             else openDraftSession(sessionId, task)
           } }),
-          reviewStartOpen && h(LighthouseReviewStart, { request, onCancel: () => {
-            setReviewStartOpen(false)
-            requestAnimationFrame(() => reviewStartButton.current?.focus())
+          reviewStartOpen && h(LighthouseReviewStart, { request, startCombined: reviewStartOpen === 'combined', onCancel: () => {
+            const trigger = reviewStartOpen === 'combined' ? combinedStartButton : reviewStartButton
+            setReviewStartOpen('')
+            requestAnimationFrame(() => trigger.current?.focus())
           }, onOpen: (sessionId, task) => {
             cue('lock')
-            setReviewStartOpen(false)
+            setReviewStartOpen('')
             openDraftSession(sessionId, task)
           } }),
           challengeJoin && h(LighthouseChallengeJoin, { request, initialInput: challengeJoin.input,
@@ -14540,6 +14553,8 @@ window.__ModuleLoader__.load({
       .moba-choose-loadout svg { flex: none; }
       .moba-lighthouse-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; margin-block-end: 15px; }
       .moba-lighthouse-entry .moba-starter-entry { margin: 0; }
+      .moba-lighthouse-case-entry { grid-column: 1 / -1; min-block-size: 52px; }
+      .moba-lighthouse-case-entry > svg { color: var(--gold); }
       .moba-lighthouse-entry .moba-hero-trial-entry { grid-column: 1 / -1; grid-template-columns: auto minmax(0, 1fr) auto;
         min-height: 61px; border-color: #a38757; }
       .moba-hero-trial-entry > svg { color: var(--gold); }
@@ -14562,13 +14577,15 @@ window.__ModuleLoader__.load({
         .moba-lighthouse-entry-actions { display: flex; flex-wrap: wrap; }
       }
       @container (max-width: 390px) {
+        .moba-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+        .moba-header-tools { width: 100%; justify-content: flex-start; align-items: center; }
         .moba-web-practice-entry { grid-template-columns: auto minmax(0, 1fr); }
         .moba-web-practice-entry > svg { display: none; }
         .moba-web-practice-entry[data-pilot] { grid-template-columns: minmax(0, 1fr); padding: 7px 9px; }
         .moba-web-practice-entry[data-pilot] .moba-starter-symbol { display: none; }
         .moba-web-practice-entry[data-pilot] .moba-starter-entry-copy strong { font-size: 14px; }
         .moba-lighthouse-entry .moba-starter-entry:not(.moba-hero-trial-entry) { grid-template-columns: auto minmax(0, 1fr); }
-        .moba-lighthouse-entry .moba-starter-entry-action { display: none; }
+        .moba-lighthouse-entry .moba-starter-entry-action, .moba-lighthouse-case-entry > svg { display: none; }
       }
       .moba-starter-entry:hover:not(:disabled) { border-color: var(--gold); background: linear-gradient(115deg, #26414a, #1e2a37 62%, #332b19); }
       .moba-starter-entry:disabled { opacity: .6; }
