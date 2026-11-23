@@ -1364,6 +1364,7 @@ export async function apply(ctx) {
     const webPractice = kind === 'web-source' || webPilot
     const { input: readInput, check, unavailable } = reviewedTaskKinds[kind]
     const input = await readInput(selection, english, signal)
+    const { sourcePlan } = input
     const controller = ctx.get('sessionController')
     const registry = ctx.get('workspaceRegistry')
     if (!controller?.create || !ctx.get('sessionQuery') || !registry) {
@@ -1375,7 +1376,13 @@ export async function apply(ctx) {
 
     const open = async () => {
       const existing = await planTaskSession(sessionId, signal)
+      if (sourcePlan) buildPlans.read(sourcePlan.id, sourcePlan.revision)
       if (existing?.launch?.token === token && existing.launch.request === input.hash) {
+        if (sourcePlan && !existing.started) {
+          const checked = await check(input, signal)
+          if (checked.token !== token) throw new Error('材料、任务或出装已变化，请重新核对。')
+          buildPlans.read(sourcePlan.id, sourcePlan.revision)
+        }
         return (kind === 'alternate' || webPilot) && existing.started
           ? { sessionId, workspaceId: input.workspaceId } : reply
       }
@@ -1395,10 +1402,12 @@ export async function apply(ctx) {
         await mkdir(cwd, { recursive: true, mode: 0o700 })
         if (await realpath(cwd) !== cwd) throw new Error(webSourceUnavailable)
       }
+      if (sourcePlan) buildPlans.read(sourcePlan.id, sourcePlan.revision)
       const workspace = webPractice ? await registry.create(cwd, 'Web Research Practice · 网页检索试玩') : registry.get(input.workspaceId)
       if (workspace?.path !== cwd) throw new Error('请选择一个现有的工作区。')
       signal?.throwIfAborted()
       if (closed) throw new Error('配装服务正在关闭，请重试。')
+      if (sourcePlan) buildPlans.read(sourcePlan.id, sourcePlan.revision)
       if (existing) {
         if (existing.launch || existing.started || existing.header.isSeeded || existing.inheritedEventCount !== 0 ||
           existing.header.cwd !== cwd || existing.header.agentPreset !== presetId) {
@@ -1424,6 +1433,7 @@ export async function apply(ctx) {
       const armory = kind === 'armory'
       const target = (source || armory) && { workspaceId: workspace.id, digest: checked.digest, presetId, identity: checked.identity,
         ...(source && isMinimalTrialSource(source) && { textBinding: checked.stockBindings[0] }) }
+      if (sourcePlan) buildPlans.read(sourcePlan.id, sourcePlan.revision)
       appendPluginRecord(agent.session, planTaskRecord, { owner: planTaskOwner, request: input.hash, token, planName, task,
         ...(material !== undefined && { material }), ...(target && { target }), ...(source && { source }), ...(armory && { armory }), ...(webSourcePractice && { webSourcePractice }),
         ...(kind === 'web-pilot' && input.replayOf && { webPilotReplayOf: input.replayOf }),
@@ -1454,8 +1464,24 @@ export async function apply(ctx) {
     return { task, hash }
   }
 
-  async function requestedWebPilot({ arm, sampleLanguage, parentSessionId }, english, signal) {
+  async function requestedWebPilot({ arm, sampleLanguage, parentSessionId, sourcePlan }, english, signal) {
     if (!['standard', 'evidence'].includes(arm) || ![undefined, 'en', 'zh'].includes(sampleLanguage)) throw new Error(webSourceChanged)
+    if (sourcePlan !== undefined) {
+      if (!sourcePlan || typeof sourcePlan.id !== 'string' || typeof sourcePlan.revision !== 'string') {
+        throw new Error(webPilotReplayChanged)
+      }
+      const { plan, run } = await readTestedWebPilotPlan(sourcePlan, signal)
+      if (!completedCanonicalWebPilot(run) || run.binding.arm === arm ||
+        (parentSessionId !== undefined && parentSessionId !== run.sessionId) ||
+        (sampleLanguage !== undefined && sampleLanguage !== run.view.sampleLanguage)) throw new Error(webPilotReplayChanged)
+      const { sessionId, task, binding } = run
+      const planRef = { id: plan.id, revision: plan.revision }
+      const hash = createHash('sha256').update(JSON.stringify([
+        'plan-web-pilot-replay', planRef.id, planRef.revision, arm, task, sessionId, binding.id, binding.sourceId,
+      ])).digest('hex')
+      return { arm, task, hash, replayOf: sessionId, replayBinding: binding, sourcePlan: planRef,
+        sampleLanguage: run.view.sampleLanguage }
+    }
     if (parentSessionId === undefined) {
       const task = webPilotTask(sampleLanguage === undefined ? english : sampleLanguage === 'en')
       const hash = createHash('sha256').update(JSON.stringify([arm, task])).digest('hex')
@@ -1601,7 +1627,8 @@ export async function apply(ctx) {
   async function previewWebPilot(selection, english, signal) {
     const input = await requestedWebPilot(selection, english, signal)
     const { token } = await checkWebSourcePractice(input, signal)
-    return { token, arm: input.arm, version: webSourceVersion, hostVersion: webSourceHostVersion }
+    return { token, arm: input.arm, version: webSourceVersion, hostVersion: webSourceHostVersion,
+      ...(input.sourcePlan && { task: input.task, sampleLanguage: input.sampleLanguage }) }
   }
 
   function liveWebSourceBinding(agent, presetId, workspaceId, expectedToolId, arm, expectedSource) {
