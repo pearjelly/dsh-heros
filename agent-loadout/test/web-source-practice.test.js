@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { openBuildPlans } from '../build-plans.js'
 import { decodeWebPilotChallenge, decodeWebPilotReport, encodeWebPilotChallenge, encodeWebPilotReport } from '../build-sharing.js'
-import { matchReport, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from '../match-report.js'
+import { matchReport, observedWebPilotFollowupRead, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from '../match-report.js'
 import { englishText } from '../localization.js'
 import { observedWebSource, observedWebSourceResult, webSourceUrl } from '../web-source-practice.js'
 
@@ -83,6 +83,8 @@ test('Web practice handoff reports carry only canonical outcomes from linked nat
   const followUp = { startSeq: 10, endSeq: 16, turn: 2 }
   assert.deepEqual(webPilotHandoffOutcome(events, [first], 2), { delivered: false })
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: true })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2, { includeAnswerSeq: true }),
+    { choices: [], custom: true, answerSeq: 12, delivered: true })
   events[15].sourceEventSeqs = [4]
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: false })
   const immediate = result(8, 1, 'ask', 3)
@@ -91,6 +93,39 @@ test('Web practice handoff reports carry only canonical outcomes from linked nat
   }) }]
   events[8] = immediate
   assert.deepEqual(webPilotHandoffOutcome(events, [first], 2), { choices: [], custom: true, delivered: false })
+})
+
+test('Web Research only reports a bound read started after the actual evidence answer', () => {
+  const binding = { id: 'tool:1bf086b380a4', sourceId: 'plugin:publisher' }
+  const url = 'https://example.com/local-record'
+  const events = Array.from({ length: 30 }, (_, seq) => ({ type: 'time-context', seq, data: {} }))
+  function addRead(seq, turn, callId, statusCode, truncated = false, sourceId = binding.sourceId) {
+    events[seq] = { type: 'tool/call', seq, data: { turn, step: 1, name: 'web_fetch', callId } }
+    events[seq + 1] = { type: toolSourceRecord, seq: seq + 1, ignorable: true,
+      data: { callSeq: seq, ...binding, sourceId } }
+    events[seq + 2] = { type: 'tool/result', seq: seq + 2, surfaceOp: 'append', sourceEventSeqs: [seq],
+      data: { turn, step: 1, message: { toolCallId: callId, isError: false }, meta: { url, statusCode, truncated } } }
+    return events[seq + 2]
+  }
+  const original = { startSeq: 0, endSeq: 13, turn: 1 }
+  const continued = { startSeq: 14, endSeq: 26, turn: 2 }
+  const windows = [original, continued]
+  addRead(2, 1, 'in-flight-before-answer', 200)
+  addRead(9, 1, 'different-tool-source', 200, false, 'plugin:different')
+  addRead(27, 3, 'unrelated-turn', 200)
+  assert.equal(observedWebPilotFollowupRead(events, windows, 3, binding), undefined)
+
+  addRead(16, 2, 'checked-source', 200)
+  assert.deepEqual(observedWebPilotFollowupRead(events, windows, 3, binding), { status: 'complete', statusCode: 200, url })
+  const latest = addRead(20, 2, 'latest-source', 404)
+  assert.deepEqual(observedWebPilotFollowupRead(events, windows, 3, binding), { status: 'http-error', statusCode: 404, url })
+  latest.data.meta = { url, statusCode: 200, truncated: true }
+  assert.deepEqual(observedWebPilotFollowupRead(events, windows, 3, binding), { status: 'truncated', statusCode: 200, url })
+  latest.sourceEventSeqs = [16]
+  assert.deepEqual(observedWebPilotFollowupRead(events, windows, 3, binding), { status: 'unknown' })
+  latest.sourceEventSeqs = [20]
+  latest.data.message.isError = true
+  assert.deepEqual(observedWebPilotFollowupRead(events, windows, 3, binding), { status: 'failed' })
 })
 
 test('saving a web pilot arm deduplicates concurrent requests and retains its source until the recipe changes', async t => {

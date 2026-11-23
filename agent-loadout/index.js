@@ -27,7 +27,7 @@ import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
 import { observedWebSource, observedWebSourceResult, webPilotTask, webSourceHostVersion, webSourceModule, webSourceOldVersion, webSourceTask, webSourceUrl, webSourceVersion } from './web-source-practice.js'
-import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, panelActivityRecord, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from './match-report.js'
+import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, observedWebPilotFollowupRead, panelActivityRecord, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
 import { planReviewActivities } from './plan-reviews.js'
@@ -1699,7 +1699,9 @@ export async function apply(ctx) {
         if (completedCanonicalWebPilot(result)) {
           result.receivedReport = observedWebPilotReport(launch, binding.arm)
           if (handoff || practiceDecision) {
-            const { choices, custom, delivered } = webPilotHandoffOutcome(source.events, outcome.windows, receipt.seq)
+            const showConsequence = practiceDecision && binding.arm === 'evidence'
+            const { choices, custom, delivered, answerSeq } = webPilotHandoffOutcome(source.events, outcome.windows, receipt.seq,
+              { includeAnswerSeq: showConsequence })
             const decision = choices ? (!custom && lighthouseEvidenceDecision(choices)) || 'answered' : 'none'
             if (handoff) {
               result.handoff = { sampleLanguage: result.view.sampleLanguage, played: binding.arm, decision, delivered }
@@ -1709,7 +1711,15 @@ export async function apply(ctx) {
               const initial = launch.webPilotOpeningChoice
               const hasInitial = lighthouseEvidenceChoices.includes(initial) &&
                 launch.request === webPilotOpeningHash(binding.arm, launch.task, initial)
-              result.view.practiceDecision = { ...(hasInitial && { initial }), actual: decision }
+              const practice = { ...(hasInitial && { initial }), actual: decision }
+              if (showConsequence && lighthouseEvidenceChoices.includes(decision)) {
+                const consequence = practice.consequence = { kind: decision }
+                if (decision === 'gather') {
+                  const read = observedWebPilotFollowupRead(source.events, outcome.windows, answerSeq, binding)
+                  if (read) consequence.read = read
+                } else if (decision === 'qualify') consequence.delivered = delivered
+              }
+              result.view.practiceDecision = practice
             }
           }
         }

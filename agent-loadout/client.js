@@ -1752,19 +1752,38 @@ window.__ModuleLoader__.load({
             onClick: () => { setError(''); retry(value => value + 1) } }, t('重新核对'))))
     }
 
+    function WebPilotConsequence({ consequence }) {
+      if (consequence.kind === 'gather') {
+        const { read } = consequence
+        const url = read?.url && webRecoveryLink(read.url)
+        const status = read && t(reportWebReadStates[read.status] ?? reportWebReadStates.unknown) +
+          (read.statusCode ? ' · HTTP ' + read.statusCode : '')
+        const label = read ? t('补读来源') + ' · ' + status : t('未记录补读来源。')
+        return h('p', { className: 'moba-web-pilot-consequence' },
+          url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, label) : h('span', null, label),
+          h('span', null, t('本题需要本机试跑记录。')))
+      }
+      const label = consequence.kind === 'qualify'
+        ? t(consequence.delivered ? '本局已交付文件。' : '本局未核对到文件交付。')
+        : t('补上本机试跑记录后再提交。')
+      return h('p', { className: 'moba-web-pilot-consequence' }, label)
+    }
+
     function WebPilotOutcome({ view, complete }) {
       const decision = complete && view?.practiceDecision
       const actual = decision && (decision.actual === 'none' ? t('未记录选择') : view.choice || t(webPilotReportDecisions[decision.actual]))
       return h(Fragment, null,
         decision ? h('dl', { className: 'moba-web-pilot-practice-decision' },
-          decision.initial && h('div', null, h('dt', null, t('开局选择')), h('dd', null, t(evidenceOpeningChoices[decision.initial]))),
-          h('div', null, h('dt', null, t('实际选择')), h('dd', null, actual)))
+          decision.initial && h(Fragment, null, h('dt', null, t('开局选择')), h('dd', null, t(evidenceOpeningChoices[decision.initial]))),
+          h('dt', null, t('实际选择')), h('dd', null, actual))
           : h(Fragment, null,
             view?.choice && h('p', null, h('strong', null, t('实际选择')), ' · ', view.choice),
             complete && !view.choice && h('p', null, t('本局没有记录到提问卡选择。'))),
+        decision?.consequence && h(WebPilotConsequence, { consequence: decision.consequence }),
         view?.deliverables?.length > 0 && h('ul', { className: 'moba-web-pilot-files', 'aria-label': t('交付文件') },
           view.deliverables.map((name, index) => h('li', { key: index }, name))),
-        complete && view.deliverables?.length === 0 && h('p', null, t('本局没有交付文件。')))
+        complete && decision?.consequence?.kind !== 'qualify' && view.deliverables?.length === 0 &&
+          h('p', null, t('本局没有交付文件。')))
     }
 
     function WebPilotPlanSave({ sessionId, run, receivedOutcome, request, dialogRef, onCancel }) {
@@ -2070,6 +2089,7 @@ window.__ModuleLoader__.load({
       const receivedPersonal = exchangeView === 'received-personal'
       const receivedComparison = exchangeView === 'received' || receivedPersonal
       const comparison = complete && view.verified ? view.comparison : null
+      const showsSmokeTestGap = ['gather', 'pause'].includes(view?.practiceDecision?.consequence?.kind)
       const promoteReplay = canReplay && canShare && currentArm === 'standard' && !hasReceivedReport && !comparison
       const startReplay = canReplay && h('button', { type: 'button', ref: replayTrigger,
         className: 'moba-settlement-button' + (promoteReplay ? ' moba-web-pilot-replay-primary' : ''),
@@ -2125,7 +2145,7 @@ window.__ModuleLoader__.load({
         !current?.error && !view?.verified && !complete && !unavailable && !waitingChoice &&
           h('p', { role: 'status' }, t('正在核对本次原文读取…')),
         complete && !view.verified && h('p', null, t('本局没有拿到可核对的发布方完整清单。')),
-        view?.verified && h('p', null, t('发布方清单已核对。题目仍缺少本机试跑记录。')),
+        view?.verified && !showsSmokeTestGap && h('p', null, t('发布方清单已核对。题目仍缺少本机试跑记录。')),
         waitingChoice && h('p', { role: 'status' }, t('请在会话中的提问卡上作出选择。')),
         !view?.practiceDecision && h(WebPilotOutcome, { view, complete }),
         h('div', { className: 'moba-lighthouse-anchor-actions' },
@@ -14182,11 +14202,12 @@ window.__ModuleLoader__.load({
         display: inline-flex; align-items: center; min-block-size: 44px; max-inline-size: 100%;
         overflow-wrap: anywhere; }
       .moba-web-pilot-files { margin: 0; padding-inline-start: 1.2em; font-size: 11px; overflow-wrap: anywhere; }
-      .moba-web-pilot-practice-decision { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(105px, 100%), 1fr));
+      .moba-web-pilot-practice-decision { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
         align-items: start; gap: 3px 8px; margin: 0; padding: 4px 6px; border: 1px solid #496461; font-size: 11px; }
       .moba-web-pilot-practice-decision dt { color: #b8ded4; }
       .moba-web-pilot-practice-decision dd { margin: 0; min-inline-size: 0; overflow-wrap: anywhere; }
-      .moba-web-pilot-practice-decision > div:only-child { display: flex; flex-wrap: wrap; gap: 2px 6px; }
+      .moba-web-pilot-consequence { display: flex; flex-wrap: wrap; align-items: center; gap: 1px 6px;
+        color: #ccdcd8; font-size: 11px; overflow-wrap: anywhere; }
       .moba-web-pilot-result .moba-settlement-button { min-inline-size: 0; padding: 5px 8px;
         border: 1px solid #607d78; background: #162229; color: #e1eeea; font-size: 12px; overflow-wrap: anywhere; }
       .moba-web-pilot-result .moba-settlement-button:hover { border-color: #a4c7bf; }

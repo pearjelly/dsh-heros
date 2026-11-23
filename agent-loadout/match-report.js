@@ -612,17 +612,17 @@ export async function comparisonEvidence(source, { cwd, presetId, task, material
     ...(followUps.continuationReason && { continuationReason: followUps.continuationReason }), ...(includeWindows && { windows }) }
 }
 
-export function webPilotHandoffOutcome(events, windows, receiptSeq) {
+export function webPilotHandoffOutcome(events, windows, receiptSeq, { includeAnswerSeq = false } = {}) {
   const questions = new Map()
   let answer
   let delivered = false
-  function recordAnswer(call, message) {
+  function recordAnswer(call, message, answerSeq) {
     if (!call || answer && call.seq < answer.seq) return
     const answers = questionAnswers(message)
     const choices = answers?.flatMap(item => Array.isArray(item?.selected) ? item.selected : [])
       .filter(label => typeof label === 'string' && label.trim())
     const custom = answers?.some(item => typeof item?.custom === 'string' && item.custom.trim())
-    if (choices?.length || custom) answer = { seq: call.seq, choices, custom }
+    if (choices?.length || custom) answer = { seq: call.seq, answerSeq, choices, custom }
   }
 
   for (const { startSeq, endSeq, turn } of windows) {
@@ -633,7 +633,7 @@ export function webPilotHandoffOutcome(events, windows, receiptSeq) {
       const { type, data, seq, surfaceOp, sourceEventSeqs } = event
       if (type === 'user/message' && surfaceOp === 'append' && data.source.kind === 'user-question-reply' &&
         data.source.outcome === 'answered') {
-        recordAnswer(questions.get(data.source.callId), data)
+        recordAnswer(questions.get(data.source.callId), data, seq)
       }
       if (data?.turn !== turn) continue
       if (type === 'tool/call') {
@@ -646,7 +646,7 @@ export function webPilotHandoffOutcome(events, windows, receiptSeq) {
         if (!call || seq <= call.seq || data.step !== call.data.step ||
           (sourceEventSeqs !== undefined && sourceEventSeqs[0] !== call.seq)) continue
         if (call.data.name === 'present') presents.add(id)
-        else recordAnswer(call, data.message)
+        else recordAnswer(call, data.message, seq)
       } else if (type === 'deliverables/presented' && calls.get(data.callId)?.data.name === 'present' &&
         data.files.some(file => typeof file.path === 'string' && file.path.trim())) {
         files.add(data.callId)
@@ -654,7 +654,39 @@ export function webPilotHandoffOutcome(events, windows, receiptSeq) {
     }
     delivered ||= [...files].some(id => presents.has(id))
   }
-  return { ...(answer && { choices: answer.choices, custom: Boolean(answer.custom) }), delivered }
+  return { ...(answer && { choices: answer.choices, custom: Boolean(answer.custom),
+    ...(includeAnswerSeq && { answerSeq: answer.answerSeq }) }), delivered }
+}
+
+export function observedWebPilotFollowupRead(events, windows, answerSeq, binding) {
+  let latest
+  for (const { startSeq, endSeq, turn } of windows) {
+    if (endSeq <= answerSeq) continue
+    const calls = new Map()
+    const callsBySeq = new Map()
+    for (const event of events.slice(startSeq + 1, endSeq)) {
+      const { type, data, seq, sourceEventSeqs, surfaceOp } = event
+      if (type === 'tool/call' && data.turn === turn) {
+        const key = data.step + '\0' + data.callId
+        const call = !calls.has(key) && seq > answerSeq && data.name === 'web_fetch' ? { seq, name: data.name } : null
+        calls.set(key, call)
+        if (call) callsBySeq.set(seq, call)
+      } else if (type === toolSourceRecord && event.ignorable === true) {
+        const call = callsBySeq.get(data?.callSeq)
+        if (call) call.bound = data.blocked !== true && data.id === binding.id && data.sourceId === binding.sourceId
+      } else if (type === 'tool/result' && data.turn === turn && surfaceOp === 'append') {
+        const call = calls.get(data.step + '\0' + data.message.toolCallId)
+        if (!call?.bound || call.read || (sourceEventSeqs !== undefined && sourceEventSeqs?.[0] !== call.seq)) continue
+        if (typeof data.message.isError !== 'boolean') continue
+        settleTool(call, data.message, data.error)
+        call.read = reportWebRead(data, call.state)
+      }
+    }
+    for (const call of calls.values()) {
+      if (call?.bound && (!latest || call.seq > latest.seq)) latest = call
+    }
+  }
+  if (latest) return latest.read ?? { status: 'unknown' }
 }
 
 function recordedHandoffTool(events, call) {
