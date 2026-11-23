@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.248.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.249.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -179,6 +179,8 @@ Before opening the first draft, choose whether to equip Evidence Check. Both cho
 If you leave before sending or while a native question still needs an answer, open **Two decisions in one run** again. Pick the original or replay by time and status. Resuming opens the same conversation with its existing draft or question. You can also start a new run. The dispatch mentions spare batteries. Decide how to handle the missing evidence, then review the handoff draft if you proceed. The task result shows the recorded choices and any delivered files.
 
 From a verified result, choose **Try a different decision** to preview the same card, task and loadout. Open a separate draft and send it yourself. After the replay, its task result compares the two rounds, including any delivered files. You can return to the original conversation.
+
+Before you have compared the two loadouts, a verified result offers **Equip Evidence Check and replay** or **Remove Evidence Check and replay**. It opens the same-task preview with that change selected. Review it before opening and sending the new draft.
 
 In the replay preview, you can also add or remove just Evidence Check. The task, hero, Delivery Review, and file preview carry through. The result identifies the changed equipment and shows each run’s recorded choices and files. A verified comparison with different loadouts identifies when a missing choice comes from gear that was left unequipped.
 

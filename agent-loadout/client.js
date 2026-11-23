@@ -3232,9 +3232,9 @@ window.__ModuleLoader__.load({
 
     const lighthouseDecisionReplayTitle = '换个决定再试'
 
-    function LighthouseCombinedReplay({ sessionId, request, onBack, onOpen }) {
+    function LighthouseCombinedReplay({ sessionId, initialLoadout = 'same', request, onBack, onOpen }) {
       const language = useLanguage()
-      const [loadout, setLoadout] = useState('same')
+      const [loadout, setLoadout] = useState(initialLoadout)
       const [attempt, retry] = useState(0)
       const [checked, setChecked] = useState(null)
       const [opening, setOpening] = useState(false)
@@ -3301,7 +3301,7 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h(InstallDialog, { title: t(lighthouseDecisionReplayTitle),
+      return h(InstallDialog, { title: t(initialLoadout === 'switch' ? '同题复赛' : lighthouseDecisionReplayTitle),
         className: 'moba-starter-dialog moba-lighthouse-combined-start moba-lighthouse-combined-replay', dialogRef: dialog,
         busy: opening, onCancel: close, initialFocus: '.moba-lighthouse-replay-back',
         onKeyDown: event => closeDialogOnEscape(event, close) },
@@ -12798,6 +12798,7 @@ window.__ModuleLoader__.load({
       const handoffAlternateButton = useRef(null)
       const sourceTrialButton = useRef(null)
       const lighthouseReplayButton = useRef(null)
+      const lighthouseSwitchButton = useRef(null)
       const lighthousePersonalButton = useRef(null)
       const lighthousePreviousPersonalButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
@@ -12809,6 +12810,9 @@ window.__ModuleLoader__.load({
       const cached = state[pane]
       const current = cached && cached.version === version && cached.retry === retry && cached.language === language ? cached : null
       const result = current?.result
+      const lighthouseSwitch = result?.lighthouseReplay && !result.lighthousePair?.current.mode &&
+        Object.hasOwn(lighthouseReplayModeLabels, result.lighthouseMode) &&
+        (result.lighthouseMode === 'review' ? '加装证据核验，同题再试' : '卸下证据核验，同题再试')
       const source = result?.source
       const sourceArm = source && comparisonArmConfig(source.kind, source.arm)
       const sourceLabel = source && [comparisonArmName(sourceArm, source), source.heroName].filter(Boolean).join(' · ')
@@ -12857,7 +12861,8 @@ window.__ModuleLoader__.load({
         restoredPersonalFocus.current = true
         const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton,
           'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton,
-          'lighthouse-combined-replay': lighthouseReplayButton, 'lighthouse-combined-personal': lighthousePersonalButton,
+          'lighthouse-combined-replay': lighthouseReplayButton, 'lighthouse-combined-replay-switch': lighthouseSwitchButton,
+          'lighthouse-combined-personal': lighthousePersonalButton,
           'lighthouse-combined-personal-previous': lighthousePreviousPersonalButton }
         const button = buttons[initialPersonalFocus]?.current
         const target = button ?? rebaselineButton.current ?? reviewHeading.current
@@ -12906,12 +12911,16 @@ window.__ModuleLoader__.load({
                 carryButtons: { previous: lighthousePreviousPersonalButton, current: lighthousePersonalButton } })
                 : h(WorkflowDecisionReceipts, { rows: workflowRows }),
               (result.lighthouseReplay || alternateLabel || handoffAlternate || singleSave) && h('div', { className: 'moba-lesson-result-options' },
-                result.lighthouseReplay === true && !result.lighthousePair?.current.mode && h('button', { ref: lighthousePersonalButton, type: 'button', className: 'moba-match-move',
-                  'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-personal' }) },
-                t(lighthousePersonalTaskLabel), h(Glyph, { kind: 'arrow', size: 16 })),
+                lighthouseSwitch && h('button', { ref: lighthouseSwitchButton, type: 'button', className: 'moba-match-move',
+                  'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-replay',
+                    initialLoadout: 'switch', returnFocus: 'lighthouse-combined-replay-switch' }) },
+                t(lighthouseSwitch), h(Glyph, { kind: 'arrow', size: 16 })),
                 result.lighthouseReplay === true && h('button', { ref: lighthouseReplayButton, type: 'button', className: 'moba-match-move',
                   'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-replay' }) },
                 t(lighthouseDecisionReplayTitle), h(Glyph, { kind: 'arrow', size: 16 })),
+                result.lighthouseReplay === true && !result.lighthousePair?.current.mode && h('button', { ref: lighthousePersonalButton, type: 'button', className: 'moba-match-move',
+                  'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-personal' }) },
+                t(lighthousePersonalTaskLabel), h(Glyph, { kind: 'arrow', size: 16 })),
                 alternateLabel && h('button', { ref: alternateButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                   onClick: () => onPersonalFlow({ mode: 'alternate' }) }, t(alternateLabel), h(Glyph, { kind: 'arrow', size: 16 })),
                 handoffAlternate && h('button', { ref: handoffAlternateButton, type: 'button', className: 'moba-match-move',
@@ -13704,8 +13713,8 @@ window.__ModuleLoader__.load({
         setPersonalFlow({ ...flow, returnAction })
       }
 
-      function closePersonalFlow(focus = personalFlow.lighthousePairSide === 'previous'
-        ? 'lighthouse-combined-personal-previous' : personalFlow.mode) {
+      function closePersonalFlow(focus = personalFlow.returnFocus ?? (personalFlow.lighthousePairSide === 'previous'
+        ? 'lighthouse-combined-personal-previous' : personalFlow.mode)) {
         const { mode, returnAction } = personalFlow
         setPersonalFlow(null)
         const restore = () => {
@@ -13985,7 +13994,7 @@ window.__ModuleLoader__.load({
         } }, t('试试交付前复核')) : undefined
 
       return h(Fragment, null,
-        personalFlow?.mode === 'lighthouse-combined-replay' && h(LighthouseCombinedReplay, { sessionId, request,
+        personalFlow?.mode === 'lighthouse-combined-replay' && h(LighthouseCombinedReplay, { sessionId, initialLoadout: personalFlow.initialLoadout, request,
           onBack: () => closePersonalFlow(), onOpen: visitPersonalFlow }),
         personalFlow?.mode === 'lighthouse-combined-personal' && h(PersonalBaselineTask, { lighthouseSessionId: sessionId,
           lighthousePairSide: personalFlow.lighthousePairSide, workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),

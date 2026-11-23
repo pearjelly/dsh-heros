@@ -7224,7 +7224,7 @@ export async function apply(ctx) {
     signal?.throwIfAborted()
     const result = { source: launch.source, material: launch.material, ...evidence,
       ...(evidence.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }),
-      ...(lighthouseRound && { lighthouseReplay: true }), ...(lighthousePair && { lighthousePair }),
+      ...(lighthouseRound && { lighthouseReplay: true, lighthouseMode: lighthouseRound.mode }), ...(lighthousePair && { lighthousePair }),
       receiptIds, ...(armory && { armory }), ...(awards.length && { awards }), ...(canReview && { canReview }),
       ...(rematchSource && { rematchSource }), ...(rebaseline && { rebaseline }),
       ...(alternateTask && { alternateTask }),

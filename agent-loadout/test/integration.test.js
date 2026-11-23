@@ -1476,6 +1476,9 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const { sessionId, task } = practiceDraft
     await replay('preview', { sessionId }, 422)
     await personalDraft(sessionId, 422)
+    const unsent = await result(sessionId)
+    assert.equal(unsent?.lighthouseReplay, undefined)
+    assert.equal(unsent?.lighthouseMode, undefined)
     const originalTurn = host.request(turnEndpoint, { sessionId, text: task })
     originalTurn.catch(() => {})
     await choose(sessionId, 'fixture-lighthouse-evidence', '暂缓提交', async () => {
@@ -1495,6 +1498,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(original.workflowDecisions, [{ gearId: 'evidence', choices: ['暂缓提交'] }])
     assert.deepEqual(original.deliverables, [])
     assert.equal(original.lighthouseReplay, true)
+    assert.equal(original.lighthouseMode, 'evidence-review')
     assert.deepEqual(await pendingLighthouse(), { runs: [] })
     const carried = await personalDraft(sessionId)
     assert.deepEqual(carried, { draft: both.draft, heroName: '标准模式' })
@@ -1546,6 +1550,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(await pendingLighthouse(), { runs: [] })
     const observed = await result(next.sessionId)
     assert.equal(observed.lighthouseReplay, true)
+    assert.equal(observed.lighthouseMode, 'evidence-review')
     assert.deepEqual(observed.workflowDecisions, [
       { gearId: 'evidence', choices: ['降级推荐'] }, { gearId: 'review', choices: ['Confirm handoff'] },
     ])
@@ -1573,10 +1578,11 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await replay('open', { ...variantLaunch, token: sameLoadout.token }, 422)
     const variant = await replay('open', variantLaunch)
     assert.notEqual(variant.workspaceId, next.workspaceId)
+    assert.notEqual(variant.sessionId, next.sessionId)
     assert.equal(variant.task, task)
     const { runs: [variantDraft] } = await pendingLighthouse()
     assert.equal(variantDraft.mode, 'review')
-    assert.ok(!(await native(variant.sessionId)).events.some(event => event.type === 'user/message'))
+    assert.ok(!(await native(variant.sessionId)).events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
     const variantTurn = host.request(turnEndpoint, { sessionId: variant.sessionId, text: variant.task })
     variantTurn.catch(() => {})
     await choose(variant.sessionId, 'fixture-delivery-review', 'Confirm handoff')
@@ -1585,6 +1591,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const variantNative = await native(variant.sessionId)
     assert.equal(variantNative.events.filter(event => event.type === 'tool/call' && event.data.name === 'ask_user_question').length, 1)
     assert.equal(compared.lighthouseReplay, true)
+    assert.equal(compared.lighthouseMode, 'review')
     assert.deepEqual(compared.workflowDecisions, [{ gearId: 'review', choices: ['Confirm handoff'] }])
     assert.equal(compared.lighthousePair.previous.mode, 'evidence-review')
     assert.deepEqual(compared.lighthousePair.previous.workflowDecisions, observed.workflowDecisions)
@@ -1621,10 +1628,10 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await reviewTurn
     const firstReview = await result(reviewOpening.sessionId)
     assert.equal(firstReview.lighthouseReplay, true)
+    assert.equal(firstReview.lighthouseMode, 'review')
     assert.deepEqual(firstReview.workflowDecisions, [{ gearId: 'review', choices: ['Revise draft'] }])
     assert.deepEqual(firstReview.deliverables, [])
     assert.equal(firstReview.lighthousePair, undefined)
-    assert.equal((await replay('preview', { sessionId: reviewOpening.sessionId, loadout: 'switch' })).mode, 'evidence-review')
     await pairedDraft(reviewOpening.sessionId, 'current', 422)
 
     const prepare = async draft => (await host.request(endpoint, draft)).value.presetId
@@ -1635,6 +1642,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const text = 'Hand off the workspace file handoff.md in this conversation.'
     const directSession = await open(await prepare(direct.draft))
     await personalDraft(directSession, 422)
+    assert.equal((await result(directSession))?.lighthouseMode, undefined)
     const { workspaceId: personalWorkspace } = await native(directSession)
     const options = (await host.request(endpoint, { action: 'armory-task-options' })).value.workspaceIds
     assert.ok(options.includes(personalWorkspace))
@@ -1709,6 +1717,28 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await resumeLighthouse({ ...draftRun, sessionId: ownOpening.sessionId }, 422)
     assert.deepEqual(await pendingLighthouse(), { runs: [] })
     assert.deepEqual(await native(sessionId), originalNative)
+
+    const firstReviewNative = await native(reviewOpening.sessionId)
+    const firstReviewSample = join(firstReviewNative.workspacePath, combinedPractice.material)
+    const reviewSample = await readFile(firstReviewSample, 'utf8')
+    const addEvidence = await replay('preview', { sessionId: reviewOpening.sessionId, loadout: 'switch' })
+    assert.equal(addEvidence.fromMode, firstReview.lighthouseMode)
+    assert.equal(addEvidence.mode, 'evidence-review')
+    assert.equal(addEvidence.material, combinedPractice.material)
+    assert.equal(addEvidence.task, reviewOpening.task)
+    const addEvidenceLaunch = { sessionId: reviewOpening.sessionId, loadout: 'switch', token: addEvidence.token, launchId: '3'.repeat(32) }
+    const withEvidence = await replay('open', addEvidenceLaunch)
+    assert.deepEqual(await replay('open', addEvidenceLaunch), withEvidence)
+    assert.notEqual(withEvidence.sessionId, reviewOpening.sessionId)
+    assert.notEqual(withEvidence.workspaceId, reviewOpening.workspaceId)
+    assert.equal(withEvidence.task, reviewOpening.task)
+    const withEvidenceNative = await native(withEvidence.sessionId)
+    assert.notEqual(withEvidenceNative.presetId, firstReviewNative.presetId)
+    assert.ok(!withEvidenceNative.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    assert.equal(await readFile(join(withEvidenceNative.workspacePath, combinedPractice.material), 'utf8'), reviewSample)
+    assert.equal(await readFile(firstReviewSample, 'utf8'), reviewSample)
+    assert.deepEqual(await native(reviewOpening.sessionId), firstReviewNative)
+
     const before = await history(directSession)
     const liveComparison = await preview('review', { sourceSessionId: directSession })
     assert.equal(liveComparison.comparison.live, true)
