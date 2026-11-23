@@ -13349,7 +13349,23 @@ window.__ModuleLoader__.load({
       const rows = sides.map(run => workflowDecisionRows(run.workflowDecisions))
       const bySide = rows.map(side => new Map(side.map(row => [row.gearId, row.choices])))
       const comparedGear = !scenarioPair && sides.every(run => Object.hasOwn(lighthouseReplayModeLabels, run.mode)) && sides[0].mode !== sides[1].mode
-      return h('section', { className: 'moba-lighthouse-replay-pair', 'aria-labelledby': heading },
+      const compactGearPair = comparedGear && !personalPair
+      const sourceDetails = (scenarioPair || personalPair || compactGearPair) && h('details', {
+        className: 'moba-minimal-replay-detail moba-lighthouse-choice-source',
+      },
+        h('summary', null, t(compactGearPair && sides.some(run => run.deliverables.length) ? '查看选择原文和交付文件' : '查看选择原文')),
+        rows.map((side, index) => {
+          const run = sides[index]
+          return h('div', { key: run.sessionId },
+            h('h5', { className: 'moba-lighthouse-replay-heading' }, t(columns[index])),
+            side.length ? h('dl', null, side.map(({ gearId, name, choices }) => h(Fragment, { key: gearId },
+              h('dt', null, t(name)), h('dd', null, h('ul', null, choices.map(choice => h('li', { key: choice }, choice)))))))
+              : h('p', null, t('未记录选择')),
+            compactGearPair && run.deliverables.length > 0 && h(LessonTaskFiles, {
+              files: run.deliverables, sessionId: run.sessionId, headingTag: 'h6',
+            }))
+        }))
+      return h('section', { className: 'moba-lighthouse-replay-pair', 'aria-labelledby': heading, 'data-compact-gear-pair': compactGearPair || undefined },
         h('h4', { id: heading, 'data-personal-workflow-pair': personalPair || undefined, tabIndex: personalPair ? -1 : undefined }, t('对照两局')),
         scenarioPair && h('p', { className: 'moba-match-action-note' }, t('两局沿用同一份补给卡和出装。')),
         personalPair && h('p', { className: 'moba-lighthouse-note' }, t('只卸下证据核验')),
@@ -13360,9 +13376,7 @@ window.__ModuleLoader__.load({
           h('tbody', null,
             scenarioPair && h('tr', null, h('th', { scope: 'row' }, t('待核对的说法')),
               h('td', null, t('两节备用电池')), h('td', null, t('两罐灯油'))),
-            comparedGear && !personalPair && h('tr', null, h('th', { scope: 'row' }, t('出装')), sides.map(run =>
-              h('td', { key: run.sessionId }, t(lighthouseReplayModeLabels[run.mode])))),
-            Object.entries(workflowDecisionGear).filter(([id]) => personalPair || (scenarioPair && id === 'evidence') ||
+            Object.entries(workflowDecisionGear).filter(([id]) => compactGearPair || personalPair || (scenarioPair && id === 'evidence') ||
                 bySide.some(choices => choices.has(id))).map(([id, name]) =>
               h('tr', { key: id }, h('th', { scope: 'row' }, t(name)),
                 bySide.map((choices, i) => {
@@ -13370,24 +13384,24 @@ window.__ModuleLoader__.load({
                   const mode = personalPair ? i === 0 ? 'evidence-review' : 'review' : side.mode
                   const missing = (comparedGear || personalPair) ? missingLighthouseGearDecision(id, mode) : '未记录选择'
                   const recorded = choices.get(id)
-                  const displayed = localizedLighthouseChoices(id, recorded, (scenarioPair || personalPair) && side.outcomeIds?.[id])
+                  const displayed = localizedLighthouseChoices(id, recorded, (scenarioPair || personalPair || compactGearPair) && side.outcomeIds?.[id])
                   return h('td', { key: side.sessionId }, displayed?.join(' / ') ?? t(missing))
                 }))),
             h('tr', null, h('th', { scope: 'row' }, t('交付文件')), sides.map(run =>
-              h('td', { key: run.sessionId }, run.deliverables.length
+              h('td', { key: run.sessionId }, compactGearPair ? run.deliverables.length : run.deliverables.length
                 ? h(LessonTaskFiles, { files: run.deliverables, sessionId: run.sessionId, compact: true }) : '0'))))),
-        (scenarioPair || personalPair) && h('details', { className: 'moba-minimal-replay-detail moba-lighthouse-choice-source' },
-          h('summary', null, t('查看选择原文')),
-          rows.map((side, index) => h('div', { key: sides[index].sessionId },
-            h('h5', { className: 'moba-lighthouse-replay-heading' }, t(columns[index])),
-            side.length ? h('dl', null, side.map(({ gearId, name, choices }) => h(Fragment, { key: gearId },
-              h('dt', null, t(name)), h('dd', null, h('ul', null, choices.map(choice => h('li', { key: choice }, choice)))))))
-              : h('p', null, t('未记录选择'))))),
+        !compactGearPair && sourceDetails,
         comparedGear && onCarry && h('div', { className: 'moba-lesson-result-options' },
-          ['previous', 'current'].map(side => h('button', { key: side, type: 'button', className: 'moba-match-move moba-lighthouse-carry-side',
-            ref: carryButtons[side], 'aria-haspopup': 'dialog', onClick: () => onCarry(side) },
-            h('span', null, h('strong', null, t(side === 'previous' ? '用原局出装做我的任务' : '用复赛出装做我的任务')),
-              h('small', null, t(lighthouseCarryModeLabels[pair[side].mode]))), h(Glyph, { kind: 'arrow', size: 16 })))),
+          ['previous', 'current'].map(side => {
+            const label = t(side === 'previous' ? '用原局出装做我的任务' : '用复赛出装做我的任务')
+            const setup = t(lighthouseCarryModeLabels[pair[side].mode])
+            return h('button', { key: side, type: 'button', className: 'moba-match-move moba-lighthouse-carry-side',
+              ref: carryButtons[side], 'aria-haspopup': 'dialog', 'aria-description': compactGearPair ? setup : undefined,
+              onClick: () => onCarry(side) },
+              h('span', null, h('strong', null, label), !compactGearPair && h('small', null, setup)),
+              !compactGearPair && h(Glyph, { kind: 'arrow', size: 16 }))
+          })),
+        compactGearPair && sourceDetails,
         h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')),
         savedWorkflowArm && h('button', { type: 'button', className: 'moba-text', onClick: () => onOpenMatch(pair.current.sessionId) }, t('打开复赛会话')),
         scenarioPair && onCarry && h('div', { className: 'moba-lesson-result-options' },
@@ -15370,6 +15384,11 @@ window.__ModuleLoader__.load({
       .moba-lighthouse-replay-pair th[scope="col"] { color: var(--gold); }
       .moba-lighthouse-replay-pair button { min-block-size: 44px; white-space: normal; overflow-wrap: anywhere; }
       .moba-lighthouse-replay-pair > button { justify-self: start; }
+      .moba-lighthouse-replay-pair[data-compact-gear-pair] :is(th, td) { padding: 3px 4px; }
+      .moba-lighthouse-replay-pair[data-compact-gear-pair] tr > :first-child { width: 29%; }
+      .moba-lighthouse-replay-pair[data-compact-gear-pair] > .moba-lesson-result-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .moba-lighthouse-replay-pair[data-compact-gear-pair] .moba-lighthouse-carry-side { padding-inline: 6px; }
+      .moba-lighthouse-replay-pair[data-compact-gear-pair] .moba-proven-files h6 { margin: 0 0 5px; color: var(--gold); font-size: 13px; }
       .moba-lighthouse-choice-source > summary { box-sizing: border-box; min-block-size: 44px; align-content: center; }
       .moba-lighthouse-choice-source dl { margin: 0; }
       .moba-lighthouse-choice-source dd { margin: 0 0 4px; }

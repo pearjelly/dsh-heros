@@ -1580,9 +1580,11 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(previous.sessionId, sessionId)
     assert.deepEqual(previous.workflowDecisions, original.workflowDecisions)
     assert.deepEqual(previous.deliverables, [])
+    assert.equal(previous.outcomeIds, undefined)
     assert.equal(current.sessionId, next.sessionId)
     assert.deepEqual(current.workflowDecisions, observed.workflowDecisions)
     assert.deepEqual(current.deliverables, observed.deliverables)
+    assert.equal(current.outcomeIds, undefined)
     assert.deepEqual(await native(sessionId), originalNative)
     assert.deepEqual(await result(sessionId), original)
 
@@ -1617,9 +1619,25 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(compared.lighthousePair.previous.mode, 'evidence-review')
     assert.deepEqual(compared.lighthousePair.previous.workflowDecisions, observed.workflowDecisions)
     assert.equal(compared.lighthousePair.current.mode, 'review')
-    assert.equal(compared.lighthousePair.previous.outcomeIds, undefined)
-    assert.equal(compared.lighthousePair.current.outcomeIds, undefined)
-    assert.equal(compared.deliverables.length, 1)
+    assert.deepEqual(compared.lighthousePair.current.workflowDecisions, compared.workflowDecisions)
+    assert.deepEqual(compared.lighthousePair.previous.outcomeIds, { evidence: ['qualify'], review: ['confirm'] })
+    assert.deepEqual(compared.lighthousePair.current.outcomeIds, { review: ['confirm'] })
+    for (const [side, saved, name] of [
+      [compared.lighthousePair.previous, verifiedReplay, 'qualified-handoff.md'],
+      [compared.lighthousePair.current, variantNative, 'direct-handoff.md'],
+    ]) {
+      const attached = saved.events.find(event => event.type === 'deliverables/presented')
+      assert.ok(attached)
+      assert.deepEqual(side.deliverables, [{ name, turn: attached.data.turn, seq: attached.seq, index: 0 }])
+      assert.equal(attached.data.files[0].path, join(saved.workspacePath, name))
+      assert.match(await readFile(attached.data.files[0].path, 'utf8'), /^# Lighthouse handoff\n/)
+    }
+    const englishPair = await host.requestRaw(endpoint, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+      body: JSON.stringify({ action: 'lesson-task-result', sessionId: variant.sessionId }),
+    })
+    assert.equal(englishPair.status, 200)
+    assert.deepEqual((await englishPair.json()).value.lighthousePair, compared.lighthousePair)
     assert.deepEqual(await personalDraft(variant.sessionId), { draft: review.draft, heroName: '标准模式' })
     assert.deepEqual(await pairedDraft(variant.sessionId, 'previous'), { ...carried, mode: 'evidence-review' })
     assert.deepEqual(await pairedDraft(variant.sessionId, 'current'), { draft: review.draft, heroName: '标准模式', mode: 'review' })
@@ -1716,6 +1734,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       await appendFile(previousSample, '\nMaterial changed after checking both sides.\n')
       await pairedDraft(variant.sessionId, 'current', 422)
       await openOwn(pairInput('current'), currentCarry.token, 422)
+      assert.equal((await result(variant.sessionId)).lighthousePair, undefined)
       assert.deepEqual(await personalDraft(variant.sessionId), { draft: review.draft, heroName: '标准模式' })
     } finally {
       await writeFile(previousSample, previousBytes)
@@ -1844,6 +1863,9 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     })
     assert.deepEqual(deliveredReport.local, {
       sampleLanguage: 'zh', played: 'review', evidence: 'none', review: 'confirm', delivered: true,
+    })
+    assert.deepEqual(JSON.parse(Buffer.from(deliveredReport.code.slice(6), 'base64url').toString()), {
+      sample: 'lighthouse-battery-gap-1-zh', played: 'review', evidence: 'none', review: 'confirm', delivered: true,
     })
     assert.deepEqual(await readChallengeReport(variant.sessionId, { code: pausedReport.code }), {
       ...deliveredReport, friend: pausedReport.local,
@@ -2231,6 +2253,17 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(await openLighthouseHistory(receivedDraft.sessionId), { sessionId: receivedDraft.sessionId })
     await openLighthouseHistory(confirmed.sessionId, 422)
     await openLighthouseHistory(directSession, 422)
+
+    const pausedReplayTurn = host.request(turnEndpoint, { sessionId: withEvidence.sessionId, text: withEvidence.task })
+    pausedReplayTurn.catch(() => {})
+    await choose(withEvidence.sessionId, 'fixture-lighthouse-evidence', '暂缓提交')
+    await pausedReplayTurn
+    assert.deepEqual((await result(withEvidence.sessionId)).lighthousePair, {
+      previous: { sessionId: reviewOpening.sessionId, mode: 'review',
+        workflowDecisions: [{ gearId: 'review', choices: ['Revise draft'] }], outcomeIds: { review: ['revise'] }, deliverables: [] },
+      current: { sessionId: withEvidence.sessionId, mode: 'evidence-review',
+        workflowDecisions: [{ gearId: 'evidence', choices: ['暂缓提交'] }], outcomeIds: { evidence: ['pause'] }, deliverables: [] },
+    })
   } finally {
     await host?.stop()
     await rm(directory, { recursive: true, force: true })

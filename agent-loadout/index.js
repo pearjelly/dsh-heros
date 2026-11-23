@@ -7222,7 +7222,7 @@ export async function apply(ctx) {
     if (!previous) return
     const changingGear = previous.mode !== current.mode
     const side = ({ sessionId, mode, workflowDecisions, deliverables }) => ({
-      sessionId, workflowDecisions, deliverables, ...(changingGear && { mode }),
+      sessionId, workflowDecisions, deliverables, ...(changingGear && { mode, outcomeIds: workflowOutcomeIds(workflowDecisions) }),
     })
     return { previous: side(previous), current: side(current) }
   }
