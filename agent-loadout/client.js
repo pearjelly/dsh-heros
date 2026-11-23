@@ -8414,21 +8414,26 @@ window.__ModuleLoader__.load({
 
     const armoryTaskLabel = '用当前出装做任务'
 
-    function PersonalLoadoutTask({ source, armoryDraft, workspaces, initialWorkspaceId, rebaseline, handoffStyle, handoffAlternateOf, request, onBack, onVisit,
-      backLabel = rebaseline ? '返回任务结果' : '返回记录' }) {
+    const lighthousePersonalTaskLabel = '把这套出装用到我的任务'
+
+    function PersonalLoadoutTask({ source, armoryDraft, lighthouseSessionId, workspaces, initialWorkspaceId, rebaseline, handoffStyle,
+      handoffAlternateOf, request, onBack, onVisit, backLabel = rebaseline || lighthouseSessionId ? '返回任务结果' : '返回记录' }) {
       const language = useLanguage()
       const workspaceSetup = useContext(WorkspaceSetupContext)
       const [loaded, setLoaded] = useState(null)
       const [attempt, retry] = useState(0)
       const [opening, setOpening] = useState(false)
       const [addedWorkspace, setAddedWorkspace] = useState(null)
+      const dialog = useRef(null)
       const { kind, comparisonId, arm, handoffPairId } = source ?? emptyMap
-      const optionsAction = armoryDraft ? 'armory-task-options' : 'lesson-task-options'
-      const reference = JSON.stringify([optionsAction, kind, comparisonId, arm, handoffPairId])
+      const armory = armoryDraft || lighthouseSessionId
+      const optionsAction = armory ? 'armory-task-options' : 'lesson-task-options'
+      const reference = JSON.stringify([optionsAction, kind, comparisonId, arm, handoffPairId, lighthouseSessionId])
       const membership = JSON.stringify(workspaces.map(item => item.workspaceId).sort())
       const current = loaded?.reference === reference ? loaded : null
       const refreshed = current?.membership === membership && current?.attempt === attempt
       const options = current?.value
+      const taskDraft = current?.lighthouseDraft ?? armoryDraft
       const allowed = options ? workspaces.filter(item => options.workspaceIds.includes(item.workspaceId)) : empty
       const addedVisible = addedWorkspace && workspaces.some(item => item.workspaceId === addedWorkspace.id)
       const addedAllowed = refreshed && !current.error && addedWorkspace && allowed.some(item => item.workspaceId === addedWorkspace.id)
@@ -8439,31 +8444,50 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         const abort = new AbortController()
-        request(optionsAction, { action: optionsAction, kind, comparisonId, arm, handoffPairId }, abort.signal, language)
-          .then(value => { if (!abort.signal.aborted) setLoaded({ value, reference, membership, attempt }) })
+        async function load() {
+          let lighthouseDraft
+          if (lighthouseSessionId) {
+            const action = 'lighthouse-combined-personal-draft'
+            lighthouseDraft = await request(action, { action, sessionId: lighthouseSessionId }, abort.signal, language)
+            if (abort.signal.aborted) return
+            if (typeof lighthouseDraft?.draft?.presetId !== 'string' || !Array.isArray(lighthouseDraft.draft.equipmentIds) ||
+              typeof lighthouseDraft.heroName !== 'string' || !lighthouseDraft.heroName) {
+              throw new Error(t('灯塔原局暂时无法核对。请回原会话查看。'))
+            }
+          }
+          const value = await request(optionsAction, { action: optionsAction, kind, comparisonId, arm, handoffPairId }, abort.signal, language)
+          if (!abort.signal.aborted) setLoaded({ value, lighthouseDraft, reference, membership, attempt })
+        }
+        load()
           .catch(reason => {
             if (!abort.signal.aborted) setLoaded(previous => ({
-              value: previous?.reference === reference ? previous.value : undefined,
+              ...(previous?.reference === reference && !lighthouseSessionId && { value: previous.value }),
               error: reason.message, reference, membership, attempt,
             }))
           })
         return () => abort.abort()
-      }, [request, optionsAction, kind, comparisonId, arm, handoffPairId, attempt, language, reference, membership])
+      }, [request, optionsAction, kind, comparisonId, arm, handoffPairId, lighthouseSessionId, attempt, language, reference, membership])
+
+      function back() {
+        if (lighthouseSessionId) dialog.current?.close()
+        onBack()
+      }
 
       const stockTaskLabel = kind === 'hero-trial' && stockTrialTaskLabels[arm]
       const alternateHandoff = rebaseline && handoffStyle
       const route = pairedHandoffStyle(options?.source) ?? handoffStyle
       return h(InstallDialog, { title: t(alternateHandoff ? '尝试另一种交接打法'
-        : rebaseline ? rebaselineTaskLabel : armoryDraft ? armoryTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening,
+        : rebaseline ? rebaselineTaskLabel : lighthouseSessionId ? lighthousePersonalTaskLabel
+          : armoryDraft ? armoryTaskLabel : stockTaskLabel || lessonTaskLabel), busy: opening, dialogRef: dialog,
         className: 'moba-lighthouse-comparison' + (alternateHandoff ? ' moba-handoff-alternate-task'
-          : stockTaskLabel ? ' moba-stock-trial-task' : ''),
-        onCancel: onBack, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) onBack() }) },
+          : lighthouseSessionId ? ' moba-lighthouse-personal-task' : stockTaskLabel ? ' moba-stock-trial-task' : ''),
+        onCancel: back, initialFocus: '.moba-task-back', onKeyDown: event => closeDialogOnEscape(event, () => { if (!opening) back() }) },
         route && h('p', { className: 'moba-lighthouse-note' }, h('strong', null, t(handoffStyleLabels[route])), ' · ',
           t(route === 'review' ? '交付前由你确认，或者退回修改。' : '准备好就直接交付文件。')),
         rebaseline && h('p', { className: 'moba-lighthouse-note' }, t(alternateHandoff
           ? '已带入刚才的文件和任务说明。核对后打开新草稿，再手动发送。'
           : '用原局出装核对当前材料，打开新会话后手动发送，完成后再比较换装。')),
-        options ? h(LoadoutTaskForm, { lessonSource: options.source, armoryDraft, workspaces: allowed, request, handoffAlternateOf,
+        options ? h(LoadoutTaskForm, { lessonSource: options.source, armoryDraft: taskDraft, workspaces: allowed, request, handoffAlternateOf,
           initialWorkspaceId: rebaseline?.workspaceId ?? initialWorkspaceId, initialMaterial: rebaseline?.material, initialBrief: rebaseline?.brief, backLabel,
           workspaceSetup: setup, addedWorkspace: addedAllowed ? addedWorkspace : undefined,
           onWorkspaceAdded: id => { setAddedWorkspace({ id }); retry(value => value + 1) },
@@ -8471,12 +8495,15 @@ window.__ModuleLoader__.load({
           checkingWorkspace, workspaceStatus: checkingWorkspace ? '正在核对新增的工作区…'
             : unavailableWorkspace ? '无法用新添加的文件夹开启此任务。' : '',
           workspaceError: refreshed ? current?.error : undefined, retryWorkspaces: () => retry(value => value + 1),
-          onBack, onOpened: ({ sessionId, task }) => onVisit(sessionId, task), onOpeningChange: setOpening })
+          onBack: back, onOpened: ({ sessionId, task }) => {
+            if (lighthouseSessionId) dialog.current?.close()
+            onVisit(sessionId, task)
+          }, onOpeningChange: setOpening })
           : h(Fragment, null, refreshed && current?.error
             ? h('p', { className: 'moba-alert', role: 'alert' }, current.error)
-            : h('p', { className: 'moba-empty', role: 'status' }, t(armoryDraft ? '正在核对可用工作区…' : '正在核对练习出装…')),
+            : h('p', { className: 'moba-empty', role: 'status' }, t(!lighthouseSessionId && armory ? '正在核对可用工作区…' : '正在核对练习出装…')),
           h('div', { className: 'moba-market-actions moba-starter-actions' },
-            h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: onBack }, t(backLabel)),
+            h('button', { className: 'moba-roster-open moba-task-back', type: 'button', onClick: back }, t(backLabel)),
             refreshed && current?.error && h('button', { className: 'moba-roster-open', type: 'button',
               onClick: () => retry(value => value + 1) }, t('重试')))))
     }
@@ -12536,6 +12563,7 @@ window.__ModuleLoader__.load({
       const handoffAlternateButton = useRef(null)
       const sourceTrialButton = useRef(null)
       const lighthouseReplayButton = useRef(null)
+      const lighthousePersonalButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
       const action = 'lesson-task-result'
       const keepButtons = { original: originalReviewButton, alternate: alternateReviewButton, direct: directReviewButton, review: handoffReviewButton }
@@ -12592,7 +12620,8 @@ window.__ModuleLoader__.load({
         if (review || !current || !initialPersonalFocus || restoredPersonalFocus.current) return
         restoredPersonalFocus.current = true
         const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton,
-          'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton, 'lighthouse-combined-replay': lighthouseReplayButton }
+          'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton,
+          'lighthouse-combined-replay': lighthouseReplayButton, 'lighthouse-combined-personal': lighthousePersonalButton }
         const button = buttons[initialPersonalFocus]?.current
         const target = button ?? rebaselineButton.current ?? reviewHeading.current
         target?.focus()
@@ -12638,6 +12667,9 @@ window.__ModuleLoader__.load({
               result.lighthousePair ? h(LighthouseDecisionPair, { pair: result.lighthousePair, onOpenMatch })
                 : h(WorkflowDecisionReceipts, { rows: workflowRows }),
               (result.lighthouseReplay || alternateLabel || handoffAlternate || singleSave) && h('div', { className: 'moba-lesson-result-options' },
+                result.lighthouseReplay === true && h('button', { ref: lighthousePersonalButton, type: 'button', className: 'moba-match-move',
+                  'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-personal' }) },
+                t(lighthousePersonalTaskLabel), h(Glyph, { kind: 'arrow', size: 16 })),
                 result.lighthouseReplay === true && h('button', { ref: lighthouseReplayButton, type: 'button', className: 'moba-match-move',
                   'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-replay' }) },
                 t(lighthouseDecisionReplayTitle), h(Glyph, { kind: 'arrow', size: 16 })),
@@ -13443,7 +13475,7 @@ window.__ModuleLoader__.load({
           setAction({ ...returnAction, initialPersonalFocus: focus })
           if (!element.matches(':popover-open')) element.showPopover(source ? { source } : undefined)
         }
-        if (mode === 'lighthouse-combined-replay') restore()
+        if (mode === 'lighthouse-combined-replay' || mode === 'lighthouse-combined-personal') restore()
         else requestAnimationFrame(restore)
       }
 
@@ -13715,6 +13747,8 @@ window.__ModuleLoader__.load({
       return h(Fragment, null,
         personalFlow?.mode === 'lighthouse-combined-replay' && h(LighthouseCombinedReplay, { sessionId, request,
           onBack: () => closePersonalFlow(), onOpen: visitPersonalFlow }),
+        personalFlow?.mode === 'lighthouse-combined-personal' && h(PersonalBaselineTask, { lighthouseSessionId: sessionId,
+          workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'rematch' && h(RematchEditor, { ...personalFlow.source, sourceSessionId: sessionId, request,
           evidenceReplayHint: personalFlow.evidenceReplay, backLabel: '返回任务结果',
           onBack: closePersonalFlow, onClose: closePersonalFlow, onVisit: visitPersonalFlow }),
@@ -14836,22 +14870,22 @@ window.__ModuleLoader__.load({
       .moba-plan-task dt { color: var(--muted); }
       .moba-plan-task dd { margin: 0; overflow-wrap: anywhere; }
       .moba-plan-task .moba-lighthouse-note { margin: 0; }
-      :is(.moba-stock-trial-task, .moba-handoff-alternate-task) :is(.moba-plan-task, .moba-plan-fields) { grid-template-columns: minmax(0, 1fr); }
-      :is(.moba-stock-trial-task, .moba-handoff-alternate-task) .moba-plan-fields :is(input, select, textarea) { box-sizing: border-box; }
-      :is(.moba-stock-trial-task, .moba-handoff-alternate-task) .moba-gallery-footer { flex-wrap: wrap; }
-      :is(.moba-stock-trial-task, .moba-handoff-alternate-task) .moba-gallery-footer button { white-space: normal; }
+      :is(.moba-stock-trial-task, .moba-handoff-alternate-task, .moba-lighthouse-personal-task) :is(.moba-plan-task, .moba-plan-fields) { grid-template-columns: minmax(0, 1fr); }
+      :is(.moba-stock-trial-task, .moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-plan-fields :is(input, select, textarea) { box-sizing: border-box; }
+      :is(.moba-stock-trial-task, .moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-gallery-footer { flex-wrap: wrap; }
+      :is(.moba-stock-trial-task, .moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-gallery-footer button { white-space: normal; }
       @media (max-width: 600px) {
-        .moba-handoff-alternate-task[open] { box-sizing: border-box; display: flex; flex-direction: column; padding: 12px; }
-        .moba-handoff-alternate-task .moba-plan-task { flex: 1 1 auto; }
-        .moba-handoff-alternate-task .moba-plan-fields { padding: 8px 4px; }
-        .moba-handoff-alternate-task .moba-material-input button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
-        .moba-handoff-alternate-task .moba-gallery-footer { display: grid;
+        :is(.moba-handoff-alternate-task, .moba-lighthouse-personal-task)[open] { box-sizing: border-box; display: flex; flex-direction: column; padding: 12px; }
+        :is(.moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-plan-task { flex: 1 1 auto; }
+        :is(.moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-plan-fields { padding: 8px 4px; }
+        :is(.moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-material-input button { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; }
+        :is(.moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-gallery-footer { display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px 4px 0; }
-        .moba-handoff-alternate-task .moba-gallery-footer button { min-block-size: 44px; min-inline-size: 0; overflow-wrap: anywhere; }
+        :is(.moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-gallery-footer button { min-block-size: 44px; min-inline-size: 0; overflow-wrap: anywhere; }
       }
       @media (max-width: 380px) {
-        .moba-handoff-alternate-task .moba-material-input { grid-template-columns: minmax(0, 1fr); }
-        .moba-handoff-alternate-task .moba-material-input button { justify-self: start; }
+        :is(.moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-material-input { grid-template-columns: minmax(0, 1fr); }
+        :is(.moba-handoff-alternate-task, .moba-lighthouse-personal-task) .moba-material-input button { justify-self: start; }
       }
       .moba-plan-fields .moba-share-code { font: 12px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
       .moba-share-fields > h3, .moba-share-review > h3, .moba-handoff-invitation-heading > h3, .moba-share-section h3 { margin: 0; overflow-wrap: anywhere; }

@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.242.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.243.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -175,6 +175,8 @@ Choose **Play a Lighthouse handoff** on the first lobby screen. Pick **Deliver d
 Choose **Two decisions in one run** in the lobby to try the combined loadout on the included supply card. The same practice is also available from **Play a Lighthouse handoff**. The dispatch mentions spare batteries. Decide how to handle the missing evidence, then review the handoff draft if you proceed. The task result shows the recorded choices and any delivered files.
 
 From a verified result, choose **Try a different decision** to preview the same card, task and loadout. Open a separate draft and send it yourself. After the replay, its task result compares the two rounds, including any delivered files. You can return to the original conversation.
+
+From a verified Lighthouse result, choose **Use this loadout on my task** to take the equipment into your workspace. Select your own file and write a new task. Review the loadout, open the new draft, then send it yourself.
 
 The chooser shows the shared loadout of **Standard** and **Deliverable Preview**. The review route adds **Delivery Review**, which lets you decide whether to hand off the file.
 

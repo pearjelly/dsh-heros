@@ -3499,13 +3499,24 @@ export async function apply(ctx) {
 
   const combinedLighthouseReplayUnavailable = '灯塔原局暂时无法核对。请回原会话查看。'
 
-  async function checkCombinedLighthouseReplay(sessionId, signal) {
+  async function checkCombinedLighthouseLoadout(sessionId, signal) {
     const original = await readCombinedLighthouseRound(sessionId, signal)
     if (!original) throw new Error(combinedLighthouseReplayUnavailable)
     const current = await checkCombinedLighthouseStart(original.language === 'en', signal)
     if (!current.draft || current.identity !== original.target.identity || current.preview.task !== original.target.task) {
       throw new Error(combinedLighthouseReplayUnavailable)
     }
+    return { ...current, original }
+  }
+
+  async function readCombinedLighthousePersonalDraft(sessionId, signal) {
+    const { draft } = await checkCombinedLighthouseLoadout(sessionId, signal)
+    return { draft, heroName: presetLabels.get(draft.presetId)[0] }
+  }
+
+  async function checkCombinedLighthouseReplay(sessionId, signal) {
+    const current = await checkCombinedLighthouseLoadout(sessionId, signal)
+    const { original } = current
     const token = createHash('sha256').update(JSON.stringify([
       'lighthouse-combined-replay-v1', sessionId, current.preview.token, original.target.digest, original.workflowDecisions,
     ])).digest('hex')
@@ -8968,6 +8979,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-combined-start-open') value = await openCombinedLighthouse(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-combined-replay-preview') value = (await checkCombinedLighthouseReplay(selection.sessionId, request.signal)).preview
         else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, true)
+        else if (selection?.action === 'lighthouse-combined-personal-draft') value = await readCombinedLighthousePersonalDraft(selection.sessionId, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-preview') value = await previewLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-direct-open') value = await openLighthouseDirectRematch(selection, request.signal)
         else if (selection?.action === 'lighthouse-review-challenge-share') value = await shareReviewChallenge(selection, request.signal)

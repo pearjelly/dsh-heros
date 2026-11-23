@@ -1441,6 +1441,8 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const replay = async (phase, fields, status) =>
       (await host.request(endpoint, { action: 'lighthouse-combined-replay-' + phase, ...fields }, status)).value
     const result = async sessionId => (await host.request(endpoint, { action: 'lesson-task-result', sessionId })).value
+    const personalDraft = async (sessionId, status) =>
+      (await host.request(endpoint, { action: 'lighthouse-combined-personal-draft', sessionId }, status)).value
     const native = sessionId => host.request('/api/loadout-fixture-history?sessionId=' + sessionId)
     const questions = '/api/loadout-fixture-handoff-question'
     async function choose(sessionId, questionId, choice) {
@@ -1456,6 +1458,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
 
     const { sessionId, task } = practiceDraft
     await replay('preview', { sessionId }, 422)
+    await personalDraft(sessionId, 422)
     const originalTurn = host.request(turnEndpoint, { sessionId, text: task })
     originalTurn.catch(() => {})
     await choose(sessionId, 'fixture-lighthouse-evidence', '暂缓提交')
@@ -1467,6 +1470,10 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(original.workflowDecisions, [{ gearId: 'evidence', choices: ['暂缓提交'] }])
     assert.deepEqual(original.deliverables, [])
     assert.equal(original.lighthouseReplay, true)
+    const carried = await personalDraft(sessionId)
+    assert.deepEqual(carried, { draft: both.draft, heroName: '标准模式' })
+    assert.deepEqual(await practiceDirectories(), practiceCreated)
+    assert.deepEqual(await native(sessionId), originalNative)
 
     const replayResponse = await host.requestRaw(endpoint, {
       method: 'POST', headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
@@ -1514,6 +1521,26 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       .flatMap(event => event.data.files.map(file => basename(file.path)))
     const text = 'Hand off the workspace file handoff.md in this conversation.'
     const directSession = await open(await prepare(direct.draft))
+    await personalDraft(directSession, 422)
+    const { workspaceId: personalWorkspace } = await native(directSession)
+    const options = (await host.request(endpoint, { action: 'armory-task-options' })).value.workspaceIds
+    assert.ok(options.includes(personalWorkspace))
+    assert.ok(!options.includes(practiceDraft.workspaceId))
+    const ownTask = { draft: carried.draft, workspaceId: personalWorkspace, material: 'handoff.md', task: 'Check the on-call handoff.' }
+    await host.request(endpoint, { ...ownTask, action: 'armory-task-preview',
+      workspaceId: practiceDraft.workspaceId, material: combinedPractice.material }, 422)
+    const ownPreview = (await host.request(endpoint, { ...ownTask, action: 'armory-task-preview' })).value
+    assert.equal(ownPreview.material, ownTask.material)
+    assert.equal(ownPreview.workspaceId, personalWorkspace)
+    assert.match(ownPreview.task, /Check the on-call handoff/)
+    assert.doesNotMatch(ownPreview.task, /02-lighthouse|两节备用电池|暂缓提交/)
+    assert.deepEqual(ownPreview.gear.map(item => item.id).sort(), ['evidence', 'present', 'review'])
+    const ownOpening = (await host.request(endpoint, { ...ownTask, action: 'armory-task-open',
+      token: ownPreview.token, launchId: 'b'.repeat(32) })).value
+    assert.equal(ownOpening.task, ownPreview.task)
+    assert.equal(ownOpening.workspaceId, personalWorkspace)
+    assert.ok(!(await native(ownOpening.sessionId)).events.some(event => event.type === 'user/message'))
+    assert.deepEqual(await native(sessionId), originalNative)
     const before = await history(directSession)
     const liveComparison = await preview('review', { sourceSessionId: directSession })
     assert.equal(liveComparison.comparison.live, true)
