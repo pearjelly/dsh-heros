@@ -6055,7 +6055,7 @@ window.__ModuleLoader__.load({
       return [pair.previous.mode ?? 'evidence-review', pair.current.mode ?? 'review']
     }
 
-    function PersonalWorkflowPlanSave({ comparisonId, pair, request, dialogRef, onBack }) {
+    function PersonalWorkflowPlanSave({ comparisonId, pair, request, dialogRef, onBack, workspaces, onOpenTask }) {
       const language = useLanguage()
       const formId = useId()
       const [arm, setArm] = useState('')
@@ -6063,26 +6063,28 @@ window.__ModuleLoader__.load({
       const [note, setNote] = useState('')
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
-      const [savedName, setSavedName] = useState('')
+      const [savedPlan, setSavedPlan] = useState(null)
+      const [startingTask, setStartingTask] = useState(false)
       const pending = useRef(null)
       const receipt = useRef(null)
+      const taskButton = useRef(null)
       const valid = Boolean(arm && name.trim())
       const [baseline, rematch] = personalWorkflowModes(pair).map(mode => mode === 'review'
         ? '交付物预览 + 交付前复核' : '证据核验 + 交付前复核 + 交付物预览')
 
       useEffect(() => () => pending.current?.abort(), [])
-      useLayoutEffect(() => { if (savedName) receipt.current?.focus() }, [savedName])
+      useLayoutEffect(() => { if (savedPlan) receipt.current?.focus() }, [savedPlan])
 
       async function save(event) {
         event.preventDefault()
-        if (pending.current || !valid || savedName) return
+        if (pending.current || !valid || savedPlan) return
         const abort = pending.current = new AbortController()
         setBusy(true)
         setError('')
         try {
           const action = 'plan-personal-workflow-save'
           const plan = await request(action, { action, comparisonId, arm, name: name.trim(), note: note.trim() }, abort.signal, language)
-          if (!abort.signal.aborted) setSavedName(plan.name)
+          if (!abort.signal.aborted) setSavedPlan({ id: plan.id, revision: plan.revision, name: plan.name })
         } catch (reason) {
           if (!abort.signal.aborted) setError(reason.message)
         } finally {
@@ -6091,12 +6093,27 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h(InstallDialog, { title: t('保留一套出装'), dialogRef, busy,
+      function startTask() {
+        dialogRef.current.close()
+        setStartingTask(true)
+      }
+
+      function returnToReceipt() {
+        setStartingTask(false)
+        requestAnimationFrame(() => {
+          const dialog = dialogRef.current
+          if (!dialog || dialog.open) return
+          dialog.showModal()
+          taskButton.current?.focus()
+        })
+      }
+
+      return h(Fragment, null, h(InstallDialog, { title: t('保留一套出装'), dialogRef, busy,
         className: 'moba-starter-dialog moba-lighthouse-combined-start moba-lighthouse-combined-replay moba-web-pilot-save',
         initialFocus: '.moba-lighthouse-mode-options input', onCancel: onBack,
         onKeyDown: event => closeDialogOnEscape(event, () => { if (!pending.current) onBack() }) },
         h('form', { className: 'moba-lighthouse-combined-fields', id: formId, onSubmit: save },
-          savedName ? h('p', { role: 'status', tabIndex: -1, ref: receipt }, t('已保存为出装方案「%s」。').replace('%s', () => savedName))
+          savedPlan ? h('p', { role: 'status', tabIndex: -1, ref: receipt }, t('已保存为出装方案「%s」。').replace('%s', () => savedPlan.name))
             : h(Fragment, null,
               h(LighthouseLoadoutChoices, { heading: '出装', options: { baseline: '原局', rematch: '复赛' },
                 descriptions: { baseline, rematch },
@@ -6108,9 +6125,13 @@ window.__ModuleLoader__.load({
                   onChange: event => setNote(event.target.value) })),
                 error && h('p', { className: 'moba-alert', role: 'alert' }, error)))),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
-          h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: onBack }, t(savedName ? '返回' : '取消')),
-          !savedName && h('button', { type: 'submit', form: formId, className: 'moba-start', disabled: busy || !valid },
-            t(busy ? '正在保存…' : '保存方案'))))
+          h('button', { type: 'button', className: 'moba-roster-open', disabled: busy, onClick: onBack }, t(savedPlan ? '返回' : '取消')),
+          savedPlan ? onOpenTask && h('button', { type: 'button', className: 'moba-start', ref: taskButton,
+            'aria-haspopup': 'dialog', onClick: startTask }, t('用这套出装开新任务'))
+            : h('button', { type: 'submit', form: formId, className: 'moba-start', disabled: busy || !valid },
+              t(busy ? '正在保存…' : '保存方案')))),
+        startingTask && h(BuildPlans, { standaloneTask: true, plans: empty, current: emptyMap, initialTaskReference: savedPlan, workspaces, request,
+          onClose: returnToReceipt, onOpenTask }))
     }
 
     function ComparisonBoard({ kind, request, comparisonId, sessionId, onClose, onVisit, putTask, canViewPrevious, lessonHint, evidenceReplayHint, publicEvidenceReplayHint,
@@ -6407,7 +6428,8 @@ window.__ModuleLoader__.load({
             visibleSave && h('button', { type: 'button', className: 'moba-start', ref: workflowKeep,
               'aria-haspopup': 'dialog', onClick: openWorkflowSave }, t('保留一套出装')))),
           workflowSave && h(PersonalWorkflowPlanSave, { comparisonId: workflowSave.comparisonId, pair: workflowSave.pair, request,
-            dialogRef: workflowSaveDialog, onBack: closeWorkflowSave }))
+            dialogRef: workflowSaveDialog, onBack: closeWorkflowSave, workspaces,
+            onOpenTask: onVisit && (({ sessionId, task }) => onVisit(sessionId, task)) }))
       }
       return h(InstallDialog, { title: t(joinedReview || ownReviewPair ? '灯塔同题交接' : comparisonTitle(kind, lessonMarker, evidenceReplay, publicEvidenceReplay)),
         className: 'moba-lighthouse-comparison' + (publicEvidenceReplay || canShareEvidenceReport ? ' moba-public-evidence-comparison' : ''),
@@ -10108,7 +10130,7 @@ window.__ModuleLoader__.load({
               disabled: reading || !other }, t('对照这两套')))))
     }
 
-    function BuildPlans({ plans, initialMode, initialTaskReference, initialPlanReference, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport,
+    function BuildPlans({ plans, initialMode, initialTaskReference, initialPlanReference, draft, current, canSave, request, hasOpening, onClose, onChanged, onApply, onCompare, onImport, standaloneTask,
       workspaces, workspaceId, onOpenTask, onOpenSource, evidenceSave, pairSaveEvidence }) {
       const [editor, setEditor] = useState(initialMode === 'create' ? { mode: 'create' } : null)
       const [sharing, setSharing] = useState(null)
@@ -10340,7 +10362,7 @@ window.__ModuleLoader__.load({
         className: 'moba-roster-open moba-plan-tested-start', type: 'button', ref: testedButton,
         'aria-haspopup': 'dialog', disabled: Boolean(plan.broken), onClick: () => setTestedPlan(plan),
       }, t(webPilotTestedLabel))
-      return h(Fragment, null, h('dialog', { ref: dialog, className: 'moba-gallery moba-plans',
+      return h(Fragment, null, h('dialog', { ref: dialog, className: 'moba-gallery moba-plans' + (standaloneTask ? ' moba-plan-task-dialog' : ''),
         'data-editing': Boolean(editor), 'data-sharing': Boolean(sharing || taskPlan || initialTaskReference || pairPlan), 'aria-labelledby': title,
         onCancel: event => { event.preventDefault(); if (pairPlan) closePair(); else if (taskPlan) closeTask(); else if (sharing) closeSharing(); else close() },
         onKeyDown: event => {
@@ -15832,6 +15854,9 @@ window.__ModuleLoader__.load({
       .moba-plan-save-preview strong { font-size: 13px; color: var(--gold); overflow-wrap: anywhere; }
       .moba-plan-fields label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
       .moba-plan-fields input, .moba-plan-fields textarea, .moba-plan-task select { width: 100%; min-width: 0; min-height: 40px; padding: 8px; border: 1px solid #515666; background: var(--deep); color: var(--ink); font: inherit; font-size: 14px; }
+      .moba-plan-task-dialog { color-scheme: dark; }
+      .moba-plan-task-dialog .moba-plan-fields :is(input, select, textarea) { box-sizing: border-box; }
+      .moba-plan-task-dialog :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
       .moba-plan-fields textarea { resize: vertical; }
       .moba-task-plan-choices legend { padding: 0 0 5px; color: var(--gold); font-size: 13px; }
       .moba-task-plan-choices .moba-plan-option { grid-template-columns: 38px minmax(0, 1fr); gap: 8px; }
@@ -16072,7 +16097,7 @@ window.__ModuleLoader__.load({
       .moba-direct-form input[type="file"]::file-selector-button { margin-right: 8px; padding: 6px 9px; border: 1px solid #745f40; background: #1b2331; color: var(--ink); cursor: pointer; }
       .moba-market-dialog .moba-market-actions { margin-top: 12px; }
       .moba-starter-dialog { width: min(535px, calc(100vw - 28px)); }
-      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation, .moba-lighthouse-lesson, .moba-lighthouse-combined-replay, .moba-lighthouse-combined-report) {
+      :is(.moba-lighthouse-comparison, .moba-lighthouse-invitation, .moba-lighthouse-lesson, .moba-lighthouse-combined-replay, .moba-lighthouse-combined-report, .moba-plan-task-dialog) {
         --ink: #f3e9d2; --muted: #b6b4bc; --gold: #e6bc70; --line: #564532; --blue: #9ed4ec; --deep: #0a0e17;
       }
       .moba-lighthouse-comparison { width: min(700px, calc(100vw - 28px)); }
