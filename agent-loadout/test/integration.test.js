@@ -1484,6 +1484,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const unsent = await result(sessionId)
     assert.equal(unsent?.lighthouseReplay, undefined)
     assert.equal(unsent?.lighthouseMode, undefined)
+    assert.equal(unsent?.lighthouseOutcomeIds, undefined)
     const originalTurn = host.request(turnEndpoint, { sessionId, text: task })
     originalTurn.catch(() => {})
     await choose(sessionId, 'fixture-lighthouse-evidence', '暂缓提交', async () => {
@@ -1504,6 +1505,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(original.deliverables, [])
     assert.equal(original.lighthouseReplay, true)
     assert.equal(original.lighthouseMode, 'evidence-review')
+    assert.deepEqual(original.lighthouseOutcomeIds, { evidence: ['pause'] })
     assert.equal(original.lighthouseScenarioReplay, true)
     assert.deepEqual(await pendingLighthouse(), { runs: [] })
     const carried = await personalDraft(sessionId)
@@ -1557,6 +1559,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const observed = await result(next.sessionId)
     assert.equal(observed.lighthouseReplay, true)
     assert.equal(observed.lighthouseMode, 'evidence-review')
+    assert.equal(observed.lighthouseOutcomeIds, undefined)
     assert.deepEqual(observed.workflowDecisions, [
       { gearId: 'evidence', choices: ['降级推荐'] }, { gearId: 'review', choices: ['Confirm handoff'] },
     ])
@@ -1642,6 +1645,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(firstReview.workflowDecisions, [{ gearId: 'review', choices: ['Revise draft'] }])
     assert.deepEqual(firstReview.deliverables, [])
     assert.equal(firstReview.lighthousePair, undefined)
+    assert.deepEqual(firstReview.lighthouseOutcomeIds, { review: ['revise'] })
     await pairedDraft(reviewOpening.sessionId, 'current', 422)
 
     const prepare = async draft => (await host.request(endpoint, draft)).value.presetId
@@ -1652,7 +1656,9 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const text = 'Hand off the workspace file handoff.md in this conversation.'
     const directSession = await open(await prepare(direct.draft))
     await personalDraft(directSession, 422)
-    assert.equal((await result(directSession))?.lighthouseMode, undefined)
+    const directResult = await result(directSession)
+    assert.equal(directResult?.lighthouseMode, undefined)
+    assert.equal(directResult?.lighthouseOutcomeIds, undefined)
     const { workspaceId: personalWorkspace } = await native(directSession)
     const options = (await host.request(endpoint, { action: 'armory-task-options' })).value.workspaceIds
     assert.ok(options.includes(personalWorkspace))
@@ -1806,6 +1812,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const invitedResult = await result(invited.sessionId)
     assert.equal(invitedResult.lighthouseMode, 'evidence-review')
     assert.equal(invitedResult.lighthousePair, undefined)
+    assert.deepEqual(invitedResult.lighthouseOutcomeIds, { evidence: ['pause'] })
     assert.equal(invitedResult.lighthouseReceivedReport, undefined)
     assert.deepEqual(invitedResult.workflowDecisions, [{ gearId: 'evidence', choices: ['暂缓提交'] }])
     assert.deepEqual(invitedResult.deliverables, [])
@@ -1937,7 +1944,17 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(receivedResult.lighthouseMode, 'review')
     assert.equal(receivedResult.lighthousePair, undefined)
     assert.deepEqual(receivedResult.workflowDecisions, [{ gearId: 'review', choices: ['Confirm handoff'] }])
+    assert.deepEqual(receivedResult.lighthouseOutcomeIds, { review: ['confirm'] })
     assert.equal(receivedResult.deliverables.length, 1)
+    const receivedFinishedNative = await native(receivedDraft.sessionId)
+    const presented = receivedFinishedNative.events.find(event => event.type === 'deliverables/presented')
+    assert.ok(presented)
+    assert.deepEqual(receivedResult.deliverables, [
+      { name: 'direct-handoff.md', turn: presented.data.turn, seq: presented.seq, index: 0 },
+    ])
+    const attachedPath = presented.data.files[0].path
+    assert.equal(attachedPath, join(receivedFinishedNative.workspacePath, 'direct-handoff.md'))
+    assert.equal(await readFile(attachedPath, 'utf8'), '# Lighthouse handoff\n\nVerified: 2 cans of lamp oil.\n')
     assert.doesNotMatch(JSON.stringify(receivedResult), /DSHR5\./)
     const ordinaryReport = await readChallengeReport(receivedDraft.sessionId)
     assert.deepEqual(ordinaryReport.local, { ...deliveredReport.local, sampleLanguage: 'en' })
@@ -2015,6 +2032,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.ok(confirmedNative.events.some(event => event.type === 'deliverables/presented'))
     const confirmedResult = await result(confirmed.sessionId)
     assert.equal(confirmedResult.lighthouseReplay, undefined)
+    assert.equal(confirmedResult.lighthouseOutcomeIds, undefined)
     assert.equal(confirmedResult.lighthouseScenarioReplay, undefined)
     assert.equal(confirmedResult.lighthouseReceivedReport, undefined)
     assert.equal(confirmedResult.personalWorkflowReceipt, undefined)
@@ -2060,6 +2078,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     for (const staleCard of [originalSample, confirmedCard]) {
       try {
         await appendFile(staleCard, '\nArchived material changed after private preview.\n')
+        if (staleCard === originalSample) assert.equal((await result(sessionId))?.lighthouseOutcomeIds, undefined)
         assert.equal((await result(confirmed.sessionId)).lighthouseScenarioPair, undefined)
         await pairedDraft(confirmed.sessionId, 'shared', 422)
         await openOwn(privateInput, sharedPreview.token, 422)

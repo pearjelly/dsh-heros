@@ -7564,6 +7564,7 @@ export async function apply(ctx) {
     const result = { source: launch.source, material: launch.material, ...evidence,
       ...(evidence.entries && { entries }), ...(workflowDecisions.length && { workflowDecisions }),
       ...(gapRound && { lighthouseReplay: true, lighthouseMode: gapRound.mode }), ...(lighthousePair && { lighthousePair }),
+      ...(gapRound && !lighthousePair && { lighthouseOutcomeIds: workflowOutcomeIds(workflowDecisions) }),
       ...(eligibleCombinedLighthouseScenario(gapRound) && { lighthouseScenarioReplay: true }),
       ...(lighthouseScenarioPair && { lighthouseScenarioPair }), ...(gapRound?.receivedReport && { lighthouseReceivedReport: true }),
       ...(personalWorkflowReceipt && { personalWorkflowReceipt }), ...(personalWorkflowRematch && { personalWorkflowRematch }),
