@@ -7109,7 +7109,18 @@ export async function apply(ctx) {
   async function combinedLighthouseScenarioPair(current, signal) {
     const previous = await combinedLighthouseScenarioSource(current, signal)
     if (!previous) return
-    const side = ({ sessionId, scenario, workflowDecisions, deliverables }) => ({ sessionId, scenario, workflowDecisions, deliverables })
+    const side = ({ sessionId, scenario, workflowDecisions, deliverables }) => {
+      const outcomeIds = {}
+      for (const { gearId, choices } of workflowDecisions) {
+        const ids = choices.map(choice => {
+          const id = gearId === 'evidence' ? lighthouseEvidenceDecision([choice])
+            : gearId === 'review' ? lighthouseReviewDecision(choice) : undefined
+          return id && id !== 'answered' ? id : null
+        })
+        if (ids.some(Boolean)) outcomeIds[gearId] = ids
+      }
+      return { sessionId, scenario, workflowDecisions, deliverables, ...(Object.keys(outcomeIds).length && { outcomeIds }) }
+    }
     return { previous: side(previous), current: side(current) }
   }
 

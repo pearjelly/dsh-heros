@@ -1597,6 +1597,8 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(compared.lighthousePair.previous.mode, 'evidence-review')
     assert.deepEqual(compared.lighthousePair.previous.workflowDecisions, observed.workflowDecisions)
     assert.equal(compared.lighthousePair.current.mode, 'review')
+    assert.equal(compared.lighthousePair.previous.outcomeIds, undefined)
+    assert.equal(compared.lighthousePair.current.outcomeIds, undefined)
     assert.equal(compared.deliverables.length, 1)
     assert.deepEqual(await personalDraft(variant.sessionId), { draft: review.draft, heroName: '标准模式' })
     assert.deepEqual(await pairedDraft(variant.sessionId, 'previous'), { ...carried, mode: 'evidence-review' })
@@ -2011,9 +2013,9 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(confirmedResult.workflowDecisions, [{ gearId: 'review', choices: ['Confirm handoff'] }])
     assert.deepEqual(confirmedResult.deliverables.map(file => file.name), ['verified-handoff.md'])
     assert.deepEqual(confirmedResult.lighthouseScenarioPair, {
-      previous: { sessionId, scenario: 'gap', workflowDecisions: original.workflowDecisions, deliverables: [] },
+      previous: { sessionId, scenario: 'gap', workflowDecisions: original.workflowDecisions, deliverables: [], outcomeIds: { evidence: ['pause'] } },
       current: { sessionId: confirmed.sessionId, scenario: 'confirmed',
-        workflowDecisions: confirmedResult.workflowDecisions, deliverables: confirmedResult.deliverables },
+        workflowDecisions: confirmedResult.workflowDecisions, deliverables: confirmedResult.deliverables, outcomeIds: { review: ['confirm'] } },
     })
     await shareChallenge(confirmed.sessionId, 422)
     await readChallengeReport(confirmed.sessionId, { code: pausedReport.code }, 422)
