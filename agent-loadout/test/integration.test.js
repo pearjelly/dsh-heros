@@ -1372,7 +1372,7 @@ test('Lighthouse same-task comparison keeps two original attempts and their nati
   }
 })
 
-test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 90_000 }, async () => {
+test('field playbooks preview read-only and add a real handoff decision to the same task', { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-loadout-playbook-'))
   const env = { ...process.env, DSH_HOME: join(directory, 'home'), DSH_LOADOUT_TEST_NODE: process.execPath }
   const patch = join(directory, 'fixture.yml')
@@ -1499,6 +1499,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(original.deliverables, [])
     assert.equal(original.lighthouseReplay, true)
     assert.equal(original.lighthouseMode, 'evidence-review')
+    assert.equal(original.lighthouseScenarioReplay, true)
     assert.deepEqual(await pendingLighthouse(), { runs: [] })
     const carried = await personalDraft(sessionId)
     assert.deepEqual(carried, { draft: both.draft, heroName: '标准模式' })
@@ -1629,6 +1630,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     const firstReview = await result(reviewOpening.sessionId)
     assert.equal(firstReview.lighthouseReplay, true)
     assert.equal(firstReview.lighthouseMode, 'review')
+    assert.equal(firstReview.lighthouseScenarioReplay, undefined)
     assert.deepEqual(firstReview.workflowDecisions, [{ gearId: 'review', choices: ['Revise draft'] }])
     assert.deepEqual(firstReview.deliverables, [])
     assert.equal(firstReview.lighthousePair, undefined)
@@ -1938,6 +1940,95 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(await readChallengeReport(variant.sessionId), deliveredReport)
     assert.deepEqual(await readChallengeReport(invited.sessionId), pausedReport)
 
+    const scenario = (phase, fields, status) => challenge('lighthouse-combined-scenario-' + phase, fields, status)
+    const beforeScenario = (await practiceDirectories()).sort()
+    await scenario('preview', { sessionId: reviewOpening.sessionId }, 422)
+    await scenario('preview', { sessionId: withEvidence.sessionId }, 422)
+    const confirmedView = await scenario('preview', { sessionId })
+    assert.equal(confirmedView.fromMode, 'evidence-review')
+    assert.equal(confirmedView.mode, 'evidence-review')
+    assert.equal(confirmedView.scenario, 'confirmed')
+    assert.equal(confirmedView.material, combinedPractice.material)
+    assert.notEqual(confirmedView.task, task)
+    assert.match(confirmedView.task, /两罐灯油/)
+    assert.doesNotMatch(confirmedView.task, /两节备用电池/)
+    assert.deepEqual(confirmedView.workflowDecisions, original.workflowDecisions)
+    const scenarioLaunch = { sessionId, token: confirmedView.token, launchId: '6'.repeat(32) }
+    await scenario('open', { ...scenarioLaunch, token: replayView.token }, 422)
+    await scenario('open', { ...scenarioLaunch, sessionId: next.sessionId }, 422)
+    await replay('open', { ...scenarioLaunch, token: confirmedView.token }, 422)
+    const originalSample = join(originalNative.workspacePath, combinedPractice.material)
+    try {
+      await appendFile(originalSample, '\nScenario source material changed.\n')
+      await scenario('open', scenarioLaunch, 422)
+    } finally {
+      await writeFile(originalSample, sample)
+    }
+    assert.deepEqual((await practiceDirectories()).sort(), beforeScenario)
+    assert.deepEqual(await native(sessionId), originalNative)
+
+    const confirmed = await scenario('open', scenarioLaunch)
+    assert.deepEqual(await scenario('open', scenarioLaunch), confirmed)
+    assert.equal(confirmed.task, confirmedView.task)
+    assert.notEqual(confirmed.sessionId, sessionId)
+    assert.notEqual(confirmed.workspaceId, practiceDraft.workspaceId)
+    const confirmedDraft = await native(confirmed.sessionId)
+    assert.equal(confirmedDraft.presetId, originalNative.presetId)
+    assert.ok(!confirmedDraft.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    assert.equal(await readFile(join(confirmedDraft.workspacePath, combinedPractice.material), 'utf8'), sample)
+    const launch = confirmedDraft.events.find(event => event.type === 'plugin:dsh-agent-loadout/plan-task').data
+    assert.equal(launch.target.lighthouseScenarioOf, sessionId)
+    assert.equal(launch.target.lighthouseReplayOf, undefined)
+    assert.equal(launch.lighthouseReceivedReport, undefined)
+    const draftScenario = (await pendingLighthouse()).runs.find(run => run.sessionId === confirmed.sessionId)
+    assert.equal(draftScenario?.status, 'waiting')
+    assert.equal(draftScenario.kind, 'replay')
+    assert.equal(draftScenario.scenario, 'confirmed')
+    assert.deepEqual(await resumeLighthouse(draftScenario), { sessionId: confirmed.sessionId })
+    assert.equal((await result(confirmed.sessionId))?.lighthouseScenarioPair, undefined)
+    const confirmedTurn = host.request(turnEndpoint, { sessionId: confirmed.sessionId, text: confirmed.task })
+    confirmedTurn.catch(() => {})
+    await choose(confirmed.sessionId, 'fixture-delivery-review', 'Confirm handoff', async () => {
+      const liveScenario = (await pendingLighthouse()).runs.find(run => run.sessionId === confirmed.sessionId)
+      assert.equal(liveScenario?.status, 'waiting-choice')
+      assert.equal(liveScenario.scenario, 'confirmed')
+      assert.deepEqual(await resumeLighthouse(liveScenario), { sessionId: confirmed.sessionId })
+    })
+    await confirmedTurn
+    const confirmedNative = await native(confirmed.sessionId)
+    const nativeCalls = confirmedNative.events.filter(event => event.type === 'tool/call')
+    assert.deepEqual(nativeCalls.map(event => event.data.name), ['read', 'write', 'ask_user_question', 'present'])
+    assert.equal(JSON.parse(nativeCalls[0].data.arguments).file_path, combinedPractice.material)
+    const cardRead = confirmedNative.events.find(event => event.type === 'tool/result' &&
+      event.data.message.toolCallId === nativeCalls[0].data.callId)
+    assert.ok(cardRead && !cardRead.data.message.isError)
+    assert.ok(cardRead.data.message.content.some(block => block.text?.includes('2 cans of lamp oil')))
+    assert.ok(confirmedNative.events.some(event => event.type === 'deliverables/presented'))
+    const confirmedResult = await result(confirmed.sessionId)
+    assert.equal(confirmedResult.lighthouseReplay, undefined)
+    assert.equal(confirmedResult.lighthouseScenarioReplay, undefined)
+    assert.equal(confirmedResult.lighthouseReceivedReport, undefined)
+    assert.deepEqual(confirmedResult.workflowDecisions, [{ gearId: 'review', choices: ['Confirm handoff'] }])
+    assert.deepEqual(confirmedResult.deliverables.map(file => file.name), ['verified-handoff.md'])
+    assert.deepEqual(confirmedResult.lighthouseScenarioPair, {
+      previous: { sessionId, scenario: 'gap', workflowDecisions: original.workflowDecisions, deliverables: [] },
+      current: { sessionId: confirmed.sessionId, scenario: 'confirmed',
+        workflowDecisions: confirmedResult.workflowDecisions, deliverables: confirmedResult.deliverables },
+    })
+    await shareChallenge(confirmed.sessionId, 422)
+    await readChallengeReport(confirmed.sessionId, { code: pausedReport.code }, 422)
+    await replay('preview', { sessionId: confirmed.sessionId }, 422)
+    assert.ok(!(await findChallengeReport()).runs.some(run => run.sessionId === confirmed.sessionId))
+    assert.ok(!(await pendingLighthouse()).runs.some(run => run.sessionId === confirmed.sessionId))
+    try {
+      await appendFile(originalSample, '\nOriginal no longer matches the controlled round.\n')
+      assert.equal((await result(confirmed.sessionId)).lighthouseScenarioPair, undefined)
+    } finally {
+      await writeFile(originalSample, sample)
+    }
+    assert.deepEqual(await native(sessionId), originalNative)
+    assert.deepEqual(await result(sessionId), original)
+
     const before = await history(directSession)
     const liveComparison = await preview('review', { sourceSessionId: directSession })
     assert.equal(liveComparison.comparison.live, true)
@@ -1965,6 +2056,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     }
     await host.stop()
     host = await startHost(env, patch)
+    assert.deepEqual((await result(confirmed.sessionId)).lighthouseScenarioPair, confirmedResult.lighthouseScenarioPair)
     assert.equal((await result(receivedDraft.sessionId)).lighthouseReceivedReport, true)
     assert.deepEqual(await readChallengeReport(receivedDraft.sessionId, { received: true }), receivedComparison)
     assert.deepEqual(await readChallengeReport(invited.sessionId), pausedReport)

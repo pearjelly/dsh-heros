@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.253.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.254.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -183,6 +183,8 @@ From a verified result, choose **Try a different decision** to preview the same 
 Before you have compared the two loadouts, a verified result offers **Equip Evidence Check and replay** or **Remove Evidence Check and replay**. It opens the same-task preview with that change selected. Review it before opening and sending the new draft.
 
 In the replay preview, you can also add or remove just Evidence Check. The task, hero, Delivery Review, and file preview carry through. The result identifies the changed equipment and shows each run’s recorded choices and files. A verified comparison with different loadouts identifies when a missing choice comes from gear that was left unequipped.
+
+After a verified run with both checks, you can try a second claim using the same card and loadout. The card lists two cans of lamp oil. Open the draft, send it yourself, and compare the recorded decisions and delivery for the two claims.
 
 From a verified Lighthouse result, choose **Use this loadout on my task** to take the equipment into your workspace. Select your own file and write a new task. Review the loadout, open the new draft, then send it yourself.
 

@@ -332,10 +332,11 @@ export async function apply(ctx) {
         }
         name = sequence[results.length]
         if (name === 'read') args = { file_path: evidenceMaterial }
-        if (name === 'ask_user_question' && review && results.length === (hasEvidenceCheck ? 3 : 2)) {
+        if (name === 'ask_user_question' && review && results.length === (evidenceGap && hasEvidenceCheck ? 3 : 2)) {
           args = { questions: [{
             id: 'fixture-delivery-review',
-            question: 'The draft notes that spare batteries were unverified. Deliver it or request changes?',
+            question: evidenceGap ? 'The draft notes that spare batteries were unverified. Deliver it or request changes?'
+              : 'The supply card confirms the lamp oil listed in the draft. Deliver it or request changes?',
             options: [{ label: 'Confirm handoff' }, { label: 'Revise draft' }],
           }] }
         } else if (name === 'ask_user_question') {
