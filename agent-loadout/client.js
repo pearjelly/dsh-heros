@@ -4289,13 +4289,14 @@ window.__ModuleLoader__.load({
                 h('h4', null, t('本机同题对局')),
                 runs.length > 0 && h('ul', { ref: list }, runs.map(run => {
                   const opened = new Date(run.openedAt)
+                  const facts = h(InstallFacts, { facts: combined ? combinedLighthouseReportFacts(run) : webPilotReportOutcome(run) })
+                  const select = h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-find-use', 'data-run': run.sessionId,
+                    'aria-disabled': Boolean(comparing) || loading, onClick: () => void compare(run.sessionId) },
+                    t(comparing === run.sessionId ? '正在核对战报…' : '用这局对照'))
                   return h('li', { key: run.sessionId },
                     h('strong', null, t(combined ? lighthouseCarryModeLabels[run.played] : webPilotArms[run.played].name)),
                     h('time', { dateTime: opened.toISOString() }, date.format(opened)),
-                    h(InstallFacts, { facts: combined ? combinedLighthouseReportFacts(run) : webPilotReportOutcome(run) }),
-                    h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-find-use', 'data-run': run.sessionId,
-                      'aria-disabled': Boolean(comparing) || loading, onClick: () => void compare(run.sessionId) },
-                      t(comparing === run.sessionId ? '正在核对战报…' : '用这局对照')))
+                    combined ? select : facts, combined ? facts : select)
                 })),
                 !loading && !runs.length && !error && h('p', { role: 'status' }, t(nextBefore
                   ? '这批记录没有同题对局。可以继续查找较早的记录。' : '本机还没有核验过同一道题、同一语言的对局。')),
