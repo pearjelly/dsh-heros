@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
+import { openBuildPlans } from '../build-plans.js'
 import { matchReport, toolSourceRecord, webRecoveryFingerprint } from '../match-report.js'
 import { englishText } from '../localization.js'
 import { observedWebSource, observedWebSourceResult, webSourceUrl } from '../web-source-practice.js'
@@ -24,6 +27,41 @@ test('Web Research accepts the complete pinned native manifest', () => {
   const events = evidence()
   assert.equal(observedWebSource(events, 1, binding), true)
   assert.equal(observedWebSourceResult(events, 1, binding), events[2])
+})
+
+test('saving a web pilot arm deduplicates concurrent requests and retains its source until the recipe changes', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-web-pilot-plans-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const saveEntry = (directory, id, record) => writeFile(join(directory, id + '.json'), JSON.stringify(record))
+  const warnings = []
+  const fields = { name: 'Check compatibility', note: 'Verify before recommending a trial' }
+  const origin = { sessionId: 'session-a076' + '0'.repeat(28), arm: 'evidence' }
+  const request = { key: 'a'.repeat(64), digest: 'b'.repeat(64) }
+  const makeSaveRequest = () => request
+  const stock = { presetId: 'standard', heroId: 'standard', heroName: 'Standard' }
+  const tested = { ...stock, presetId: 'loadout-tested', webPilotOrigin: origin }
+  let resolutions = 0
+  const resolve = async () => { resolutions++; return tested }
+
+  const plans = await openBuildPlans(directory, saveEntry, warnings)
+  const [saved, retry] = await Promise.all([
+    plans.write(fields, stock.heroId, resolve, makeSaveRequest),
+    plans.write(fields, stock.heroId, resolve, makeSaveRequest),
+  ])
+  assert.deepEqual(retry, saved)
+  assert.equal(plans.size, 1)
+  assert.equal(resolutions, 1)
+  await assert.rejects(plans.write(fields, stock.heroId, resolve, () => ({ ...request, digest: 'c'.repeat(64) })))
+
+  const reopened = await openBuildPlans(directory, saveEntry, warnings)
+  assert.deepEqual(warnings, [])
+  assert.deepEqual(await reopened.write(fields, stock.heroId, resolve, makeSaveRequest), saved)
+  const renamed = await reopened.write({ ...saved, name: 'Verify before a trial' }, stock.heroId, resolve)
+  assert.deepEqual(renamed.webPilotOrigin, origin)
+  const replaced = await reopened.write({ ...renamed, draft: {} }, stock.heroId, async () => stock)
+  assert.equal(replaced.webPilotOrigin, undefined)
+  await assert.rejects(reopened.write(fields, stock.heroId, resolve, makeSaveRequest))
+  assert.equal(resolutions, 1)
 })
 
 test('Web Research leaves incomplete, changed, and unrelated results unverified', () => {

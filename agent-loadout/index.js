@@ -811,8 +811,9 @@ export async function apply(ctx) {
       : '方案的英雄或阵容当前不可用。'
   }
 
-  function publicBuildPlan({ evidenceOrigin, handoffOrigin, ...plan }) {
-    return { ...plan, ...(evidenceOrigin && { hasEvidenceOrigin: true }), ...(handoffOrigin && { hasHandoffOrigin: true }) }
+  function publicBuildPlan({ evidenceOrigin, handoffOrigin, webPilotOrigin, webPilotSaveRequest, ...plan }) {
+    return { ...plan, ...(evidenceOrigin && { hasEvidenceOrigin: true }), ...(handoffOrigin && { hasHandoffOrigin: true }),
+      ...(webPilotOrigin && { hasWebPilotOrigin: true }) }
   }
 
   function planCard(plan, art, unavailable) {
@@ -1600,14 +1601,17 @@ export async function apply(ctx) {
     return [{ ...original, sessionId: replayOf }, { ...result, sessionId }]
   }
 
+  function webPilotComparison(pair) {
+    const runs = pair.map(({ sessionId, view: { arm, choice, deliverables } }) =>
+      ({ sessionId, arm, ...(choice && { choice }), deliverables }))
+    return { url: pair[1].view.url, runs }
+  }
+
   async function readWebPilot({ sessionId }, signal) {
     const result = await inspectWebSourcePractice({ sessionId }, signal)
     if (!result?.binding?.arm) return null
     const pair = await verifiedWebPilotPair(sessionId, result, signal)
-    if (!pair) return result.view
-    const runs = pair.map(({ sessionId, view: { arm, choice, deliverables } }) =>
-      ({ sessionId, arm, ...(choice && { choice }), deliverables }))
-    return { ...result.view, comparison: { url: result.view.url, runs } }
+    return pair ? { ...result.view, comparison: webPilotComparison(pair) } : result.view
   }
 
   async function verifiedWebSourceLoadout(sessionId, signal) {
@@ -1643,6 +1647,36 @@ export async function apply(ctx) {
   async function webPilotPersonalOptions(selection, signal) {
     const { binding } = await verifiedWebPilotLoadout(selection, signal)
     return { workspaceIds: await personalWorkspaceIds(signal), arm: binding.arm }
+  }
+
+  function saveWebPilotPlan({ sessionId, arm, name, note, saveId }, signal) {
+    if (closed) throw new Error('配装服务正在关闭，请重试。')
+    if (!validOpeningId(saveId)) throw new Error('保存请求无效，请重试。')
+    const hash = values => createHash('sha256').update(JSON.stringify(values)).digest('hex')
+    const key = hash([planTaskOwner, saveId])
+    return buildPlans.write({ name, note }, 'standard', async () => {
+      const { draft, candidate, binding } = await verifiedWebPilotLoadout({ sessionId, arm }, signal)
+      const { presetId } = await prepare(draft, candidate)
+      if (presetId !== binding.presetId) throw new Error(webSourceChanged)
+      signal?.throwIfAborted()
+      const heroId = draft.presetId
+      const heroName = ctx.agentPresets.definitions?.get(heroId)?.config.name ?? presetLabels.get(heroId)?.[0] ?? heroId
+      return { presetId, heroId, heroName, webPilotOrigin: { sessionId, arm } }
+    }, fields => ({ key, digest: hash([sessionId, arm, fields.name, fields.note]) }))
+  }
+
+  async function readPlanWebPilotOrigin({ id, revision }, signal) {
+    const { webPilotOrigin, presetId } = buildPlans.read(id, revision)
+    if (!webPilotOrigin) return { status: 'unavailable' }
+    const { sessionId, arm } = webPilotOrigin
+    const result = await inspectWebSourcePractice({ sessionId }, signal)
+    const pair = await verifiedWebPilotPair(sessionId, result, signal)
+    buildPlans.read(id, revision)
+    signal?.throwIfAborted()
+    if (!pair?.some(run => run.binding.arm === arm && run.binding.presetId === presetId)) {
+      return { status: 'unavailable' }
+    }
+    return { status: 'ready', arm, comparison: webPilotComparison(pair) }
   }
 
   async function openWebSourcePersonal({ sessionId, workspaceId, launchId, arm }, signal, kind = 'web-source-personal') {
@@ -7668,6 +7702,10 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-pilot-result') value = await readWebPilot(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-options') value = await webPilotPersonalOptions(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-open') value = await openWebSourcePersonal(selection, request.signal, 'web-pilot-personal')
+        else if (selection?.action === 'web-pilot-plan-save') {
+          value = publicBuildPlan(await saveWebPilotPlan(selection, request.signal))
+          updates.notify()
+        }
         else if (selection?.action === 'web-source-result') value = await readWebSourcePractice(selection, request.signal)
         else if (selection?.action === 'web-source-choice') value = await chooseWebSourcePractice(selection, request.signal)
         else if (selection?.action === 'web-source-personal-options') value = await webSourcePersonalOptions(selection, request.signal)
@@ -7810,6 +7848,8 @@ export async function apply(ctx) {
           value = await readPlanEvidenceOrigin(selection, request.signal)
         } else if (selection?.action === 'plan-handoff-origin') {
           value = await readPlanHandoffOrigin(selection, request.signal)
+        } else if (selection?.action === 'plan-web-pilot-origin') {
+          value = await readPlanWebPilotOrigin(selection, request.signal)
         } else if (selection?.action === 'evidence-retest-options') {
           value = await evidenceRetestOptions(selection, request.signal)
         } else if (selection?.action === 'evidence-retest-note') {
