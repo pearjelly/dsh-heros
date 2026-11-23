@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { openBuildPlans } from '../build-plans.js'
 import { decodeWebPilotChallenge, decodeWebPilotReport, encodeWebPilotChallenge, encodeWebPilotReport } from '../build-sharing.js'
-import { matchReport, observedWebPilotFollowupRead, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from '../match-report.js'
+import { matchReport, observedPersonalWebReads, observedWebPilotFollowupRead, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from '../match-report.js'
 import { englishText } from '../localization.js'
 import { observedWebSource, observedWebSourceResult, webSourceUrl } from '../web-source-practice.js'
 
@@ -85,8 +85,12 @@ test('Web practice handoff reports carry only canonical outcomes from linked nat
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: true })
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2, { includeAnswerSeq: true }),
     { choices: [], custom: true, answerSeq: 12, delivered: true })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2, { includeFiles: true }),
+    { choices: [], custom: true, delivered: true, files: ['private.md'] })
   events[15].sourceEventSeqs = [4]
   assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2), { choices: [], custom: true, delivered: false })
+  assert.deepEqual(webPilotHandoffOutcome(events, [first, followUp], 2, { includeFiles: true }),
+    { choices: [], custom: true, delivered: false, files: [] })
   const immediate = result(8, 1, 'ask', 3)
   immediate.data.message.content = [{ type: 'text', text: JSON.stringify({
     answers: [{ id: 'choice', selected: [], custom: 'private free text'.repeat(1_200) }],
@@ -114,6 +118,8 @@ test('Web Research only reports a bound read started after the actual evidence a
   addRead(9, 1, 'different-tool-source', 200, false, 'plugin:different')
   addRead(27, 3, 'unrelated-turn', 200)
   assert.equal(observedWebPilotFollowupRead(events, windows, 3, binding), undefined)
+  assert.deepEqual(observedPersonalWebReads(events, windows, binding),
+    { reads: [{ status: 'complete', statusCode: 200, url }], sourceChanged: true })
 
   addRead(16, 2, 'checked-source', 200)
   assert.deepEqual(observedWebPilotFollowupRead(events, windows, 3, binding), { status: 'complete', statusCode: 200, url })

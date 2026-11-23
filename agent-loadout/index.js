@@ -27,7 +27,7 @@ import { jsonFingerprint, runtimeModule } from './loader-support.js'
 import { comparisonIdValid, digestWorkspaceMaterial, materialProofRecord, openMatchComparisons, planComparisonArms, validPlanComparison, validRematchComparison, validRematchReference, validWorkspaceComparison, workspaceComparisonArms, workspaceComparisonDraft, workspaceComparisonTask, workspaceMaterialState } from './match-comparisons.js'
 import { workspaceMaterialPicker } from './workspace-materials.js'
 import { observedWebSource, observedWebSourceResult, webPilotTask, webSourceHostVersion, webSourceModule, webSourceOldVersion, webSourceTask, webSourceUrl, webSourceVersion } from './web-source-practice.js'
-import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedTextHandoff, observedWebPilotFollowupRead, panelActivityRecord, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from './match-report.js'
+import { comparisonEvidence, matchReceipts, matchReport, matchToolRecords, noteDeliveredFiles, observedHeroHandoff, observedMaterialDelivery, observedPersonalWebReads, observedTextHandoff, observedWebPilotFollowupRead, panelActivityRecord, toolSourceRecord, webPilotHandoffOutcome, webRecoveryFingerprint } from './match-report.js'
 import { isProfileShortcut, matchShortcutStore, shortcutBindings, validShortcut } from './match-shortcuts.js'
 import { declaredModules, describePackageActions, loadoutPackage, moduleReference, packageActionRecord, packageActions, publishedToolActions } from './package-actions.js'
 import { planReviewActivities } from './plan-reviews.js'
@@ -50,6 +50,9 @@ const validOpeningId = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id)
 const teamworkRecord = 'plugin:dsh-agent-loadout/teamwork'
 const planTaskRecord = 'plugin:dsh-agent-loadout/plan-task'
 const planTaskSessionPrefix = 'session-a076'
+const webPilotPersonalRecord = 'plugin:dsh-agent-loadout/web-pilot-personal'
+const webPilotPersonalPrefix = 'session-a077'
+const webPilotPersonalSessionId = /^session-a077[a-f0-9]{28}$/
 const webSourceUnavailable = '本机暂时无法装配原生网页读取。'
 const webSourceDirectory = 'web-source-practice'
 const webSourceChanged = '试玩出装已变化，请重新核对。'
@@ -2215,7 +2218,8 @@ export async function apply(ctx) {
       const readBinding = () => verifiedWebPilotDecisionBinding({ sessionId, decisionOriginSessionId }, signal)
       return openPersonalWebDraft({ workspaceId, launchId }, signal,
         ['web-pilot-decision-personal', decisionOriginSessionId, sessionId],
-        async () => verifiedWebPilotBinding(await readBinding(), signal), readBinding)
+        async () => verifiedWebPilotBinding(await readBinding(), signal), readBinding,
+        { originSessionId: decisionOriginSessionId, replaySessionId: sessionId })
     }
     const fromReceived = pilot && received === true
     if (fromReceived && arm !== undefined) throw new Error(receivedWebPilotPersonalUnavailable)
@@ -2224,7 +2228,7 @@ export async function apply(ctx) {
       () => pilot ? verifiedWebPilotLoadout({ sessionId, arm, received: fromReceived }, signal) : verifiedWebSourceLoadout(sessionId, signal))
   }
 
-  async function openPersonalWebDraft({ workspaceId, launchId }, signal, identity, loadout, checkCurrent) {
+  async function openPersonalWebDraft({ workspaceId, launchId }, signal, identity, loadout, checkCurrent, personalOrigin) {
     if (!validOpeningId(launchId)) {
       throw new Error('开局请求无效，请重试。')
     }
@@ -2237,7 +2241,18 @@ export async function apply(ctx) {
       throw new Error(webSourceUnavailable)
     }
     const key = JSON.stringify([planTaskOwner, ...identity, workspaceId, launchId])
-    const next = 'session-' + createHash('sha256').update(key).digest('hex').slice(0, 32)
+    const hash = createHash('sha256').update(key).digest('hex')
+    const legacyId = 'session-' + hash.slice(0, 32)
+    let next = legacyId
+    let tracked = false
+    if (personalOrigin) {
+      const legacy = await observeNativeSession(legacyId, signal, 'none')
+      if (legacy) legacy[Symbol.dispose]()
+      else {
+        next = webPilotPersonalPrefix + hash.slice(0, 28)
+        tracked = true
+      }
+    }
     if (openingMatches.has(next)) return openingMatches.get(next)
 
     const open = async () => {
@@ -2278,11 +2293,97 @@ export async function apply(ctx) {
       if (verify) verifyLive({ presetId, sessionId: next })
       const live = liveWebSourceBinding(agent, presetId, workspaceId, binding.id, binding.arm, binding.sourceId)
       if (live.sourceId !== binding.sourceId) throw new Error(webSourceChanged)
+      if (tracked) await recordWebPilotPersonal(next, agent, personalOrigin, live, signal)
       return { sessionId: next, workspaceId }
     }
     const work = open().finally(() => openingMatches.delete(next))
     openingMatches.set(next, work)
     return work
+  }
+
+  function webPilotPersonalOrigin(source) {
+    const { header, inheritedEventCount, events } = source
+    if (header.isSeeded || header.parentSession || inheritedEventCount !== 0) return
+    for (const event of events) {
+      if (event.type === 'turn/start' || (event.type === 'user/message' && event.data.source.kind === 'user')) break
+      if (event.type !== webPilotPersonalRecord || event.ignorable !== true || event.data?.owner !== planTaskOwner) continue
+      const { originSessionId, replaySessionId, binding } = event.data
+      if (typeof originSessionId !== 'string' || !heroAlternateSessionId.test(originSessionId) ||
+        typeof replaySessionId !== 'string' || !heroAlternateSessionId.test(replaySessionId) || replaySessionId === originSessionId ||
+        binding?.arm !== 'evidence' || binding.presetId !== header.agentPreset ||
+        typeof binding.id !== 'string' || typeof binding.sourceId !== 'string') return
+      const workspace = ctx.get('workspaceRegistry')?.get(binding.workspaceId)
+      if (!workspace || workspace.path !== header.cwd || !workspace.sessionIds.includes(header.id)) return
+      return { originSessionId, replaySessionId, binding }
+    }
+  }
+
+  async function observeWebPilotPersonal(sessionId, signal, projectionMode) {
+    if (typeof sessionId === 'string' && webPilotPersonalSessionId.test(sessionId)) {
+      return observeNativeSession(sessionId, signal, projectionMode)
+    }
+  }
+
+  async function recordWebPilotPersonal(sessionId, agent, origin, binding, signal) {
+    const source = await observeWebPilotPersonal(sessionId, signal, 'none')
+    if (!source) throw new Error(webPilotPersonalUnavailable)
+    try {
+      const previous = webPilotPersonalOrigin(source)
+      if (previous) {
+        if (!isDeepStrictEqual(previous, { ...origin, binding })) throw new Error(webSourceChanged)
+        return
+      }
+      if (planTaskDetails(source).started) throw new Error(webPilotPersonalUnavailable)
+      signal?.throwIfAborted()
+      if (closed) throw new Error('配装服务正在关闭，请重试。')
+      appendPluginRecord(agent.session, webPilotPersonalRecord, { owner: planTaskOwner, ...origin, binding })
+      updates.notify(sessionId)
+    } finally {
+      source[Symbol.dispose]()
+    }
+  }
+
+  async function webPilotPersonalSession(sessionId, signal) {
+    const source = await observeWebPilotPersonal(sessionId, signal, 'none')
+    if (!source) return
+    try {
+      return webPilotPersonalOrigin(source)
+    } finally {
+      source[Symbol.dispose]()
+    }
+  }
+
+  async function webPilotPersonalResult({ sessionId }, signal) {
+    const source = await observeWebPilotPersonal(sessionId, signal, 'all')
+    if (!source) return null
+    try {
+      const personal = webPilotPersonalOrigin(source)
+      if (!personal) return null
+      const { binding } = personal
+      const outcome = await comparisonEvidence(source, {
+        cwd: source.header.cwd, presetId: binding.presetId, allowOwnInput: true, exactMessages: true,
+        verifyMaterialProof: false, includeQuestions: true, linkedChoicesOnly: true, includeWindows: true,
+      }, receipts)
+      if (outcome.presetChanged || outcome.continuationReason === 'changed-loadout') return { status: 'unavailable' }
+      if (outcome.status !== 'complete') return { status: outcome.status }
+      const { choices, custom, files } = webPilotHandoffOutcome(source.events, outcome.windows, -1, { includeFiles: true })
+      return { status: 'complete', ...observedPersonalWebReads(source.events, outcome.windows, binding),
+        ...(choices?.length && { choice: choices.join(' / ') }), ...((custom || choices?.length) && { choiceRecorded: true }),
+        deliverables: files }
+    } finally {
+      source[Symbol.dispose]()
+    }
+  }
+
+  async function webPilotPersonalComparison({ sessionId }, signal) {
+    const personal = await webPilotPersonalSession(sessionId, signal)
+    if (!personal) throw new Error(webPilotPersonalUnavailable)
+    const reference = await webPilotReplayParent(personal.originSessionId, signal)
+    const replay = await readWebPilotReplay(personal.replaySessionId, reference, signal)
+    const binding = replay?.result?.binding
+    if (!replay?.decisionComparison || !binding || binding.presetId !== personal.binding.presetId ||
+      binding.id !== personal.binding.id || binding.sourceId !== personal.binding.sourceId) throw new Error(webPilotPersonalUnavailable)
+    return replay.decisionComparison
   }
 
   async function chooseWebSourcePractice({ sessionId, choice }, signal) {
@@ -7974,7 +8075,11 @@ export async function apply(ctx) {
   ctx.effect(() => {
     async function readSession(request) {
       const sessionId = new URL(request.url).searchParams.get('sessionId')
-      const [value, savedTask] = await Promise.all([sessionEquipment(sessionId), planTaskSession(sessionId, request.signal).catch(() => undefined)])
+      const [value, savedTask, webPersonal] = await Promise.all([
+        sessionEquipment(sessionId), planTaskSession(sessionId, request.signal).catch(() => undefined),
+        webPilotPersonalSession(sessionId, request.signal).catch(() => undefined),
+      ])
+      if (webPersonal) value.webPilotPersonal = true
       const comparison = lighthouseComparisons.member(sessionId)
       if (comparison) value.lighthouseComparison = comparison
       const workspaceComparison = workspaceComparisons.member(sessionId)
@@ -8260,6 +8365,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'web-pilot-replays') value = await webPilotReplays(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-options') value = await webPilotPersonalOptions(selection, request.signal)
         else if (selection?.action === 'web-pilot-personal-open') value = await openWebSourcePersonal(selection, request.signal, 'web-pilot-personal')
+        else if (selection?.action === 'web-pilot-personal-result') value = await webPilotPersonalResult(selection, request.signal)
+        else if (selection?.action === 'web-pilot-personal-comparison') value = await webPilotPersonalComparison(selection, request.signal)
         else if (selection?.action === 'web-pilot-plan-save') {
           value = publicBuildPlan(await saveWebPilotPlan(selection, request.signal))
           updates.notify()

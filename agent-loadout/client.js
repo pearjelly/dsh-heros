@@ -1875,14 +1875,14 @@ window.__ModuleLoader__.load({
               t(busy ? '正在保存…' : '保存方案')))))
     }
 
-    function WebPilotComparison({ sessionId, comparison, request, workspaces, savedPlan, decisionsOnly, onCancel, onVisit, dialogRef }) {
+    function WebPilotComparison({ sessionId, comparison, request, workspaces, savedPlan, decisionsOnly, sourceOnly, onCancel, onVisit, dialogRef }) {
       const [action, setAction] = useState(null)
       const ownDialog = useRef(null)
       const comparisonDialog = dialogRef ?? ownDialog
       const comparisonBody = useRef(null)
       const personalDialog = useRef(null)
       const canUseLoadout = !savedPlan && !decisionsOnly
-      const canUseDecisionLoadout = decisionsOnly && !savedPlan
+      const canUseDecisionLoadout = decisionsOnly && !savedPlan && !sourceOnly
       function closeAction() {
         setAction(null)
         requestAnimationFrame(() => action.trigger.focus())
@@ -2286,6 +2286,111 @@ window.__ModuleLoader__.load({
             replayDialog.current?.close()
             setReplayOpen('')
             onOpen(nextSessionId, task)
+          } }))
+    }
+
+    const webPilotPersonalTitle = '我的任务结果'
+
+    function WebPilotPersonalResult({ sessionId, running, receiptId, request, onOpen }) {
+      const language = useLanguage()
+      const [state, setState] = useState(null)
+      const [attempt, retry] = useState(0)
+      const [comparison, setComparison] = useState(null)
+      const [sourcePending, setSourcePending] = useState(false)
+      const [sourceError, setSourceError] = useState('')
+      const pending = useRef(null)
+      const trigger = useRef(null)
+      const dialog = useRef(null)
+      const returnFocus = useRef(false)
+      const current = state?.language === language && state.attempt === attempt ? state : null
+      const view = current?.view
+      const complete = view?.status === 'complete'
+      const statusText = { waiting: '等待发送任务', running: '进行中', 'waiting-choice': '请在会话中的提问卡上作出选择。',
+        unavailable: '目前无法核对这次任务的结果。' }
+
+      useEffect(() => {
+        const abort = new AbortController()
+        let timer
+        async function load() {
+          const action = 'web-pilot-personal-result'
+          try {
+            const value = await request(action, { action, sessionId }, abort.signal, language)
+            if (abort.signal.aborted) return
+            setState({ view: value ?? { status: 'unavailable' }, language, attempt })
+            if (['waiting', 'running', 'waiting-choice'].includes(value?.status)) timer = setTimeout(load, 1400)
+          } catch (reason) {
+            if (!abort.signal.aborted) setState({ error: reason.message, language, attempt })
+          }
+        }
+        load()
+        return () => { abort.abort(); clearTimeout(timer) }
+      }, [request, sessionId, language, attempt, running, receiptId])
+      useEffect(() => () => pending.current?.abort(), [])
+      useLayoutEffect(() => {
+        if (comparison || !returnFocus.current) return
+        returnFocus.current = false
+        trigger.current?.focus()
+      }, [comparison])
+
+      async function viewSource() {
+        if (pending.current) return
+        const abort = pending.current = new AbortController()
+        setSourcePending(true)
+        setSourceError('')
+        const action = 'web-pilot-personal-comparison'
+        try {
+          const value = await request(action, { action, sessionId }, abort.signal, language)
+          if (abort.signal.aborted) return
+          if (!value?.url || value.runs?.length !== 2) throw new Error(t('目前无法核对实测来源。'))
+          setComparison(value)
+        } catch (reason) {
+          if (!abort.signal.aborted) setSourceError(reason.message)
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setSourcePending(false)
+        }
+      }
+
+      function closeSource() {
+        dialog.current?.close()
+        returnFocus.current = true
+        setComparison(null)
+      }
+
+      return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-personal-result', 'aria-label': t(webPilotPersonalTitle) },
+        h('div', { className: 'moba-web-pilot-personal-result-head' },
+          h('strong', null, t(webPilotPersonalTitle)),
+          h('button', { type: 'button', ref: trigger, className: 'moba-settlement-button', 'aria-haspopup': 'dialog',
+            'aria-disabled': sourcePending, onClick: viewSource }, t('查看实测来源'))),
+        h('div', { className: 'moba-web-pilot-personal-result-body' },
+          !current && h('p', { role: 'status' }, t('正在读取任务结果…')),
+          view && !complete && h('p', { role: 'status' }, t(statusText[view.status] ?? statusText.unavailable)),
+          current?.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error, ' ',
+            h('button', { type: 'button', className: 'moba-text', onClick: () => retry(value => value + 1) }, t('重新核对'))),
+          sourcePending && h('p', { role: 'status' }, t('正在核对实战来源…')),
+          sourceError && h('p', { className: 'moba-alert', role: 'alert' }, sourceError),
+          view?.sourceChanged && h('p', null, t('这次任务的网页来源与实测时不同。')),
+          complete && h(Fragment, null,
+            h('p', null, h('strong', null, t('实际选择')), ' · ',
+              view.choice || t(view.choiceRecorded ? '已记录回复' : '未记录选择')),
+            view.deliverables?.length > 0 && h('ul', { className: 'moba-web-pilot-files', 'aria-label': t('交付文件') },
+              view.deliverables.map((name, index) => h('li', { key: index }, name))),
+            view.deliverables?.length === 0 && h('p', null, t('本局没有交付文件。')),
+            view.reads?.length === 0 && h('p', null, t('本次任务没有记录到网页读取。')),
+            view.reads?.length > 0 && h('ul', { className: 'moba-web-pilot-personal-reads' }, view.reads.map((read, index) => {
+              const url = read.url && webRecoveryLink(read.url)
+              const label = t(reportWebReadStates[read.status] ?? reportWebReadStates.unknown) +
+                (read.statusCode ? ' · HTTP ' + read.statusCode : '')
+              return h('li', { key: index, 'data-web-read': read.status },
+                url ? h('a', { href: url, title: url, target: '_blank', rel: 'noopener noreferrer',
+                  'aria-label': t('打开读取地址') + ' · ' + label + ' · ' + url },
+                  h('strong', null, label), h('small', null, url)) : h('strong', null, label))
+            })))),
+        comparison && h(WebPilotComparison, { sessionId, comparison, decisionsOnly: true, sourceOnly: true, dialogRef: dialog,
+          onCancel: closeSource, onVisit: targetId => {
+            dialog.current?.close()
+            setComparison(null)
+            onOpen(targetId)
           } }))
     }
 
@@ -12811,6 +12916,8 @@ window.__ModuleLoader__.load({
         snapshot?.webPilotPractice && h(WebPilotPracticeResult, { key: sessionId, sessionId, arm: snapshot.webPilotPractice, request, workspaces,
           onOpen: openDraftSession, reportId: id, reporting: open && reporting,
           onReport: event => show(event, { kind: 'report', item: { name: t('对局战报') } }) }),
+        snapshot?.webPilotPersonal === true && h(WebPilotPersonalResult, { key: sessionId, sessionId, request, onOpen: openDraftSession,
+          running: snapshot.running, receiptId: receipt?.id }),
         snapshot?.heroTrial && h(HeroTrialAnchor, { key: sessionId, member: snapshot.heroTrial, sessionId, request, onVisit: openDraftSession,
           onReturnTask: openTaskResult, consumeDraft: consumeTaskDraft, putTask: putTaskDraft, draftStore,
           hasTurn: Boolean(snapshot.running || receipt), workspaces }),
@@ -14304,6 +14411,20 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-practice-decision dd { margin: 0; min-inline-size: 0; overflow-wrap: anywhere; }
       .moba-web-pilot-consequence { display: flex; flex-wrap: wrap; align-items: center; gap: 1px 6px;
         color: #ccdcd8; font-size: 11px; overflow-wrap: anywhere; }
+      .moba-web-pilot-personal-result { box-sizing: border-box; grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr); align-items: start; }
+      .moba-web-pilot-personal-result > .moba-web-pilot-personal-result-head { display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, max-content); align-items: center; }
+      .moba-web-pilot-personal-result > .moba-web-pilot-personal-result-body { display: grid; gap: 3px;
+        align-content: start; min-block-size: 0; overflow: auto; scroll-padding-block: 4px; }
+      .moba-web-pilot-personal-result-body p { margin: 0; color: #ccdcd8; font-size: 11px; }
+      .moba-web-pilot-personal-result-head button { min-block-size: 44px; max-inline-size: 14em; white-space: normal; }
+      .moba-web-pilot-personal-result :is(button, a):focus-visible { outline: 2px solid #9ed4ec; outline-offset: -2px; }
+      .moba-web-pilot-personal-reads { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+      .moba-web-pilot-personal-reads > li { min-inline-size: 0; font-size: 11px; }
+      .moba-web-pilot-personal-reads > li > a { display: grid; align-content: center; min-block-size: 44px;
+        color: #9ed4ec; overflow-wrap: anywhere; }
+      .moba-web-pilot-personal-reads small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .moba-web-pilot-result .moba-settlement-button { min-inline-size: 0; padding: 5px 8px;
         border: 1px solid #607d78; background: #162229; color: #e1eeea; font-size: 12px; overflow-wrap: anywhere; }
       .moba-web-pilot-result .moba-settlement-button:hover { border-color: #a4c7bf; }
@@ -14323,7 +14444,7 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-comparison .moba-web-pilot-personal-entry { color: #ffe3ab; background: #392e20; border-color: #ad8c52; }
       .moba-web-pilot-decision-comparison[open] { box-sizing: border-box; display: flex; flex-direction: column; overflow: clip; }
       .moba-web-pilot-decision-comparison > :is(h2, .moba-starter-actions) { flex: none; }
-      .moba-web-pilot-decision-comparison > .moba-starter-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+      .moba-web-pilot-decision-comparison > .moba-starter-actions:has(> .moba-start) { display: grid; grid-template-columns: auto minmax(0, 1fr); }
       .moba-web-pilot-decision-comparison > .moba-starter-actions button { justify-content: center; white-space: normal; }
       .moba-web-pilot-decision-comparison .moba-web-pilot-practice-fields > p { margin: 0; }
       .moba-web-pilot-saved-arm { margin-inline-start: 7px; color: #ffe3ab; font-size: 11px; }
@@ -14406,6 +14527,7 @@ window.__ModuleLoader__.load({
           white-space: normal; overflow-wrap: anywhere; }
       }
       @media (max-width: 600px) {
+        .moba-web-pilot-personal-result { max-block-size: max(84px, calc(100dvh - 450px)); }
         .moba-web-pilot-result { box-sizing: border-box; align-content: start;
           max-block-size: max(88px, calc(100dvh - 444px)); overflow: auto; scroll-padding-block: 8px; }
         .moba-web-pilot-result:has(> .moba-web-pilot-consequence) { max-block-size: max(88px, calc(100dvh - 416px)); }
