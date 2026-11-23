@@ -14425,9 +14425,9 @@ window.__ModuleLoader__.load({
       .moba-web-pilot-personal-reads > li > a { display: grid; align-content: center; min-block-size: 44px;
         color: #9ed4ec; overflow-wrap: anywhere; }
       .moba-web-pilot-personal-reads small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .moba-web-pilot-result .moba-settlement-button { min-inline-size: 0; padding: 5px 8px;
+      :is(.moba-web-pilot-result, .moba-web-pilot-personal-result) .moba-settlement-button { min-inline-size: 0; padding: 5px 8px;
         border: 1px solid #607d78; background: #162229; color: #e1eeea; font-size: 12px; overflow-wrap: anywhere; }
-      .moba-web-pilot-result .moba-settlement-button:hover { border-color: #a4c7bf; }
+      :is(.moba-web-pilot-result, .moba-web-pilot-personal-result) .moba-settlement-button:hover { border-color: #a4c7bf; }
       .moba-web-pilot-result :is(.moba-web-pilot-compare, .moba-web-pilot-received, .moba-web-pilot-replay-primary, .moba-web-pilot-review[data-primary]) {
         background: #392e20; border-color: #ad8c52; color: #ffe3ab;
       }
