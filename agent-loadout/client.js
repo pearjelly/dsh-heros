@@ -2296,6 +2296,11 @@ window.__ModuleLoader__.load({
     const webPilotPersonalPairUnavailable = '还没有核对通过的同题个人对局。'
     const webPilotPersonalReplayTitle = '换套出装再试本题'
     const webPilotPersonalReplayUnavailable = '目前无法用另一套出装复赛本题。'
+    const webPilotPersonalReplaysTitle = '我的复赛'
+    const webPilotPersonalReplayStates = {
+      waiting: '等待发送任务', running: '进行中', 'waiting-choice': '请在会话中的提问卡上作出选择。',
+      complete: '已完成', unavailable: '不可用',
+    }
 
     function webPilotPersonalChoice(view) {
       return view?.choice || t(view?.choiceRecorded ? '已记录回复' : '未记录选择')
@@ -2435,13 +2440,114 @@ window.__ModuleLoader__.load({
               t(opening ? '正在准备对局…' : '打开草稿'), h(Glyph, { kind: 'arrow', size: 16 })))))
     }
 
+    function WebPilotPersonalReplayList({ sessionId, fromArm, request, dialogRef, onCancel, onOpen }) {
+      const language = useLanguage()
+      const [attempt, retry] = useState(0)
+      const [state, setState] = useState(null)
+      const [reading, setReading] = useState('')
+      const [readError, setReadError] = useState(null)
+      const [previewOpen, setPreviewOpen] = useState(false)
+      const pending = useRef(null)
+      const start = useRef(null)
+      const content = useRef(null)
+      const scrollTop = useRef(0)
+      const previewDialog = useRef(null)
+      const current = state?.language === language && state.attempt === attempt ? state : null
+      const replayList = current?.value
+      const clock = new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'medium' })
+
+      useEffect(() => {
+        const abort = new AbortController()
+        const action = 'web-pilot-personal-replays'
+        request(action, { action, sessionId }, abort.signal, language).then(value => {
+          if (abort.signal.aborted) return
+          if (!Array.isArray(value?.runs) || value.runs.some(run => typeof run?.sessionId !== 'string' || !run.sessionId ||
+            run.sessionId === sessionId || !Object.hasOwn(webPilotArms, run.arm) || !Object.hasOwn(webPilotPersonalReplayStates, run.status))) {
+            throw new Error(t(webPilotReplayChanged))
+          }
+          setState({ language, attempt, value })
+        }).catch(reason => {
+          if (!abort.signal.aborted) setState({ language, attempt, error: reason.message })
+        })
+        return () => abort.abort()
+      }, [request, sessionId, language, attempt])
+      useEffect(() => () => pending.current?.abort(), [])
+
+      async function resume(run) {
+        if (pending.current) return
+        const abort = pending.current = new AbortController()
+        setReading(run.sessionId)
+        setReadError(null)
+        const action = 'web-pilot-personal-replay-resume'
+        try {
+          const value = await request(action, { action, sessionId, replaySessionId: run.sessionId }, abort.signal, language)
+          if (abort.signal.aborted) return
+          if (value?.sessionId !== run.sessionId) throw new Error(t(webPilotReplayChanged))
+          onOpen(value.sessionId)
+        } catch (reason) {
+          if (!abort.signal.aborted) setReadError({ sessionId: run.sessionId, message: reason.message })
+        } finally {
+          pending.current = null
+          if (!abort.signal.aborted) setReading('')
+        }
+      }
+
+      function openPreview() {
+        if (pending.current) return
+        scrollTop.current = content.current.scrollTop
+        dialogRef.current?.close()
+        setPreviewOpen(true)
+      }
+
+      function closePreview() {
+        previewDialog.current?.close()
+        dialogRef.current?.showModal()
+        start.current?.focus({ preventScroll: true })
+        content.current.scrollTop = scrollTop.current
+        setPreviewOpen(false)
+      }
+
+      return h(Fragment, null,
+        h(InstallDialog, { title: t(webPilotPersonalReplaysTitle),
+          className: 'moba-starter-dialog moba-web-source-dialog moba-web-pilot-replay-list moba-web-pilot-personal-replays',
+          dialogRef, onCancel, initialFocus: '.moba-web-pilot-personal-replays-back',
+          onKeyDown: event => closeDialogOnEscape(event, onCancel) },
+          h('div', { className: 'moba-web-pilot-practice-fields', ref: content },
+            !current && h('p', { className: 'moba-empty', role: 'status' }, t('正在读取复赛…')),
+            current?.error && h('p', { className: 'moba-alert', role: 'alert' }, current.error),
+            replayList?.runs.length === 0 && h('p', { className: 'moba-empty' }, t('还没有可继续或回看的复赛。')),
+            replayList?.runs.length > 0 && h('ul', { className: 'moba-history-list' }, replayList.runs.map(run => {
+              const opened = new Date(run.openedAt)
+              const hasDate = Number.isFinite(opened.getTime())
+              return h('li', { className: 'moba-history-entry', key: run.sessionId, 'data-replay-status': run.status },
+                h('header', null, h('h3', null, t(webPilotArms[run.arm].name)),
+                  hasDate && h('time', { dateTime: opened.toISOString() }, clock.format(opened))),
+                h('p', null, t(webPilotPersonalReplayStates[run.status])),
+                readError?.sessionId === run.sessionId && h('p', { className: 'moba-alert', role: 'alert' }, readError.message),
+                reading === run.sessionId && h('p', { role: 'status' }, t('正在核对实战来源…')),
+                h('div', { className: 'moba-history-card-actions' },
+                  h('button', { type: 'button', className: 'moba-roster-open', 'aria-disabled': Boolean(reading),
+                    onClick: () => resume(run) }, t(run.status === 'waiting' ? '继续草稿' : '打开本局会话'))))
+            }))),
+          h('div', { className: 'moba-market-actions moba-starter-actions' },
+            h('button', { type: 'button', className: 'moba-roster-open moba-web-pilot-personal-replays-back', onClick: onCancel }, t('返回')),
+            current?.error && h('button', { type: 'button', className: 'moba-roster-open', onClick: () => retry(value => value + 1) }, t('重试')),
+            replayList?.canReplay === true && h('button', { type: 'button', className: 'moba-start', ref: start,
+              'aria-haspopup': 'dialog', 'aria-disabled': Boolean(reading), onClick: openPreview }, t('再开一场复赛')))),
+        previewOpen && h(WebPilotPersonalReplay, { sessionId, fromArm, request, dialogRef: previewDialog, onCancel: closePreview,
+          onOpen: (id, task) => {
+            previewDialog.current?.close()
+            onOpen(id, task)
+          } }))
+    }
+
     function WebPilotPersonalResult({ sessionId, running, receiptId, request, onOpen, consumeDraft, focusDraft }) {
       const language = useLanguage()
       const [state, setState] = useState(null)
       const [attempt, retry] = useState(0)
       const [comparison, setComparison] = useState(null)
       const [planSave, setPlanSave] = useState(null)
-      const [replayOpen, setReplayOpen] = useState(false)
+      const [replayOpen, setReplayOpen] = useState('')
       const [sourcePending, setSourcePending] = useState(false)
       const [sourceError, setSourceError] = useState('')
       const pending = useRef(null)
@@ -2459,6 +2565,9 @@ window.__ModuleLoader__.load({
       const canSavePlan = complete && loadout && view.canSavePlan === true
       const pairReady = complete && view.comparisonReady === true
       const replayReady = complete && loadout && view.replayReady === true
+      const replayListReady = complete && view.replaysReady === true
+      const hasReplayAction = replayReady || replayListReady
+      const replayLabel = replayListReady ? view.hasPendingReplay ? '继续复赛草稿' : '查看我的复赛' : webPilotPersonalReplayTitle
       const statusText = { waiting: '等待发送任务', running: '进行中', 'waiting-choice': '请在会话中的提问卡上作出选择。',
         unavailable: '目前无法核对这次任务的结果。' }
 
@@ -2546,12 +2655,20 @@ window.__ModuleLoader__.load({
       function closeReplay() {
         dialog.current?.close()
         returnFocus.current = replayTrigger.current ?? trigger.current
-        setReplayOpen(false)
+        setReplayOpen('')
+      }
+
+      function openReplayTarget(id, task) {
+        dialog.current?.close()
+        setReplayOpen('')
+        retry(value => value + 1)
+        if (task === undefined) onOpen(id)
+        else onOpen(id, task)
       }
 
       return h('section', { className: 'moba-lighthouse-anchor moba-web-pilot-personal-result', 'aria-label': t(webPilotPersonalTitle) },
         h('div', { className: 'moba-web-pilot-personal-result-head', 'data-save-plan': canSavePlan || undefined,
-          'data-pair-ready': pairReady || undefined, 'data-replay-ready': replayReady || undefined },
+          'data-pair-ready': pairReady || undefined, 'data-replay-ready': hasReplayAction || undefined },
           h('strong', null, t(webPilotPersonalTitle)),
           h('button', { type: 'button', ref: trigger, className: 'moba-settlement-button', 'aria-haspopup': 'dialog',
             'aria-disabled': sourcePending, onClick: () => viewComparison(false) }, t('查看实测来源')),
@@ -2559,9 +2676,9 @@ window.__ModuleLoader__.load({
             'aria-haspopup': 'dialog', 'aria-disabled': sourcePending, onClick: openPlanSave }, t('保存为方案')),
           pairReady && h('button', { type: 'button', ref: pairTrigger, className: 'moba-settlement-button moba-web-pilot-personal-compare',
             'aria-haspopup': 'dialog', 'aria-disabled': sourcePending, onClick: () => viewComparison(true) }, t(webPilotPersonalPairTitle)),
-          replayReady && h('button', { type: 'button', ref: replayTrigger, className: 'moba-settlement-button moba-web-pilot-personal-replay',
-            'aria-haspopup': 'dialog', 'aria-disabled': sourcePending, onClick: () => { if (!pending.current) setReplayOpen(true) } },
-          t(webPilotPersonalReplayTitle))),
+          hasReplayAction && h('button', { type: 'button', ref: replayTrigger, className: 'moba-settlement-button moba-web-pilot-personal-replay',
+            'aria-haspopup': 'dialog', 'aria-disabled': sourcePending, onClick: () => { if (!pending.current) setReplayOpen(replayListReady ? 'list' : 'preview') } },
+          t(replayLabel))),
         h('div', { className: 'moba-web-pilot-personal-result-body' },
           !current && h('p', { role: 'status' }, t('正在读取任务结果…')),
           view && !complete && h('p', { role: 'status' }, t(statusText[view.status] ?? statusText.unavailable)),
@@ -2578,12 +2695,8 @@ window.__ModuleLoader__.load({
           : h(WebPilotComparison, { sessionId, comparison: comparison.value, decisionsOnly: comparison.value.opposite !== true,
             sourceOnly: true, dialogRef: dialog, onCancel: closeComparison, onVisit: openConversation })),
         planSave && h(WebPilotPlanSave, { sessionId, run: planSave, personal: true, request, dialogRef: saveDialog, onCancel: closePlanSave }),
-        replayOpen && h(WebPilotPersonalReplay, { sessionId, fromArm: view?.arm, request, dialogRef: dialog, onCancel: closeReplay,
-          onOpen: (id, task) => {
-            dialog.current?.close()
-            setReplayOpen(false)
-            onOpen(id, task)
-          } }))
+        replayOpen && h(replayOpen === 'list' ? WebPilotPersonalReplayList : WebPilotPersonalReplay, {
+          sessionId, fromArm: view?.arm, request, dialogRef: dialog, onCancel: closeReplay, onOpen: openReplayTarget }))
     }
 
     function LighthouseReviewStart({ request, onCancel, onOpen }) {
@@ -14647,9 +14760,9 @@ window.__ModuleLoader__.load({
         grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) minmax(0, .8fr); }
       .moba-web-pilot-comparison .moba-lighthouse-arm button { min-inline-size: 0; text-align: start; overflow-wrap: anywhere; }
       .moba-web-pilot-comparison .moba-web-pilot-personal-entry { color: #ffe3ab; background: #392e20; border-color: #ad8c52; }
-      :is(.moba-web-pilot-decision-comparison, .moba-web-pilot-source-comparison, .moba-web-pilot-personal-pair)[open] {
+      :is(.moba-web-pilot-decision-comparison, .moba-web-pilot-source-comparison, .moba-web-pilot-personal-pair, .moba-web-pilot-personal-replays)[open] {
         box-sizing: border-box; display: flex; flex-direction: column; overflow: clip; }
-      :is(.moba-web-pilot-decision-comparison, .moba-web-pilot-source-comparison, .moba-web-pilot-personal-pair) > :is(h2, .moba-starter-actions) { flex: none; }
+      :is(.moba-web-pilot-decision-comparison, .moba-web-pilot-source-comparison, .moba-web-pilot-personal-pair, .moba-web-pilot-personal-replays) > :is(h2, .moba-starter-actions) { flex: none; }
       .moba-web-pilot-personal-pair .moba-lighthouse-arms { grid-template-columns: repeat(auto-fit, minmax(min(218px, 100%), 1fr)); }
       .moba-web-pilot-personal-pair .moba-lighthouse-arm { align-content: start; gap: 5px; }
       .moba-web-pilot-personal-pair .moba-lighthouse-arm :is(h3, p) { margin: 0; overflow-wrap: anywhere; }
@@ -14741,7 +14854,7 @@ window.__ModuleLoader__.load({
         .moba-web-pilot-personal-result:has(.moba-web-pilot-personal-result-head:is([data-pair-ready], [data-replay-ready])) {
           max-block-size: max(84px, calc(100dvh - 438px)); }
         .moba-web-pilot-personal-result:has(.moba-web-pilot-personal-result-head[data-pair-ready][data-replay-ready]) {
-          max-block-size: max(112px, calc(100dvh - 428px)); }
+          max-block-size: max(112px, calc(100dvh - 444px)); }
         .moba-web-pilot-personal-result-head[data-save-plan] { grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr) minmax(0, 1fr); }
         .moba-web-pilot-personal-result-head:is([data-pair-ready], [data-replay-ready]) {
           grid-template-columns: minmax(0, .9fr) minmax(0, 1fr) minmax(0, 1.2fr); }
