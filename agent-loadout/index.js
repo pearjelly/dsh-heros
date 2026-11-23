@@ -10,7 +10,7 @@ import { equipment, equipmentRoles, packageRoleReader, presetCopy, presetRoles, 
 import { agentPluginModule, agentPluginUrl } from './agent-plugins.js'
 import { appearanceStore, readArtwork } from './appearance.js'
 import { openBuildPlans, planTaskPrompt, planTaskSessionId as heroAlternateSessionId, webPilotPlanComparison } from './build-plans.js'
-import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, decodeLighthouseReviewChallenge, decodeLighthouseReviewReport, decodeWebPilotChallenge, decodeWebPilotReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, encodeLighthouseReviewChallenge, encodeLighthouseReviewReport, encodeWebPilotChallenge, encodeWebPilotReport, isLighthouseHeroChallenge, isLighthouseReviewChallenge, isWebPilotChallenge, lighthouseChallengeName } from './build-sharing.js'
+import { decodeBuildShare, decodeLighthouseChallenge, decodeLighthouseCombinedChallenge, decodeLighthouseEvidenceReport, decodeLighthouseHeroChallenge, decodeLighthouseHeroReport, decodeLighthouseReviewChallenge, decodeLighthouseReviewReport, decodeWebPilotChallenge, decodeWebPilotReport, encodeBuildShare, encodeLighthouseChallenge, encodeLighthouseCombinedChallenge, encodeLighthouseEvidenceReport, encodeLighthouseHeroChallenge, encodeLighthouseHeroReport, encodeLighthouseReviewChallenge, encodeLighthouseReviewReport, encodeWebPilotChallenge, encodeWebPilotReport, isLighthouseCombinedChallenge, isLighthouseHeroChallenge, isLighthouseReviewChallenge, isWebPilotChallenge, lighthouseChallengeName } from './build-sharing.js'
 import { buildShareSources } from './build-share-sources.js'
 import { configuredEquipmentModule, configuredEquipmentUrl, isConfiguredEquipment } from './configured-equipment.js'
 import { customActionStore } from './custom-actions.js'
@@ -18,7 +18,7 @@ import { checkCustomEquipment, customEquipmentPreview, equipmentRecordKey, revie
 import { composeIsolation, declaredIsolation } from './equipment-isolation.js'
 import { marketActions } from './market.js'
 import { legacyPresets } from './legacy-presets.js'
-import { isLighthouseEvidenceWorkspace, lighthouseArms, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceChoices, lighthouseEvidenceDecision, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseEvidenceTask, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroDelivery, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseRematchTask, lighthouseReviewDecision, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
+import { isLighthouseEvidenceWorkspace, lighthouseArms, lighthouseCombinedModes, lighthouseComparisonTask, lighthouseComparisonWorkspace, lighthouseDirectory, lighthouseEvidenceChoices, lighthouseEvidenceDecision, lighthouseEvidenceLesson, lighthouseEvidenceReplayDirectory, lighthouseEvidenceReplayWorkspace, lighthouseEvidenceScenarios, lighthouseEvidenceTask, lighthouseHeroArms, lighthouseHeroContents, lighthouseHeroDelivery, lighthouseHeroMaterial, lighthouseHeroNeeds, lighthouseHeroTask, lighthouseHeroTrialFolder, lighthouseHeroWorkspace, lighthousePracticeContains, lighthouseRematchLesson, lighthouseRematchTask, lighthouseReviewDecision, lighthouseTask, lighthouseWorkspace } from './lighthouse.js'
 import { compareCapabilities, summarizeCapabilities } from './loadout-comparison.js'
 import { actionInput, actionKey, actionPrompt, equipmentActions, equipmentPrompt, equipmentTask, equipmentTaskId, equippedActions, heroActions as builtInHeroActions, questPrompt } from './match-actions.js'
 import { matchEvents } from './match-events.js'
@@ -3471,7 +3471,7 @@ export async function apply(ctx) {
   }
 
   async function checkCombinedLighthouseStart(english, signal, mode = 'evidence-review') {
-    if (!['evidence-review', 'review'].includes(mode)) throw new Error('请选择大厅里的实战打法。')
+    if (!lighthouseCombinedModes.includes(mode)) throw new Error('请选择大厅里的实战打法。')
     const brief = lighthouseEvidenceTask(english, 'gap')
     const view = planTaskPrompt({ material: lighthouseHeroMaterial, task: brief }, english)
     const unready = { preview: { ...view, mode, reason: reviewRoutesUnavailable } }
@@ -3494,17 +3494,35 @@ export async function apply(ctx) {
     }
   }
 
-  async function openCombinedLighthouse(selection, english, signal, replay = false) {
+  async function checkCombinedLighthouseChallenge({ code, arm }, signal) {
+    if (arm !== undefined && !lighthouseCombinedModes.includes(arm)) throw new Error(challengeChanged)
+    const { sampleLanguage, played } = decodeLighthouseCombinedChallenge(code)
+    const options = await Promise.all(lighthouseCombinedModes.map(mode => checkCombinedLighthouseStart(sampleLanguage === 'en', signal, mode)))
+    const arms = options.filter(option => option.draft).map(option => option.mode)
+    const { task, material } = options[0].preview
+    const view = { kind: 'lighthouse-combined', sampleLanguage, played, task, material, arms }
+    if (arm === undefined) return { preview: arms.length ? view : { ...view, blocked: true, reason: reviewRoutesUnavailable } }
+    const selected = options.find(option => option.mode === arm)
+    if (!selected?.draft) return { preview: { ...view, blocked: true, reason: reviewRoutesUnavailable } }
+    const token = createHash('sha256').update(JSON.stringify([
+      'lighthouse-combined-challenge-v1', code.trim(), arm, selected.preview.token,
+    ])).digest('hex')
+    return { ...selected, preview: { ...view, arm, token } }
+  }
+
+  async function openCombinedLighthouse(selection, english, signal, kind = 'start') {
     const { token, launchId } = selection
     if (closed) throw new Error('配装服务正在关闭，请重试。')
     if (!validOpeningId(launchId) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
       throw new Error('请先核对新任务的材料和出装。')
     }
-    const { preview, draft, identity, brief, original, mode } = replay
+    const { preview, draft, identity, brief, original, mode } = kind === 'replay'
       ? await checkCombinedLighthouseReplay(selection, signal)
-      : await checkCombinedLighthouseStart(english, signal, selection.mode)
+      : kind === 'challenge' ? await checkCombinedLighthouseChallenge(selection, signal)
+        : await checkCombinedLighthouseStart(english, signal, selection.mode)
     if (!draft || preview.token !== token) throw new Error(preview.reason ?? '材料、任务或出装已变化，请重新核对。')
     if (original) english = original.language === 'en'
+    if (kind === 'challenge') english = preview.sampleLanguage === 'en'
     const registry = ctx.get('workspaceRegistry')
     if (!registry?.create || !ctx.get('sessionController')?.create || !ctx.get('sessionQuery')) {
       throw new Error('灯塔练习工作区不可用。')
@@ -3531,6 +3549,12 @@ export async function apply(ctx) {
 
   async function checkCombinedLighthouseLoadout(sessionId, signal) {
     return checkCombinedLighthouseRoundLoadout(await readCombinedLighthouseRound(sessionId, signal), signal)
+  }
+
+  async function shareCombinedLighthouseChallenge({ sessionId }, signal) {
+    const { original } = await checkCombinedLighthouseLoadout(sessionId, signal)
+    const { language: sampleLanguage, mode: played } = original
+    return { code: encodeLighthouseCombinedChallenge(sampleLanguage, played), sampleLanguage, played }
   }
 
   async function checkCombinedLighthousePairSide({ sessionId, pairSide }, signal) {
@@ -9117,7 +9141,8 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-combined-start-preview') value = (await checkCombinedLighthouseStart(english, request.signal, selection.mode)).preview
         else if (selection?.action === 'lighthouse-combined-start-open') value = await openCombinedLighthouse(selection, english, request.signal)
         else if (selection?.action === 'lighthouse-combined-replay-preview') value = (await checkCombinedLighthouseReplay(selection, request.signal)).preview
-        else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, true)
+        else if (selection?.action === 'lighthouse-combined-replay-open') value = await openCombinedLighthouse(selection, english, request.signal, 'replay')
+        else if (selection?.action === 'lighthouse-combined-challenge-share') value = await shareCombinedLighthouseChallenge(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-personal-draft') value = await readCombinedLighthousePersonalDraft(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-pending') value = await combinedLighthousePending(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-resume') value = await resumeCombinedLighthouse(selection, request.signal)
@@ -9131,12 +9156,14 @@ export async function apply(ctx) {
         else if (selection?.action === 'hero-trial-handoff-report') value = await heroHandoffReport(selection, request.signal)
         else if (selection?.action === 'hero-trial-handoff-compare') value = await heroHandoffReport(selection, request.signal, true)
         else if (selection?.action === 'lighthouse-challenge-preview') {
-          value = isWebPilotChallenge(selection.code) ? await previewWebPilotChallenge(selection, request.signal)
+          value = isLighthouseCombinedChallenge(selection.code) ? (await checkCombinedLighthouseChallenge(selection, request.signal)).preview
+            : isWebPilotChallenge(selection.code) ? await previewWebPilotChallenge(selection, request.signal)
             : isLighthouseHeroChallenge(selection.code) ? await previewHeroChallenge(selection.code, request.signal)
             : isLighthouseReviewChallenge(selection.code) ? (await checkReviewChallenge(selection.code, request.signal)).preview
             : (await checkLighthouseChallenge(selection.code, request.signal, selection.useLocal === true)).preview
         } else if (selection?.action === 'lighthouse-challenge-open') {
-          value = isWebPilotChallenge(selection.code) ? await openReviewedTask(selection, english, request.signal, 'web-pilot-challenge')
+          value = isLighthouseCombinedChallenge(selection.code) ? await openCombinedLighthouse(selection, english, request.signal, 'challenge')
+            : isWebPilotChallenge(selection.code) ? await openReviewedTask(selection, english, request.signal, 'web-pilot-challenge')
             : isLighthouseHeroChallenge(selection.code) ? await openHeroChallenge(selection, request.signal)
             : isLighthouseReviewChallenge(selection.code) ? await openReviewChallenge(selection, request.signal)
             : await openLighthouseChallenge(selection, english, request.signal)

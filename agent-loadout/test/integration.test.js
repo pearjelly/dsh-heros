@@ -1739,6 +1739,67 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.equal(await readFile(firstReviewSample, 'utf8'), reviewSample)
     assert.deepEqual(await native(reviewOpening.sessionId), firstReviewNative)
 
+    async function challenge(action, fields, status = 200) {
+      const response = await host.requestRaw(endpoint, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'X-DSH-Heros-Language': 'en' },
+        body: JSON.stringify({ action, ...fields }),
+      })
+      const body = await response.json()
+      assert.equal(response.status, status, JSON.stringify(body))
+      return body.value
+    }
+    const shareChallenge = (sessionId, status) => challenge('lighthouse-combined-challenge-share', { sessionId }, status)
+    await shareChallenge(ownOpening.sessionId, 422)
+    await shareChallenge(withEvidence.sessionId, 422)
+    const invitation = await shareChallenge(reviewOpening.sessionId)
+    assert.match(invitation.code, /^DSHC5\./)
+    assert.equal(invitation.played, 'review')
+    assert.equal(invitation.sampleLanguage, 'zh')
+    const publicRecipe = JSON.parse(Buffer.from(invitation.code.slice(6), 'base64url').toString())
+    assert.deepEqual(publicRecipe, { sample: 'lighthouse-battery-gap-1-zh', played: 'review' })
+    const otherInvitation = await shareChallenge(sessionId)
+    assert.notEqual(otherInvitation.code, invitation.code)
+    const previewChallenge = (fields, status) => challenge('lighthouse-challenge-preview', { code: invitation.code, ...fields }, status)
+    const openChallenge = (fields, status) => challenge('lighthouse-challenge-open', {
+      code: invitation.code, launchId: '4'.repeat(32), ...fields,
+    }, status)
+    const initialChallenge = await previewChallenge()
+    assert.deepEqual(initialChallenge, {
+      kind: 'lighthouse-combined', sampleLanguage: 'zh', played: 'review', task: reviewOpening.task,
+      material: combinedPractice.material, arms: ['evidence-review', 'review'],
+    })
+    await previewChallenge({ arm: 'standard' }, 422)
+    const withPrivateField = 'DSHC5.' + Buffer.from(JSON.stringify({ ...publicRecipe, task: 'x' })).toString('base64url')
+    await previewChallenge({ code: withPrivateField }, 422)
+    const bothChallenge = await previewChallenge({ arm: 'evidence-review' })
+    const reviewChallenge = await previewChallenge({ arm: 'review' })
+    assert.equal(bothChallenge.arm, 'evidence-review')
+    assert.equal(reviewChallenge.arm, 'review')
+    assert.notEqual(bothChallenge.token, reviewChallenge.token)
+    assert.notEqual(bothChallenge.token, combinedPractice.token)
+    await openChallenge({ token: bothChallenge.token }, 422)
+    await openChallenge({ arm: 'review', token: bothChallenge.token }, 422)
+    await openChallenge({ code: otherInvitation.code, arm: 'evidence-review', token: bothChallenge.token }, 422)
+    const challengeSelection = { arm: 'evidence-review', token: bothChallenge.token }
+    const invited = await openChallenge(challengeSelection)
+    assert.deepEqual(await openChallenge(challengeSelection), invited)
+    assert.equal(invited.task, reviewOpening.task)
+    assert.notEqual(invited.sessionId, reviewOpening.sessionId)
+    assert.notEqual(invited.workspaceId, reviewOpening.workspaceId)
+    const invitedDraft = await native(invited.sessionId)
+    assert.ok(!invitedDraft.events.some(event => event.type === 'turn/start' || event.type === 'user/message'))
+    assert.equal(await readFile(join(invitedDraft.workspacePath, combinedPractice.material), 'utf8'), reviewSample)
+    const invitedTurn = host.request(turnEndpoint, { sessionId: invited.sessionId, text: invited.task })
+    invitedTurn.catch(() => {})
+    await choose(invited.sessionId, 'fixture-lighthouse-evidence', '暂缓提交')
+    await invitedTurn
+    const invitedResult = await result(invited.sessionId)
+    assert.equal(invitedResult.lighthouseMode, 'evidence-review')
+    assert.equal(invitedResult.lighthousePair, undefined)
+    assert.deepEqual(invitedResult.workflowDecisions, [{ gearId: 'evidence', choices: ['暂缓提交'] }])
+    assert.deepEqual(invitedResult.deliverables, [])
+    assert.deepEqual(await native(reviewOpening.sessionId), firstReviewNative)
+
     const before = await history(directSession)
     const liveComparison = await preview('review', { sourceSessionId: directSession })
     assert.equal(liveComparison.comparison.live, true)

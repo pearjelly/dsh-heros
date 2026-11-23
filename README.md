@@ -15,7 +15,7 @@ Both videos have Mandarin narration and Simplified Chinese captions. The walkthr
 Supports DeepSeek Harness 0.2.1-rc.1 through 0.2.1-rc.5, 0.2.2-rc.1 through 0.2.2-rc.5, and the 0.2.3-alpha.2 preview. Use the CLI for your DSH installation. The preview requires Node.js 24.22.3 or later in the 24.x series, or 26.13.1 or later. [DSH preview requirements](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.3-alpha.2)
 
 ```sh
-dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.249.0/dsh-heros-bundle.tgz
+dsh plugin --profile web add -w https://github.com/pearjelly/dsh-heros/releases/download/v0.250.0/dsh-heros-bundle.tgz
 dsh web
 ```
 
@@ -187,6 +187,8 @@ In the replay preview, you can also add or remove just Evidence Check. The task,
 From a verified Lighthouse result, choose **Use this loadout on my task** to take the equipment into your workspace. Select your own file and write a new task. Review the loadout, open the new draft, then send it yourself.
 
 When the Lighthouse report compares two different loadouts, choose **Use original loadout on my task** or **Use replay loadout on my task** directly below the table. Check the selected equipment before choosing your own file and writing the new task.
+
+From a verified Lighthouse result, choose **Invite a friend to try the same task** and copy the invitation. Your friend opens **Join a practice challenge** in the lobby, pastes the message, and sees your loadout. They choose their own loadout and open a new draft. The public supply card and the original task language carry through.
 
 The chooser shows the shared loadout of **Standard** and **Deliverable Preview**. The review route adds **Delivery Review**, which lets you decide whether to hand off the file.
 

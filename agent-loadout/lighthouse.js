@@ -8,6 +8,7 @@ const rematchPrefix = 'lighthouse-rematch-'
 const evidencePrefix = 'lighthouse-evidence-'
 const evidenceReplayPrefix = 'lighthouse-evidence-replay-'
 export const lighthouseEvidenceScenarios = ['gap', 'confirmed']
+export const lighthouseCombinedModes = ['evidence-review', 'review']
 const evidenceDecisionLabels = new Map([
   ['继续补证', 'gather'], ['gather more evidence', 'gather'], ['continue gathering evidence', 'gather'],
   ['降级推荐', 'qualify'], ['qualify the recommendation', 'qualify'], ['lower the recommendation to a qualified draft', 'qualify'],

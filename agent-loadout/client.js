@@ -2927,13 +2927,14 @@ window.__ModuleLoader__.load({
     }
     const lighthouseCarryModeLabels = { ...lighthouseReplayModeLabels, review: '仅交付前复核' }
 
-    function LighthouseLoadoutChoices({ heading, options, picked, disabled, onChoose }) {
+    function LighthouseLoadoutChoices({ heading, options, picked, available, disabled, onChoose }) {
       const group = useId()
       return h('fieldset', { className: 'moba-starter-routes moba-lighthouse-mode-options', disabled },
         h('legend', null, t(heading)),
         Object.entries(options).map(([value, label]) =>
           h('label', { className: 'moba-starter-route', key: value, 'data-picked': picked === value },
-            h('input', { type: 'radio', name: group, value, checked: picked === value, onChange: () => onChoose(value) }),
+            h('input', { type: 'radio', name: group, value, checked: picked === value, disabled: available && !available.includes(value),
+              onChange: () => onChoose(value) }),
             h('span', null, h('strong', null, t(label))))))
     }
     const lighthousePendingTitle = '灯塔试玩记录'
@@ -3401,11 +3402,12 @@ window.__ModuleLoader__.load({
 
     const challengeJoinTitle = '加入试玩挑战'
     const webPilotInviteTitle = '邀请好友同题试玩'
+    const lighthouseCombinedInviteTitle = '邀请好友试同题'
     const webPilotReportTitle = '交换试玩战报'
     const webPilotReceivedReportTitle = '对照收到的战报'
 
     function LighthouseChallengeShare({ comparisonId, request, onBack, heroTrial = false, playedHero, reviewSource,
-      webPilotSessionId, dialogRef }) {
+      webPilotSessionId, lighthouseSessionId, dialogRef }) {
       const language = useLanguage()
       const [result, setResult] = useState(null)
       const [error, setError] = useState('')
@@ -3413,8 +3415,11 @@ window.__ModuleLoader__.load({
       const [showInvitation, setShowInvitation] = useState(false)
       const field = useRef(null)
       const invitationField = useRef(null)
+      const localDialog = useRef(null)
+      const sessionId = lighthouseSessionId ?? webPilotSessionId
       const { kind: reviewKind, arm: reviewArm, played: playedReview } = reviewSource ?? {}
-      const action = webPilotSessionId ? 'web-pilot-challenge-share' : heroTrial ? 'hero-trial-challenge-share'
+      const action = lighthouseSessionId ? 'lighthouse-combined-challenge-share' : webPilotSessionId ? 'web-pilot-challenge-share'
+        : heroTrial ? 'hero-trial-challenge-share'
         : reviewKind ? 'lighthouse-review-challenge-share' : 'lighthouse-challenge-share'
       const heroHook = {
         standard: '我用标准模式打了一局。同一张补给卡，你会选谁？',
@@ -3428,7 +3433,8 @@ window.__ModuleLoader__.load({
         (language === 'en' ? 'README.md#install' : 'README.zh.md#%E5%AE%89%E8%A3%85')
       const invitation = result?.code && [
         ...(heroHook || reviewHook ? [t(heroHook ?? reviewHook)] : []),
-        t(webPilotSessionId ? '没有本机试跑记录，你会推荐试用吗？打开深度荣耀大厅，点「加入试玩挑战」，粘贴这整段邀请。'
+        t(lighthouseSessionId ? '调度说有两节备用电池。同一张补给卡，你会用哪套出装？在深度荣耀大厅点「加入试玩挑战」，粘贴这整段邀请。'
+          : webPilotSessionId ? '没有本机试跑记录，你会推荐试用吗？打开深度荣耀大厅，点「加入试玩挑战」，粘贴这整段邀请。'
           : heroTrial ? '来玩一局深度荣耀的灯塔英雄挑战。打开大厅，点「加入灯塔挑战」，粘贴这整段并核对，选你的首发英雄。'
             : reviewKind ? '打开深度荣耀大厅，点「加入灯塔挑战」，粘贴邀请。用同一张补给卡选你的交接打法。'
               : '补给卡没有记录两节备用电池。你会补证、降级推荐，还是暂缓提交？打开深度荣耀大厅，点「加入灯塔挑战」，粘贴这整段邀请。'),
@@ -3442,13 +3448,20 @@ window.__ModuleLoader__.load({
         setError('')
         setNotice('')
         setShowInvitation(false)
-        const payload = webPilotSessionId ? { sessionId: webPilotSessionId }
+        const payload = sessionId ? { sessionId }
           : { comparisonId, ...(reviewKind && { kind: reviewKind, arm: reviewArm }) }
         request(action, { action, ...payload }, abort.signal, language)
-          .then(value => { if (!abort.signal.aborted) setResult(value) })
+          .then(value => {
+            if (abort.signal.aborted) return
+            if (lighthouseSessionId && (typeof value?.code !== 'string' || !value.code.startsWith('DSHC5.') ||
+                !Object.hasOwn(lighthouseReplayModeLabels, value.played) || !['en', 'zh'].includes(value.sampleLanguage))) {
+              throw new Error(t('灯塔原局暂时无法核对。请回原会话查看。'))
+            }
+            setResult(value)
+          })
           .catch(reason => { if (!abort.signal.aborted) setError(reason.message) })
         return () => abort.abort()
-      }, [action, comparisonId, request, language, reviewKind, reviewArm, webPilotSessionId])
+      }, [action, comparisonId, request, language, reviewKind, reviewArm, lighthouseSessionId, sessionId])
 
       useEffect(() => {
         if (showInvitation) {
@@ -3472,12 +3485,17 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h(InstallDialog, { title: t(webPilotSessionId ? webPilotInviteTitle : heroTrial ? '分享英雄试玩'
-        : reviewKind ? '邀请好友同题交接' : '分享灯塔挑战'), dialogRef,
+      function close() {
+        if (lighthouseSessionId) localDialog.current?.close()
+        onBack()
+      }
+
+      return h(InstallDialog, { title: t(lighthouseSessionId ? lighthouseCombinedInviteTitle : webPilotSessionId ? webPilotInviteTitle
+        : heroTrial ? '分享英雄试玩' : reviewKind ? '邀请好友同题交接' : '分享灯塔挑战'), dialogRef: lighthouseSessionId ? localDialog : dialogRef,
         className: heroTrial ? 'moba-lighthouse-comparison moba-starter-dialog' : 'moba-lighthouse-invitation moba-starter-dialog',
-        onCancel: onBack, initialFocus: '.moba-challenge-back', onKeyDown: event => closeDialogOnEscape(event, onBack) },
+        onCancel: close, initialFocus: '.moba-challenge-back', onKeyDown: event => closeDialogOnEscape(event, close) },
         h('div', { className: 'moba-plan-fields moba-share-fields' },
-          h('p', { className: 'moba-starter-note' }, t(webPilotSessionId ? '好友会收到同一道公开题和你选的出装。他可以自己选择出装。'
+          h('p', { className: 'moba-starter-note' }, t(lighthouseSessionId || webPilotSessionId ? '好友会收到同一道公开题和你选的出装。他可以自己选择出装。'
             : heroTrial ? '挑战码包含公开样例、任务语言和接班需求。接收者自己选首发英雄。'
               : reviewKind ? '好友会收到同一道公开题和你选的打法。他可以自己决定先复核还是直接交付。'
                 : '挑战码指定公开缺证样例和出装要求。接收者会在新会话里自己选择。')),
@@ -3491,7 +3509,7 @@ window.__ModuleLoader__.load({
               spellCheck: false, onFocus: event => event.currentTarget.select() })),
           notice && h('p', { className: 'moba-empty', role: 'status' }, notice)),
         h('div', { className: 'moba-market-actions moba-starter-actions' },
-          h('button', { type: 'button', className: 'moba-roster-open moba-challenge-back', onClick: onBack }, t('返回')),
+          h('button', { type: 'button', className: 'moba-roster-open moba-challenge-back', onClick: close }, t('返回')),
           result?.code && h('button', { type: 'button', className: invitation ? 'moba-roster-open' : 'moba-start', onClick: () => copy() }, t('复制挑战码')),
           invitation && h('button', { type: 'button', className: 'moba-start', onClick: () => copy(true) }, t('复制挑战邀请'))))
     }
@@ -3501,7 +3519,7 @@ window.__ModuleLoader__.load({
       const multiple = '找到多个不同的码，请只保留要核对的那一个。'
       let code
       let olderReport = false
-      for (const [candidate] of text.matchAll(/(?<![A-Za-z0-9_.-])DSH[CR][1-4]\.[A-Za-z0-9_-]+/g)) {
+      for (const [candidate] of text.matchAll(/(?<![A-Za-z0-9_.-])DSH(?:C[1-5]|R[1-4])\.[A-Za-z0-9_-]+/g)) {
         if (/^DSHR[1-3]\./u.test(candidate)) {
           olderReport = true
           continue
@@ -3511,6 +3529,7 @@ window.__ModuleLoader__.load({
         code = candidate
       }
       if (code?.startsWith('DSHR4.')) return olderReport ? { problem: multiple } : { reportCode: code }
+      if (olderReport && code?.startsWith('DSHC5.')) return { problem: multiple }
       return code ? { code } : { problem: '没有找到挑战码或试玩战报码。请粘贴完整消息或代码。' }
     }
 
@@ -3535,6 +3554,28 @@ window.__ModuleLoader__.load({
         (selected?.error || current.reason) && h('p', { className: 'moba-alert', role: 'status' }, selected?.error || t(current.reason)))
     }
 
+    function validCombinedLighthouseInvitation(value) {
+      return value?.kind === 'lighthouse-combined' && ['en', 'zh'].includes(value.sampleLanguage) &&
+        Object.hasOwn(lighthouseReplayModeLabels, value.played) &&
+        typeof value.task === 'string' && Boolean(value.task) && typeof value.material === 'string' && Boolean(value.material) &&
+        Array.isArray(value.arms) && value.arms.every(arm => Object.hasOwn(lighthouseReplayModeLabels, arm))
+    }
+
+    function CombinedLighthouseChallengePreview({ preview, sampleLanguage, selected, arm, disabled, onChoose }) {
+      const current = selected?.preview ?? preview
+      return h(Fragment, null,
+        h('p', { className: 'moba-lighthouse-note' }, t('调度说有两节备用电池，补给卡能证明吗？')),
+        h(InstallFacts, { facts: [[t('发起人出装'), t(lighthouseCarryModeLabels[preview.played])],
+          [t('任务语言'), t(sampleLanguage)], [t('材料文件'), preview.material]] }),
+        h('details', { className: 'moba-web-challenge-task' },
+          h('summary', null, t('查看原题')),
+          h('textarea', { 'aria-label': t('两边共用的任务'), rows: 4, value: preview.task, readOnly: true, spellCheck: false })),
+        h(LighthouseLoadoutChoices, { heading: '选择本局出装', options: lighthouseCarryModeLabels, picked: arm,
+          available: current.arms, disabled, onChoose }),
+        arm && !selected && h('p', { className: 'moba-starter-note', role: 'status' }, t('正在核对试玩出装…')),
+        (selected?.error || current.reason) && h('p', { className: 'moba-alert', role: 'status' }, selected?.error || t(current.reason)))
+    }
+
     function LighthouseChallengeJoin({ request, onCancel, onOpen, onFindHandoffReport, firstHeroes, initialInput = '' }) {
       const language = useLanguage()
       const [input, setInput] = useState(initialInput)
@@ -3542,9 +3583,9 @@ window.__ModuleLoader__.load({
       const [openingChoice, setOpeningChoice] = useState('')
       const [busy, setBusy] = useState('')
       const [error, setError] = useState('')
-      const [webArm, setWebArm] = useState('')
-      const [webCheck, setWebCheck] = useState(null)
-      const [webAttempt, retryWebArm] = useState(0)
+      const [challengeArm, setChallengeArm] = useState('')
+      const [armCheck, setArmCheck] = useState(null)
+      const [armAttempt, retryArm] = useState(0)
       const [activeWebReport, setActiveWebReport] = useState('')
       const [reportTrial, setReportTrial] = useState(null)
       const pending = useRef(null)
@@ -3564,44 +3605,51 @@ window.__ModuleLoader__.load({
       const heroTrial = preview?.kind === 'hero-trial'
       const reviewTrial = preview?.kind === 'delivery-review'
       const webTrial = preview?.kind === 'web-pilot'
-      const hasRoutes = heroTrial || reviewTrial || webTrial
-      const selectedWeb = webCheck && webCheck.code === code && webCheck.language === language && webCheck.arm === webArm ? webCheck : null
-      const token = webTrial ? selectedWeb?.preview?.token : preview?.token
+      const combinedTrial = preview?.kind === 'lighthouse-combined'
+      const requiresArm = webTrial || combinedTrial
+      const hasRoutes = heroTrial || reviewTrial || requiresArm
+      const selectedArm = armCheck && armCheck.code === code && armCheck.language === language && armCheck.arm === challengeArm ? armCheck : null
+      const token = requiresArm ? selectedArm?.preview?.token : preview?.token
       const canOpen = !preview?.blocked && token
       const reviewInvitationReady = reviewTrial && Boolean(canOpen)
-      const showInput = !reviewInvitationReady && !webTrial
+      const showInput = !reviewInvitationReady && !requiresArm
       const canReviewLocal = !hasRoutes && preview?.blocked && preview.canUseLocalLoadout === true
       const localLoadout = !hasRoutes && preview?.localLoadout === true
       const need = heroTrial && heroTrialNeeds.find(item => item.id === preview.need)
       const sampleLanguage = hasRoutes && ({ en: '英文', zh: '中文' })[preview.sampleLanguage]
       const previewHeading = preview && h('h3', { ref: heading, tabIndex: -1 }, t(heroTrial ? heroTrialTitle
-        : reviewTrial ? '灯塔同题交接' : webTrial ? webPilotPrompt : localLoadout ? '本机标准出装' : '关键证据缺失'))
+        : reviewTrial ? '灯塔同题交接' : webTrial ? webPilotPrompt : combinedTrial ? lighthouseCombinedTitle
+          : localLoadout ? '本机标准出装' : '关键证据缺失'))
       useEffect(() => () => pending.current?.abort(), [])
       useEffect(() => { if (preview && showInput) heading.current?.focus() }, [preview, showInput])
       useLayoutEffect(() => { if (reportTrial && error) errorMessage.current?.focus() }, [reportTrial, error])
       useEffect(() => {
-        if (!webTrial || !webArm) return
+        if (!requiresArm || !challengeArm) return
         const abort = new AbortController()
         const action = 'lighthouse-challenge-preview'
-        request(action, { action, code, arm: webArm, ...(receivedReportCode && { reportCode: receivedReportCode }) }, abort.signal, language)
+        request(action, { action, code, arm: challengeArm, ...(receivedReportCode && { reportCode: receivedReportCode }) }, abort.signal, language)
           .then(value => {
             if (abort.signal.aborted) return
-            if (value.kind !== 'web-pilot' || (value.token && value.arm !== webArm)) throw new Error(t('试玩出装已变化，请重新核对。'))
-            setWebCheck({ code, language, arm: webArm, preview: value })
+            if (value?.kind !== preview.kind || (value.token && value.arm !== challengeArm) ||
+                (combinedTrial && (!validCombinedLighthouseInvitation(value) || value.task !== preview.task ||
+                 value.material !== preview.material || value.played !== preview.played || value.sampleLanguage !== preview.sampleLanguage))) {
+              throw new Error(t('试玩出装已变化，请重新核对。'))
+            }
+            setArmCheck({ code, language, arm: challengeArm, preview: value })
           })
-          .catch(reason => { if (!abort.signal.aborted) setWebCheck({ code, language, arm: webArm, error: reason.message }) })
+          .catch(reason => { if (!abort.signal.aborted) setArmCheck({ code, language, arm: challengeArm, error: reason.message }) })
         return () => abort.abort()
-      }, [request, code, language, webTrial, webArm, webAttempt, receivedReportCode])
+      }, [request, code, language, requiresArm, combinedTrial, preview, challengeArm, armAttempt, receivedReportCode])
 
-      function chooseWebArm(arm) {
-        setWebArm(arm)
-        setWebCheck(null)
+      function chooseChallengeArm(arm) {
+        setChallengeArm(arm)
+        setArmCheck(null)
       }
 
       function editInvitation() {
         setChecked(null)
         setError('')
-        chooseWebArm('')
+        chooseChallengeArm('')
       }
 
       function cancel() {
@@ -3639,11 +3687,14 @@ window.__ModuleLoader__.load({
         setError('')
         if (!useLocal) {
           setChecked(null)
-          chooseWebArm('')
+          chooseChallengeArm('')
         }
         try {
           const action = 'lighthouse-challenge-preview'
           const value = await request(action, { action, code, ...(useLocal && { useLocal: true }) }, abort.signal, language)
+          if (code.startsWith('DSHC5.') && (!validCombinedLighthouseInvitation(value) || value.token || value.arm)) {
+            throw new Error(t('试玩出装已变化，请重新核对。'))
+          }
           if (!abort.signal.aborted) setChecked({ value, code, language })
         } catch (reason) {
           if (!abort.signal.aborted) setError(reason.message)
@@ -3655,7 +3706,7 @@ window.__ModuleLoader__.load({
 
       async function start(arm) {
         if (!canOpen || pending.current || (heroTrial && !heroTrialHeroes.some(hero => hero.id === arm)) ||
-          (reviewTrial && !preview.routes.includes(arm)) || (webTrial && selectedWeb?.preview?.arm !== arm)) return
+          (reviewTrial && !preview.routes.includes(arm)) || (requiresArm && selectedArm?.preview?.arm !== arm)) return
         const abort = new AbortController()
         pending.current = abort
         setBusy('start')
@@ -3668,6 +3719,9 @@ window.__ModuleLoader__.load({
           const result = await request(action, { action, code, token, launchId: launchIds.current.get(key),
             ...(receivedReportCode && { reportCode: receivedReportCode }),
             ...(hasRoutes ? { arm } : { ...(localLoadout && { useLocal: true }), ...(openingChoice && { openingChoice }) }) }, abort.signal, language)
+          if (combinedTrial && (!result?.sessionId || result.task !== preview.task)) {
+            throw new Error(t('试玩出装已变化，请重新核对。'))
+          }
           if (!abort.signal.aborted) onOpen(result.sessionId, result.task)
         } catch (reason) {
           if (!abort.signal.aborted) {
@@ -3676,7 +3730,7 @@ window.__ModuleLoader__.load({
               setChecked(null)
               field.current?.focus()
             }
-            chooseWebArm('')
+            chooseChallengeArm('')
           }
         } finally {
           pending.current = null
@@ -3687,7 +3741,8 @@ window.__ModuleLoader__.load({
       const back = showFinder ? editReport : reportTrial ? backToReport : cancel
       return h(InstallDialog, { title: t(challengeJoinTitle),
         className: showFinder ? 'moba-starter-dialog moba-web-pilot-handoff moba-web-pilot-handoff-find'
-          : 'moba-starter-dialog moba-challenge-join' + (webTrial ? ' moba-web-challenge-join' : '') +
+          : 'moba-starter-dialog moba-challenge-join' + (requiresArm ? ' moba-web-challenge-join' : '') +
+            (combinedTrial ? ' moba-combined-challenge-join' : '') +
             (reportTrial ? ' moba-web-report-trial-preview' : ''), dialogRef: dialog,
         busy: Boolean(busy), onCancel: back,
         initialFocus: showFinder ? (returnToReportTrial.current ? '.moba-web-report-trial' : '.moba-web-pilot-find-heading')
@@ -3695,7 +3750,7 @@ window.__ModuleLoader__.load({
         onKeyDown: showFinder ? undefined : event => closeDialogOnEscape(event, () => { if (!pending.current) back() }) },
         activeWebReport && h(WebPilotHandoffFind, { code: activeWebReport, request, active: showFinder, onEdit: editReport,
           onTrial: result => { editInvitation(); setReportTrial(result) } }),
-        !showFinder && h('form', { onSubmit: event => { event.preventDefault(); if (webTrial) void start(webArm); else void check() } },
+        !showFinder && h('form', { onSubmit: event => { event.preventDefault(); if (requiresArm) void start(challengeArm); else void check() } },
           h('div', { className: 'moba-plan-fields moba-share-fields' },
             showInput && h('label', null, t('挑战邀请、试玩战报或代码'),
               h('textarea', { className: 'moba-share-code', ref: field, required: true, value: input, rows: 3, maxLength: lighthouseInvitationLimit + 1,
@@ -3717,16 +3772,18 @@ window.__ModuleLoader__.load({
                 preview.task && h('label', { className: 'moba-lighthouse-task' }, t('两边共用的任务'),
                   h('textarea', { readOnly: true, rows: 4, value: preview.task })))
                 : reviewTrial ? h(LighthouseReviewRoutes, { preview, sampleLanguage, disabled: !canOpen || Boolean(busy), onChoose: start })
-                  : webTrial ? h(WebPilotChallengePreview, { preview, sampleLanguage, selected: selectedWeb,
-                    arm: webArm, disabled: Boolean(busy), fromReport: Boolean(reportTrial), onChoose: chooseWebArm })
+                  : combinedTrial ? h(CombinedLighthouseChallengePreview, { preview, sampleLanguage, selected: selectedArm,
+                    arm: challengeArm, disabled: Boolean(busy), onChoose: chooseChallengeArm })
+                  : webTrial ? h(WebPilotChallengePreview, { preview, sampleLanguage, selected: selectedArm,
+                    arm: challengeArm, disabled: Boolean(busy), fromReport: Boolean(reportTrial), onChoose: chooseChallengeArm })
                   : h(Fragment, null, h(PlanShareRequirements, { value: preview, showHost: !localLoadout }),
                     h(SharedPlanCapabilities, { comparison: preview.comparison })),
-              preview.blocked && h('p', { className: 'moba-alert', role: 'status' },
+              preview.blocked && !combinedTrial && h('p', { className: 'moba-alert', role: 'status' },
                 t(preview.reason ?? '请处理上方的装备或版本要求，再重新核对。')),
               canOpen && !hasRoutes && h(Fragment, null,
                 h('p', { className: 'moba-lighthouse-note' }, t(evidenceScenarios[0].note)),
                 h(EvidenceOpeningChoice, { value: openingChoice, disabled: Boolean(busy), onChange: setOpeningChoice }))),
-            (canOpen || webTrial) && (hasRoutes ? h(Fragment, null,
+            (canOpen || requiresArm) && (hasRoutes ? h(Fragment, null,
               heroTrial && h(HeroTrialFirstHero, { heroes: firstHeroes, need: need?.id, disabled: Boolean(busy), onChoose: start }),
               h('p', { className: 'moba-starter-note', role: busy === 'start' ? 'status' : undefined },
                 t(busy === 'start' ? '正在打开试玩会话…' : '打开会话后，请手动发送任务。')))
@@ -3740,9 +3797,9 @@ window.__ModuleLoader__.load({
               disabled: Boolean(busy) || !input.trim() }, t(code ? '核对挑战码' : '核对邀请或战报')),
             canReviewLocal && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy),
               onClick: () => void check(true) }, t('核对本机标准出装')),
-            selectedWeb?.error && h('button', { type: 'button', className: 'moba-roster-open',
-              onClick: () => { setWebCheck(null); retryWebArm(value => value + 1) } }, t('重新核对')),
-            webTrial && h('button', { type: 'submit', className: 'moba-start', disabled: !canOpen || Boolean(busy) },
+            selectedArm?.error && h('button', { type: 'button', className: 'moba-roster-open',
+              onClick: () => { setArmCheck(null); retryArm(value => value + 1) } }, t('重新核对')),
+            requiresArm && h('button', { type: 'submit', className: 'moba-start', disabled: !canOpen || Boolean(busy) },
               t(busy === 'start' ? '正在打开试玩会话…' : '打开试玩草稿'), h(Glyph, { kind: 'arrow', size: 16 })),
             canOpen && !hasRoutes && h('button', { type: 'button', className: 'moba-start', disabled: Boolean(busy), onClick: () => start() },
               t(busy === 'start' ? '正在准备对局…' : '开始灯塔挑战'), h(Glyph, { kind: 'arrow', size: 16 })))))
@@ -12799,6 +12856,7 @@ window.__ModuleLoader__.load({
       const sourceTrialButton = useRef(null)
       const lighthouseReplayButton = useRef(null)
       const lighthouseSwitchButton = useRef(null)
+      const lighthouseInviteButton = useRef(null)
       const lighthousePersonalButton = useRef(null)
       const lighthousePreviousPersonalButton = useRef(null)
       const restoredPersonalFocus = useRef(false)
@@ -12862,6 +12920,7 @@ window.__ModuleLoader__.load({
         const buttons = { rebaseline: rebaselineButton, rematch: rematchButton, alternate: alternateButton,
           'handoff-alternate': handoffAlternateButton, 'source-trial': sourceTrialButton,
           'lighthouse-combined-replay': lighthouseReplayButton, 'lighthouse-combined-replay-switch': lighthouseSwitchButton,
+          'lighthouse-combined-share': lighthouseInviteButton,
           'lighthouse-combined-personal': lighthousePersonalButton,
           'lighthouse-combined-personal-previous': lighthousePreviousPersonalButton }
         const button = buttons[initialPersonalFocus]?.current
@@ -12928,7 +12987,10 @@ window.__ModuleLoader__.load({
                   onClick: () => onPersonalFlow({ mode: 'handoff-alternate', ...handoffAlternate, handoffAlternateOf: sessionId }) },
                 t(handoffAlternate.style === 'review' ? '用复核后交付再试' : '用直接交付再试'), h(Glyph, { kind: 'arrow', size: 16 })),
                 singleSave && h('button', { ref: reviewButton, type: 'button', className: 'moba-match-move',
-                  onClick: () => setReview('current') }, t('核对并保存出装'), h(Glyph, { kind: 'arrow', size: 16 }))),
+                  onClick: () => setReview('current') }, t('核对并保存出装'), h(Glyph, { kind: 'arrow', size: 16 })),
+                result.lighthouseReplay === true && h('button', { ref: lighthouseInviteButton, type: 'button', className: 'moba-text',
+                  'aria-haspopup': 'dialog', onClick: () => onPersonalFlow({ mode: 'lighthouse-combined-share' }) },
+                t(lighthouseCombinedInviteTitle))),
               sourceTrial && h('button', { ref: sourceTrialButton, type: 'button', className: 'moba-match-move', 'aria-haspopup': 'dialog',
                 onClick: () => onPersonalFlow({ mode: 'source-trial', source: sourceTrial }) },
                 t('在灯塔试玩标准模式'), h(Glyph, { kind: 'arrow', size: 16 })),
@@ -13724,7 +13786,7 @@ window.__ModuleLoader__.load({
           setAction({ ...returnAction, initialPersonalFocus: focus })
           if (!element.matches(':popover-open')) element.showPopover(source ? { source } : undefined)
         }
-        if (mode === 'lighthouse-combined-replay' || mode === 'lighthouse-combined-personal') restore()
+        if (['lighthouse-combined-replay', 'lighthouse-combined-personal', 'lighthouse-combined-share'].includes(mode)) restore()
         else requestAnimationFrame(restore)
       }
 
@@ -13996,6 +14058,8 @@ window.__ModuleLoader__.load({
       return h(Fragment, null,
         personalFlow?.mode === 'lighthouse-combined-replay' && h(LighthouseCombinedReplay, { sessionId, initialLoadout: personalFlow.initialLoadout, request,
           onBack: () => closePersonalFlow(), onOpen: visitPersonalFlow }),
+        personalFlow?.mode === 'lighthouse-combined-share' && h(LighthouseChallengeShare, { lighthouseSessionId: sessionId,
+          request, onBack: () => closePersonalFlow() }),
         personalFlow?.mode === 'lighthouse-combined-personal' && h(PersonalBaselineTask, { lighthouseSessionId: sessionId,
           lighthousePairSide: personalFlow.lighthousePairSide, workspaces, request, onBack: () => closePersonalFlow(), onVisit: visitPersonalFlow }),
         personalFlow?.mode === 'rematch' && h(RematchEditor, { ...personalFlow.source, sourceSessionId: sessionId, request,
@@ -15153,6 +15217,11 @@ window.__ModuleLoader__.load({
       .moba-web-challenge-join :is(dl, .moba-starter-note, .moba-starter-routes) { margin-block: 0; }
       .moba-web-challenge-join .moba-starter-route { min-block-size: 44px; color: var(--ink); }
       .moba-web-challenge-join .moba-starter-route input { inline-size: auto; min-block-size: 0; padding: 0; }
+      @media (max-width: 390px) {
+        .moba-combined-challenge-join .moba-starter-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+        .moba-combined-challenge-join .moba-starter-actions button { min-block-size: 44px; min-inline-size: 0; }
+        .moba-combined-challenge-join .moba-starter-actions .moba-start { grid-column: 1 / -1; justify-content: center; }
+      }
       .moba-web-challenge-task { min-inline-size: 0; }
       .moba-web-challenge-task summary { box-sizing: border-box; min-block-size: 44px; padding: 11px 8px;
         border: 1px solid var(--line); color: var(--ink); cursor: pointer; }

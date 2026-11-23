@@ -1,4 +1,4 @@
-import { lighthouseEvidenceChoices, lighthouseHeroArms, lighthouseHeroDelivery, lighthouseHeroNeeds } from './lighthouse.js'
+import { lighthouseCombinedModes, lighthouseEvidenceChoices, lighthouseHeroArms, lighthouseHeroDelivery, lighthouseHeroNeeds } from './lighthouse.js'
 import { workspaceComparisonArms } from './match-comparisons.js'
 
 const prefix = 'DSHH1.'
@@ -279,6 +279,40 @@ export function decodeWebPilotChallenge(value) {
     // Invited tasks use only the exact bundled sample.
   }
   throw new Error(invalidWebPilotChallenge)
+}
+
+const combinedChallengePrefix = 'DSHC5.'
+const combinedChallengeSamples = { en: 'lighthouse-battery-gap-1-en', zh: 'lighthouse-battery-gap-1-zh' }
+
+export function isLighthouseCombinedChallenge(value) {
+  return typeof value === 'string' && value.trim().startsWith(combinedChallengePrefix)
+}
+
+export function encodeLighthouseCombinedChallenge(sampleLanguage, played) {
+  if (typeof sampleLanguage !== 'string' || !Object.hasOwn(combinedChallengeSamples, sampleLanguage) ||
+    !lighthouseCombinedModes.includes(played)) {
+    throw new Error(invalidChallenge)
+  }
+  const sample = combinedChallengeSamples[sampleLanguage]
+  return combinedChallengePrefix + Buffer.from(JSON.stringify({ sample, played })).toString('base64url')
+}
+
+export function decodeLighthouseCombinedChallenge(value) {
+  if (!isLighthouseCombinedChallenge(value) || value.length > 128) throw new Error(invalidChallenge)
+  const code = value.trim()
+  const payload = code.slice(combinedChallengePrefix.length)
+  if (!/^[A-Za-z0-9_-]+$/.test(payload)) throw new Error(invalidChallenge)
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (shape(data, ['sample', 'played'])) {
+      const { sample, played } = data
+      const sampleLanguage = Object.keys(combinedChallengeSamples).find(key => combinedChallengeSamples[key] === sample)
+      if (sampleLanguage && encodeLighthouseCombinedChallenge(sampleLanguage, played) === code) return { sampleLanguage, played }
+    }
+  } catch {
+    // The invitation contains a bundled sample and a fixed loadout mode.
+  }
+  throw new Error(invalidChallenge)
 }
 
 const webPilotReportPrefix = 'DSHR4.'
