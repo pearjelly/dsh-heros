@@ -2517,7 +2517,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(carriedCalls.map(event => event.data.name), ['read', 'write', 'ask_user_question', 'present'])
     assert.equal(JSON.parse(carriedCalls[0].data.arguments).file_path, privateMaterial)
     const carriedDelivery = carriedNative.events.find(event => event.type === 'deliverables/presented')
-    assert.equal(carriedDelivery.data.files[0].path, join(revisionOwnDirectory, 'direct-handoff.md'))
+    assert.equal(carriedDelivery.data.files[0].path, join(await realpath(revisionOwnDirectory), 'direct-handoff.md'))
     const carriedRevisionResult = await result(carriedRevision.sessionId)
     assert.deepEqual(carriedRevisionResult.personalWorkflowReceipt, { mode: 'review', outcomeIds: { review: ['confirm'] } })
     assert.equal(carriedRevisionResult.lighthouseRevisionPair, undefined)
