@@ -3615,10 +3615,26 @@ export async function apply(ctx) {
     return checkCombinedLighthouseRoundLoadout(await readCombinedLighthouseRound(sessionId, signal), signal)
   }
 
+  function combinedLighthouseInvitation({ language: sampleLanguage, mode: played }) {
+    return { code: encodeLighthouseCombinedChallenge(sampleLanguage, played), sampleLanguage, played }
+  }
+
   async function shareCombinedLighthouseChallenge({ sessionId }, signal) {
     const { original } = await checkCombinedLighthouseLoadout(sessionId, signal)
-    const { language: sampleLanguage, mode: played } = original
-    return { code: encodeLighthouseCombinedChallenge(sampleLanguage, played), sampleLanguage, played }
+    return combinedLighthouseInvitation(original)
+  }
+
+  async function checkDeliveredLighthouseRevision(sessionId, signal) {
+    const current = await readCombinedLighthouseRound(sessionId, signal, 'revision')
+    if (!confirmedCombinedLighthouseRevision(current)) throw new Error(combinedLighthouseReplayUnavailable)
+    const previous = await combinedLighthouseRevisionSource(current, signal)
+    if (!previous) throw new Error(combinedLighthouseReplayUnavailable)
+    return { ...await checkCombinedLighthouseRoundLoadout(current, signal), current, previous }
+  }
+
+  async function shareCombinedLighthouseRevision({ sessionId }, signal) {
+    const { previous } = await checkDeliveredLighthouseRevision(sessionId, signal)
+    return combinedLighthouseInvitation(previous)
   }
 
   function combinedLighthouseReviewChoice({ workflowDecisions }) {
@@ -3650,13 +3666,9 @@ export async function apply(ctx) {
 
   async function checkCombinedLighthousePairSide({ sessionId, pairSide }, signal) {
     if (pairSide === 'revision') {
-      const current = await readCombinedLighthouseRound(sessionId, signal, 'revision')
-      if (!confirmedCombinedLighthouseRevision(current)) throw new Error(combinedLighthouseReplayUnavailable)
-      const previous = await combinedLighthouseRevisionSource(current, signal)
-      if (!previous) throw new Error(combinedLighthouseReplayUnavailable)
-      const revision = await checkCombinedLighthouseRoundLoadout(current, signal)
-      return { draft: revision.draft, mode: revision.mode, binding: [
-        'lighthouse-revision-carry-v1', previous.sessionId, sessionId, revision.identity, current.target.digest,
+      const { draft, mode, identity, current, previous } = await checkDeliveredLighthouseRevision(sessionId, signal)
+      return { draft, mode, binding: [
+        'lighthouse-revision-carry-v1', previous.sessionId, sessionId, identity, current.target.digest,
         previous.workflowDecisions, current.workflowDecisions, current.deliverables,
       ] }
     }
@@ -9665,6 +9677,7 @@ export async function apply(ctx) {
         else if (selection?.action === 'lighthouse-combined-revision-preview') value = (await checkCombinedLighthouseRevision(selection, request.signal)).preview
         else if (selection?.action === 'lighthouse-combined-revision-open') value = await openCombinedLighthouse(selection, english, request.signal, 'revision')
         else if (selection?.action === 'lighthouse-combined-challenge-share') value = await shareCombinedLighthouseChallenge(selection, request.signal)
+        else if (selection?.action === 'lighthouse-combined-revision-share') value = await shareCombinedLighthouseRevision(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-handoff-report') value = await combinedLighthouseReport(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-handoff-trial-preview') value = await previewCombinedLighthouseReportTrial(selection, request.signal)
         else if (selection?.action === 'lighthouse-combined-handoff-find') value = await findCombinedLighthouseReports(selection, request.signal)

@@ -2287,6 +2287,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
 
     assert.deepEqual(await lighthouseHistory(), completedTrials)
     const revision = (phase, fields, status) => challenge('lighthouse-combined-revision-' + phase, fields, status)
+    const shareRevision = (sessionId, status) => challenge('lighthouse-combined-revision-share', { sessionId }, status)
     const dualView = await challenge('lighthouse-combined-start-preview', { mode: 'evidence-review' })
     const dualOrigin = await challenge('lighthouse-combined-start-open', {
       mode: 'evidence-review', token: dualView.token, launchId: '7'.repeat(32),
@@ -2365,6 +2366,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
       assert.equal(unsentRevision?.lighthouseRevisionPair, undefined)
       assert.equal(unsentRevision?.lighthouseRevisionCarry, undefined)
       await pairedDraft(opened.sessionId, 'revision', 422)
+      await shareRevision(opened.sessionId, 422)
       const sampleLanguage = mode === 'review' ? 'zh' : 'en'
       async function pendingRevision(status) {
         const run = (await pendingLighthouse()).runs.find(row => row.sessionId === opened.sessionId)
@@ -2448,6 +2450,20 @@ test('field playbooks preview read-only and add a real handoff decision to the s
 
     const confirmedRevision = revisions.find(item => item.pair.current.deliverables.length > 0)
     const returnedRevision = revisions.find(item => item.pair.current.deliverables.length === 0)
+    const invitationRevisionDirectories = (await practiceDirectories()).sort()
+    const originalRevisionReport = await readChallengeReport(reviewOpening.sessionId)
+    const revisionInvitation = await shareRevision(confirmedRevision.sessionId)
+    assert.deepEqual(revisionInvitation, invitation)
+    assert.deepEqual(JSON.parse(Buffer.from(revisionInvitation.code.slice(6), 'base64url').toString()), publicRecipe)
+    assert.deepEqual(await previewChallenge({ code: revisionInvitation.code }), initialChallenge)
+    assert.deepEqual(await previewChallenge({ code: revisionInvitation.code, arm: 'evidence-review' }), bothChallenge)
+    assert.deepEqual(await previewChallenge({ code: revisionInvitation.code, arm: 'review' }), reviewChallenge)
+    for (const unavailable of [returnedRevision.sessionId, reviewOpening.sessionId, variant.sessionId, confirmed.sessionId,
+      'session-a076' + '0'.repeat(28)]) await shareRevision(unavailable, 422)
+    assert.deepEqual((await practiceDirectories()).sort(), invitationRevisionDirectories)
+    assert.deepEqual(await shareChallenge(reviewOpening.sessionId), invitation)
+    assert.deepEqual(await readChallengeReport(reviewOpening.sessionId), originalRevisionReport)
+
     assert.deepEqual(await pairedDraft(confirmedRevision.sessionId, 'revision'), { draft: review.draft, heroName: '标准模式', mode: 'review' })
     await pairedDraft(returnedRevision.sessionId, 'revision', 422)
     await pairedDraft(reviewOpening.sessionId, 'revision', 422)
@@ -2478,15 +2494,16 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     await openOwn({ ...revisionOwn, lighthousePair: { sessionId: returnedRevision.sessionId, pairSide: 'revision' } }, revisionOwnPreview.token, 422)
     await openOwn({ ...revisionOwn, lighthousePair: { sessionId: confirmedRevision.sessionId, pairSide: 'current' } }, revisionOwnPreview.token, 422)
     await previewOwn({ ...revisionOwn, workspaceId: confirmedRevision.native.workspaceId, material: combinedPractice.material }, 422)
-    async function assertStaleRevisionCarry() {
+    async function assertStaleRevisionActions() {
       await pairedDraft(confirmedRevision.sessionId, 'revision', 422)
       assert.equal((await result(confirmedRevision.sessionId))?.lighthouseRevisionCarry, undefined)
       await openOwn(revisionOwn, revisionOwnPreview.token, 422)
+      await shareRevision(confirmedRevision.sessionId, 422)
     }
-    await withChangedRevisionSource(assertStaleRevisionCarry)
+    await withChangedRevisionSource(assertStaleRevisionActions)
     try {
       await appendFile(confirmedRevision.card, '\nRevision source changed after checking the private task.\n')
-      await assertStaleRevisionCarry()
+      await assertStaleRevisionActions()
     } finally {
       await writeFile(confirmedRevision.card, sample)
     }
@@ -2522,6 +2539,7 @@ test('field playbooks preview read-only and add a real handoff decision to the s
     assert.deepEqual(carriedRevisionResult.personalWorkflowReceipt, { mode: 'review', outcomeIds: { review: ['confirm'] } })
     assert.equal(carriedRevisionResult.lighthouseRevisionPair, undefined)
     assert.equal(carriedRevisionResult.lighthouseRevisionCarry, undefined)
+    await shareRevision(carriedRevision.sessionId, 422)
     assert.equal(await readFile(revisionOwnFile, 'utf8'), revisionOwnBytes)
     assert.deepEqual(await native(confirmedRevision.sessionId), confirmedRevision.native)
     assert.deepEqual(await native(reviewOpening.sessionId), firstReviewNative)
@@ -2532,6 +2550,8 @@ test('field playbooks preview read-only and add a real handoff decision to the s
 
     await host.stop()
     host = await startHost(env, patch)
+    assert.deepEqual(await shareRevision(confirmedRevision.sessionId), revisionInvitation)
+    assert.deepEqual(await readChallengeReport(reviewOpening.sessionId), originalRevisionReport)
     for (const { sessionId, pair } of revisions) {
       assert.deepEqual(await openLighthouseHistory(sessionId), { sessionId })
       assert.deepEqual((await result(sessionId)).lighthouseRevisionPair, pair)

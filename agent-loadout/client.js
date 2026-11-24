@@ -3526,11 +3526,12 @@ window.__ModuleLoader__.load({
     const challengeJoinTitle = '加入试玩挑战'
     const webPilotInviteTitle = '邀请好友同题试玩'
     const lighthouseCombinedInviteTitle = '邀请好友试同题'
+    const lighthouseRevisionInviteTitle = '邀请好友试备用电池题'
     const webPilotReportTitle = '交换试玩战报'
     const webPilotReceivedReportTitle = '对照收到的战报'
 
     function LighthouseChallengeShare({ comparisonId, request, onBack, heroTrial = false, playedHero, reviewSource,
-      webPilotSessionId, lighthouseSessionId, dialogRef }) {
+      webPilotSessionId, lighthouseSessionId, lighthouseRevision, dialogRef }) {
       const language = useLanguage()
       const [result, setResult] = useState(null)
       const [error, setError] = useState('')
@@ -3541,7 +3542,8 @@ window.__ModuleLoader__.load({
       const localDialog = useRef(null)
       const sessionId = lighthouseSessionId ?? webPilotSessionId
       const { kind: reviewKind, arm: reviewArm, played: playedReview } = reviewSource ?? {}
-      const action = lighthouseSessionId ? 'lighthouse-combined-challenge-share' : webPilotSessionId ? 'web-pilot-challenge-share'
+      const action = lighthouseSessionId ? (lighthouseRevision ? 'lighthouse-combined-revision-share' : 'lighthouse-combined-challenge-share')
+        : webPilotSessionId ? 'web-pilot-challenge-share'
         : heroTrial ? 'hero-trial-challenge-share'
         : reviewKind ? 'lighthouse-review-challenge-share' : 'lighthouse-challenge-share'
       const heroHook = {
@@ -3613,12 +3615,13 @@ window.__ModuleLoader__.load({
         onBack()
       }
 
-      return h(InstallDialog, { title: t(lighthouseSessionId ? lighthouseCombinedInviteTitle : webPilotSessionId ? webPilotInviteTitle
+      return h(InstallDialog, { title: t(lighthouseRevision ? lighthouseRevisionInviteTitle : lighthouseSessionId ? lighthouseCombinedInviteTitle : webPilotSessionId ? webPilotInviteTitle
         : heroTrial ? '分享英雄试玩' : reviewKind ? '邀请好友同题交接' : '分享灯塔挑战'), dialogRef: lighthouseSessionId ? localDialog : dialogRef,
         className: heroTrial ? 'moba-lighthouse-comparison moba-starter-dialog' : 'moba-lighthouse-invitation moba-starter-dialog',
         onCancel: close, initialFocus: '.moba-challenge-back', onKeyDown: event => closeDialogOnEscape(event, close) },
         h('div', { className: 'moba-plan-fields moba-share-fields' },
-          h('p', { className: 'moba-starter-note' }, t(lighthouseSessionId || webPilotSessionId ? '好友会收到同一道公开题和你选的出装。他可以自己选择出装。'
+          h('p', { className: 'moba-starter-note' }, t(lighthouseRevision ? '好友从原来的公开备用电池题开始，可以自选出装。'
+            : lighthouseSessionId || webPilotSessionId ? '好友会收到同一道公开题和你选的出装。他可以自己选择出装。'
             : heroTrial ? '挑战码包含公开样例、任务语言和接班需求。接收者自己选首发英雄。'
               : reviewKind ? '好友会收到同一道公开题和你选的打法。他可以自己决定先复核还是直接交付。'
                 : '挑战码指定公开缺证样例和出装要求。接收者会在新会话里自己选择。')),
@@ -13402,7 +13405,8 @@ window.__ModuleLoader__.load({
         })))
     }
 
-    function LighthouseDecisionPair({ pair, scenarioPair, revisionPair, personalPair, savedWorkflowArm, onOpenMatch, onCarry, carryButtons }) {
+    function LighthouseDecisionPair({ pair, scenarioPair, revisionPair, personalPair, savedWorkflowArm, onOpenMatch, onCarry, carryButtons,
+      onInvite, inviteButton }) {
       const heading = useId()
       const sides = [pair.previous, pair.current]
       const columns = scenarioPair ? ['关键证据缺失', '证据齐全'] : ['原局', revisionPair ? '修订后' : '复赛']
@@ -13473,6 +13477,9 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'moba-match-move', ref: carryButtons.current, 'aria-haspopup': 'dialog',
             'aria-description': t(lighthouseCarryModeLabels[pair.current.mode]), onClick: () => onCarry('revision') },
             t(lighthousePersonalTaskLabel), h(Glyph, { kind: 'arrow', size: 16 }))),
+        revisionPair && onInvite && h('div', { className: 'moba-lesson-result-options' },
+          h('button', { type: 'button', className: 'moba-roster-open', ref: inviteButton, 'aria-haspopup': 'dialog', onClick: onInvite },
+            t(lighthouseRevisionInviteTitle))),
         compactReceiptPair && sourceDetails,
         revisionPair ? h('div', { className: 'moba-lesson-result-options', 'data-lighthouse-single-actions': true },
           h('button', { type: 'button', className: 'moba-roster-open', onClick: () => onOpenMatch(pair.previous.sessionId) }, t('查看原局会话')),
@@ -13509,6 +13516,7 @@ window.__ModuleLoader__.load({
       const lighthouseScenarioButton = useRef(null)
       const lighthouseRevisionButton = useRef(null)
       const lighthouseInviteButton = useRef(null)
+      const lighthouseRevisionInviteButton = useRef(null)
       const lighthouseReportButton = useRef(null)
       const lighthousePersonalButton = useRef(null)
       const lighthousePreviousPersonalButton = useRef(null)
@@ -13596,6 +13604,7 @@ window.__ModuleLoader__.load({
           'lighthouse-combined-scenario': lighthouseScenarioButton,
           'lighthouse-combined-revision': lighthouseRevisionButton,
           'lighthouse-combined-share': lighthouseInviteButton,
+          'lighthouse-combined-revision-share': lighthouseRevisionInviteButton,
           'lighthouse-combined-report': lighthouseReportButton,
           'lighthouse-combined-personal': lighthousePersonalButton,
           'lighthouse-combined-personal-previous': lighthousePreviousPersonalButton,
@@ -13646,6 +13655,8 @@ window.__ModuleLoader__.load({
                 revisionPair: lighthouseRevisionPair, onOpenMatch,
                 onCarry: (lighthouseRevisionPair ? result.lighthouseRevisionCarry === true : lighthouseScenarioPair || result.lighthouseReplay) &&
                   (lighthousePairSide => onPersonalFlow({ mode: 'lighthouse-combined-personal', lighthousePairSide })),
+                onInvite: lighthouseRevisionPair && result.lighthouseRevisionCarry === true &&
+                  (() => onPersonalFlow({ mode: 'lighthouse-combined-revision-share' })), inviteButton: lighthouseRevisionInviteButton,
                 carryButtons: { previous: lighthousePreviousPersonalButton, current: lighthousePersonalButton, shared: lighthousePersonalButton } })
                 : compactWorkflowReceipt ? h(WorkflowTaskReceipt, { rows: workflowRows, files: result.deliverables ?? empty,
                   sessionId, materialDelivered: result.materialDelivered,
@@ -14483,7 +14494,7 @@ window.__ModuleLoader__.load({
           if (!element.matches(':popover-open')) element.showPopover(source ? { source } : undefined)
         }
         if (['lighthouse-combined-replay', 'lighthouse-combined-scenario', 'lighthouse-combined-revision', 'lighthouse-combined-personal', 'lighthouse-combined-share',
-          'lighthouse-combined-report', 'personal-workflow-rematch'].includes(mode)) restore()
+          'lighthouse-combined-revision-share', 'lighthouse-combined-report', 'personal-workflow-rematch'].includes(mode)) restore()
         else requestAnimationFrame(restore)
       }
 
@@ -14757,8 +14768,9 @@ window.__ModuleLoader__.load({
           h(LighthouseCombinedReplay, { key: personalFlow.mode, sessionId, initialLoadout: personalFlow.initialLoadout,
           confirmed: personalFlow.mode === 'lighthouse-combined-scenario', revision: personalFlow.mode === 'lighthouse-combined-revision', request,
           onBack: () => closePersonalFlow(), onOpen: visitPersonalFlow }),
-        personalFlow?.mode === 'lighthouse-combined-share' && h(LighthouseChallengeShare, { lighthouseSessionId: sessionId,
-          request, onBack: () => closePersonalFlow() }),
+        ['lighthouse-combined-share', 'lighthouse-combined-revision-share'].includes(personalFlow?.mode) &&
+          h(LighthouseChallengeShare, { lighthouseSessionId: sessionId, lighthouseRevision: personalFlow.mode === 'lighthouse-combined-revision-share',
+            request, onBack: () => closePersonalFlow() }),
         personalFlow?.mode === 'lighthouse-combined-report' && h(LighthouseCombinedHandoffReport, { sessionId,
           received: personalFlow.received, request, onBack: () => closePersonalFlow() }),
         personalFlow?.mode === 'lighthouse-combined-personal' && h(PersonalBaselineTask, { lighthouseSessionId: sessionId,
